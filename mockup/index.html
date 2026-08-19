@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Leitstand</title>
 <meta name="description" content="Zentrale Schaltstelle für Heimnetz und Außenstandorte — Ampeln, Störungen, VPN-Tunnel und Startseite in einem.">
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -23,7 +24,7 @@
         <span class="kbd">⌘K</span><span>Sprung</span>
         <span class="kbd">1–9</span><span>Ansicht</span>
       </div>
-      <div class="row" style="gap:7px"><span class="demo-tag">Mockup</span><span class="faint" style="font-size:11px">Beispieldaten</span></div>
+      <div class="row" style="gap:7px" id="datasource"><span class="demo-tag">Mockup</span><span class="faint" style="font-size:11px">Beispieldaten</span></div>
     </div>
   </nav>
   <main class="main" id="scroll">
@@ -33,6 +34,7 @@
 </div>
 <div id="overlays"></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="assets/live.js"></script>
 <script src="assets/data.js"></script>
 <script src="assets/app.js"></script>
 </body>

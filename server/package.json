@@ -1,0 +1,18 @@
+{
+  "name": "leitstand-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Leitstand Stufe 1 — Bestand, Prober, Zustandsmaschine, API",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --test-timeout=20000 'test/*.test.js'",
+    "probe": "node src/cli.js"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
+  }
+}

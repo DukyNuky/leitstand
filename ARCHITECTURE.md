@@ -1,7 +1,7 @@
 # Zielarchitektur
 
-Der Entwurf zeigt die Oberfläche. Dieses Dokument beschreibt, was dahinter
-laufen muss, damit die Ampeln echt werden.
+Dieses Dokument beschreibt den Aufbau. **Stufe 1 ist gebaut und läuft**
+(`server/`) — was davon steht und was noch fehlt, sagt die Tabelle ganz unten.
 
 ## Leitgedanken
 
@@ -13,7 +13,14 @@ laufen muss, damit die Ampeln echt werden.
 3. **Der Leitstand darf nicht die einzige Instanz sein**, die weiß, dass etwas
    kaputt ist. Ein Totmannschalter meldet nach außen, wenn er selbst schweigt.
 4. **Standort vor Gerät.** Fällt ein Standort aus, wird eine Meldung erzeugt —
-   nicht zwölf.
+   nicht zwölf. *(Gebaut: `Engine#rollup`. Sind alle überwachten Systeme eines
+   Standorts gleichzeitig still, entsteht eine Standortmeldung; die
+   Einzelmeldungen bleiben erhalten, werden aber als mitbetroffen geführt und
+   nicht einzeln angezeigt.)*
+
+5. **Kein erfundener Wert.** Was eine Stufe noch nicht wissen kann, steht auf
+   `null` und wird als Strich angezeigt. Ein Platzhalterwert in einer
+   Überwachung ist schlimmer als eine Lücke, weil man ihm glaubt.
 
 ## Bausteine
 
@@ -112,13 +119,27 @@ ist der Auffangkanal für alles, was keine Schnittstelle hat.
 - Totmannschalter: der Kern meldet sich minütlich bei einem externen
   Healthcheck; bleibt das aus, kommt eine Push-Nachricht
 
-## Umsetzungsreihenfolge
+## Umsetzungsstand
 
-| Stufe | Inhalt | Nutzen |
+| Stufe | Inhalt | Stand |
 |---|---|---|
-| 1 | Bestand als YAML, ICMP/TCP-Prober, Startseite mit Ampeln | ersetzt sofort die Lesezeichenleiste |
-| 2 | Proxmox VE + PBS + PMG anbinden | Compute-Ansicht und Backup-Status echt |
-| 3 | OPNsense/pfSense inkl. WireGuard | Tunnelüberwachung — der eigentliche Auslöser |
-| 4 | Alarm-Postfach mit Regelwerk | alles ohne API kommt herein |
-| 5 | Übrige Dienste, Zertifikate, Push-Kanäle | Vollbild |
-| 6 | Wartungsfenster, Abhängigkeiten, Zeitreihen-Detailseiten | Ruhe im Betrieb |
+| 1 | Bestand als YAML, ICMP/TCP/TLS-Prober, Startseite mit Ampeln | **gebaut** |
+| 1b | Verwaltung in der Oberfläche: Systeme, Standorte, Tunnel, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
+| 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
+| 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** |
+| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | offen — ersetzt die Ersatzmessung durch den Tunnel |
+| 4 | Alarm-Postfach mit Regelwerk | offen — Oberfläche steht im Entwurf |
+| 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | offen — bislang nur Erreichbarkeit |
+| 6 | Wartungsfenster, Zeitreihen-Detailseiten, Push-Kanäle | offen |
+
+### Was in Stufe 1 bewusst anders gelöst ist
+
+**Tunnel ohne Firewall-Zugang.** Der WireGuard-Handshake steht erst mit Stufe 3
+zur Verfügung. Bis dahin misst der Leitstand *durch* den Tunnel: in
+`inventory.yaml` bekommt jeder Tunnel eine `probe`-Adresse im Transfernetz.
+Das braucht keinerlei Zugangsdaten und beantwortet die Frage, die zählt — trägt
+die Strecke gerade? Der Handshake wird später ergänzt, nicht ersetzt.
+
+**Erreichbar, aber Abruf scheitert.** Ein System, das antwortet, dessen API-Zugang
+aber abgelehnt wird, geht auf Gelb statt still ohne Kennzahlen dazustehen. Ein
+falsch gesetztes Token ist sonst monatelang unsichtbar.

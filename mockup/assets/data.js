@@ -1,11 +1,16 @@
-/* Leitstand — Demo-Datenbestand.
+/* Leitstand — Beispielbestand (Rückfallebene).
+
+   Wird vom Server überschrieben, sobald /api/state antwortet — siehe
+   live.js. Ohne Server (Doppelklick auf index.html) bleibt es hierbei.
+
+   Ursprünglich:
    Alle Werte sind erfunden. Struktur entspricht dem geplanten API-Schema
    (siehe docs/DATA-SOURCES.md), damit der Mockup 1:1 gegen echte Daten
    ausgetauscht werden kann. */
 
 const DOMAIN = "kraemersippe.de";
 
-const SITES = [
+let SITES = [
   { id:"hq",  name:"HQ Zuhause",        short:"HQ",  place:"Köln",           kind:"primary", isp:"Vodafone Kabel 1000/50", wan:"91.64.203.17",  wan6:"2a02:908:1a::/56", uptimeDays:212, primary:true },
   { id:"rz",  name:"RZ Falkenstein",    short:"RZ",  place:"Hetzner AX41",   kind:"remote",  isp:"Hetzner Online",         wan:"116.203.44.91", wan6:"2a01:4f8:1c1e::/64", uptimeDays:463 },
   { id:"elt", name:"Standort Eltern",   short:"ELT", place:"Bergisch Gladbach", kind:"remote", isp:"Telekom VDSL 250/40",  wan:"91.20.118.204", wan6:"—", uptimeDays:87 },
@@ -14,7 +19,7 @@ const SITES = [
 ];
 
 /* ---------- Hosts ---------- */
-const HOSTS = [
+let HOSTS = [
   /* Proxmox VE */
   { id:"pve-hq-01", name:"pve-hq-01", type:"pve", site:"hq", role:"Cluster-Node · Ryzen 9 5950X", ip:"10.10.1.11", url:"https://pve-hq-01.int."+DOMAIN+":8006",
     status:"ok", version:"8.3.2", cluster:"cl-hq", quorum:true, cpu:34, ram:61, disk:47, vms:14, lxc:9, uptime:"41 T", temp:52,
@@ -119,7 +124,7 @@ const HOSTS = [
 ];
 
 /* ---------- HAProxy ---------- */
-const HAPROXY = [
+let HAPROXY = [
   { id:"haproxy-hq", host:"fw-hq-01", site:"hq", status:"ok", frontends:4, sessions:126, ssl:"ACME/Let's Encrypt",
     backends:[
       { name:"be_ha",        servers:"1/1", status:"ok",   ms:23,  route:"ha."+DOMAIN },
@@ -140,7 +145,7 @@ const HAPROXY = [
 ];
 
 /* ---------- WireGuard ---------- */
-const TUNNELS = [
+let TUNNELS = [
   { id:"wg-hq-rz",  a:"hq",  b:"rz",  iface:"wg0", status:"ok",   handshake:22,  rx:"412 GB", tx:"188 GB", rtt:11, loss:0,   mtu:1420, keepalive:25, net:"10.99.0.0/30", hist:[11,12,10,11,13,11,10,12,11,11,12,11] },
   { id:"wg-hq-elt", a:"hq",  b:"elt", iface:"wg1", status:"warn", handshake:186, rx:"88 GB",  tx:"41 GB",  rtt:34, loss:2.4, mtu:1420, keepalive:25, net:"10.99.0.4/30", hist:[18,19,22,26,31,44,38,29,33,36,34,34],
     note:"Handshake älter als 3 Minuten, Paketverlust 2,4 % — DSL-Reconnect um 04:03" },
@@ -151,7 +156,7 @@ const TUNNELS = [
   { id:"wg-rz-bue", a:"rz",  b:"bue", iface:"wg2", status:"ok",   handshake:77,  rx:"64 GB",  tx:"52 GB",  rtt:17, loss:0,   mtu:1420, keepalive:25, net:"10.99.0.20/30", hist:[16,17,18,17,16,18,19,17,16,17,18,17] }
 ];
 
-const PEERS = [
+let PEERS = [
   { id:"p1", name:"laptop-andreas",   device:"ThinkPad T14s · Linux", site:"hq",  status:"ok",   handshake:14,   ip:"10.99.10.2",  rx:"18,4 GB", tx:"3,1 GB",  endpoint:"84.118.9.44:51820" },
   { id:"p2", name:"pixel-andreas",    device:"Pixel 8 · Android",     site:"hq",  status:"ok",   handshake:96,   ip:"10.99.10.3",  rx:"6,2 GB",  tx:"1,4 GB",  endpoint:"149.86.203.7:38214" },
   { id:"p3", name:"ipad-wohnzimmer",  device:"iPad Air · iOS",        site:"hq",  status:"idle", handshake:74400,ip:"10.99.10.4",  rx:"2,1 GB",  tx:"0,4 GB",  endpoint:"—" },
@@ -162,7 +167,7 @@ const PEERS = [
 ];
 
 /* ---------- Störungen ---------- */
-const INCIDENTS = [
+let INCIDENTS = [
   { id:"INC-0412", sev:"crit", host:"pf-fh-01",     site:"fh", title:"Standort Ferienhaus nicht erreichbar",
     detail:"ICMP und WireGuard-Handshake seit 02:14 ohne Antwort. Provider-Störungsmeldung Telekom für Monschau aktiv (Ticket TS-88214, ETA 14:00).",
     src:"poll", ageMin:342, ack:false, first:"02:14", rule:"host.unreachable > 5m" },
@@ -199,7 +204,7 @@ const INCIDENTS = [
 ];
 
 /* ---------- Alarm-Postfach ---------- */
-const MAILS = [
+let MAILS = [
   { id:"m1", from:"pbs@pbs-hq-01.int."+DOMAIN, subject:"Verify job 'v-nas-archive' failed", time:"05:40", sev:"crit", parsed:true,
     rule:"Proxmox Backup Server", host:"pbs-hq-01", incident:"INC-0411", read:false,
     raw:"Datastore: nas-archive\nJob-ID:    v-nas-archive\nStatus:    FAILED\n\nverify vm/141/2026-08-17T02:00:12Z\n  check qemu-server.conf.blob\n  check drive-scsi0.img.fidx\n  ERROR: chunk 0f3a9c22...c81 has wrong checksum\n  verify vm/141 failed\n\nTASK ERROR: verification failed - please check the log for details" },
@@ -226,7 +231,7 @@ const MAILS = [
     raw:"Certificate: *.int."+DOMAIN+"\nIssuer: Let's Encrypt R11\nExpires: 2026-08-30 (in 11 days)\nRenewal: scheduled 2026-08-23 03:00\nValidation: DNS-01 (Cloudflare)" }
 ];
 
-const MAILRULES = [
+let MAILRULES = [
   { id:"r1", name:"Proxmox Backup Server", match:"from ~ /^pbs@/ · subject ~ /Verify job .* failed/", sev:"crit", target:"Störung + Push", hits:14, active:true },
   { id:"r2", name:"Proxmox vzdump",        match:"subject ~ /vzdump backup status/", sev:"ableiten aus 'successful|failed'", target:"Backup-Status", hits:1284, active:true },
   { id:"r3", name:"smartd",                match:"from ~ /^smartd@/", sev:"warn", target:"Störung + Push", hits:6, active:true },
@@ -238,7 +243,7 @@ const MAILRULES = [
 ];
 
 /* ---------- Zertifikate ---------- */
-const CERTS = [
+let CERTS = [
   { cn:"*.int."+DOMAIN, issuer:"Let's Encrypt R11", days:11,  where:"fw-hq-01 (HAProxy)", status:"warn" },
   { cn:"mail."+DOMAIN,  issuer:"Let's Encrypt R11", days:47,  where:"mailcow-rz-01",      status:"ok" },
   { cn:"cloud."+DOMAIN, issuer:"Let's Encrypt R11", days:62,  where:"fw-hq-01 (HAProxy)", status:"ok" },
@@ -248,7 +253,7 @@ const CERTS = [
 ];
 
 /* ---------- Backups (24 h) ---------- */
-const BACKUPS = [
+let BACKUPS = [
   { job:"vzdump cl-hq täglich",     target:"pbs-hq-01/main",   last:"heute 03:12", size:"33,3 GB", status:"ok",   dur:"09:56" },
   { job:"vzdump pve-rz-01",         target:"pbs-rz-01/main",   last:"heute 02:30", size:"18,7 GB", status:"ok",   dur:"06:11" },
   { job:"vzdump pve-elt-01",        target:"pbs-hq-01/remote", last:"heute 02:00", size:"9,1 GB",  status:"ok",   dur:"04:02" },
@@ -260,7 +265,7 @@ const BACKUPS = [
 ];
 
 /* ---------- Linkpage ---------- */
-const LINKGROUPS = [
+let LINKGROUPS = [
   { name:"Virtualisierung", links:[
     { n:"pve-hq-01",  u:"https://pve-hq-01.int."+DOMAIN+":8006",  h:"pve-hq-01" },
     { n:"pve-hq-02",  u:"https://pve-hq-02.int."+DOMAIN+":8006",  h:"pve-hq-02" },
@@ -318,7 +323,7 @@ const LINKGROUPS = [
 ];
 
 /* ---------- Integrationen (Einstellungen) ---------- */
-const INTEGRATIONS = [
+let INTEGRATIONS = [
   { name:"Proxmox VE",           method:"API-Token (PVEAPIToken)", targets:6, every:"30 s", status:"ok",   note:"Rolle PVEAuditor, read-only" },
   { name:"Proxmox Backup Server",method:"API-Token",               targets:2, every:"5 min",status:"ok",   note:"Datastore- und Job-Status" },
   { name:"Proxmox Mail Gateway", method:"API-Token",               targets:1, every:"5 min",status:"ok",   note:"Statistik + Queue" },
@@ -334,7 +339,7 @@ const INTEGRATIONS = [
   { name:"ICMP/TCP-Prüfung",     method:"eigener Prober",          targets:44,every:"15 s", status:"ok",   note:"Ping, Port, TLS-Ablauf" }
 ];
 
-const ROUTES = [
+let ROUTES = [
   { channel:"ntfy (Self-hosted)", to:"ntfy."+DOMAIN+"/leitstand", sev:"kritisch + Warnung", quiet:"nein",            on:true },
   { channel:"Telegram-Bot",       to:"@leitstand_bot",            sev:"nur kritisch",       quiet:"22:00 – 07:00",   on:true },
   { channel:"E-Mail",             to:"andreas@"+DOMAIN,           sev:"alles ab Warnung",   quiet:"nein",            on:true },

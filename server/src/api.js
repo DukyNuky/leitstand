@@ -1,0 +1,195 @@
+/* Aus Bestand + Messwerten die Form bauen, die die Oberfläche erwartet.
+
+   Bewusst dieselben Feldnamen wie im Entwurf (mockup/assets/data.js):
+   dadurch bleibt die Oberfläche unverändert, egal ob sie aus der
+   Beispieldatei oder aus dieser Antwort gespeist wird. Was Stufe 1
+   nicht wissen kann, steht ausdrücklich auf null — nie auf Fantasie. */
+
+import { TYPES } from "./inventory.js";
+
+const uiStatus = s => (s === "unknown" ? "idle" : s);
+
+export function buildState(engine, secrets) {
+  const inv = engine.inv;
+  const hosts = inv.hosts.map(h => hostView(h, engine.hosts.get(h.id)));
+  const byId = new Map(hosts.map(h => [h.id, h]));
+
+  return {
+    meta: {
+      live: true,
+      lastRun: engine.lastRun,
+      interval: inv.settings.interval,
+      counts: { hosts: hosts.length, sites: inv.sites.length, tunnels: inv.tunnels.length },
+      generated: new Date().toISOString()
+    },
+    sites: inv.sites.map(s => siteView(s, hosts, inv, engine)),
+    hosts,
+    tunnels: inv.tunnels.map(t => tunnelView(t, engine.tunnels.get(t.id))),
+    incidents: incidentViews(engine),
+    certs: certViews(hosts),
+    links: linkViews(inv, byId),
+    integrations: integrationViews(inv, secrets, engine),
+    /* Stufe 1 kennt diese Bereiche noch nicht — leer statt erfunden. */
+    peers: [], haproxy: [], backups: [], mails: [], mailrules: [], routes: []
+  };
+}
+
+function hostView(h, st = {}) {
+  const x = st.extra || {};
+  return {
+    id: h.id,
+    name: h.name || h.id,
+    type: h.type,
+    site: h.site,
+    role: h.role || TYPES[h.type]?.label || "",
+    ip: h.ip || null,
+    url: h.url || null,
+    status: uiStatus(st.status || "unknown"),
+    note: st.note || x.note || null,
+    version: x.version || null,
+    ms: st.ms ?? null,
+    hist: (st.hist || []).slice(-24),
+    lastSeen: st.lastSeen || null,
+    monitored: h.monitor !== false,
+    checks: (st.checks || []).map(c => ({
+      kind: c.kind, port: c.port || null, ok: c.ok, ms: c.ms ?? null,
+      detail: c.detail || null, skipped: !!c.skipped
+    })),
+    tls: st.tls || null,
+    /* aus einem Sammler, sonst null */
+    cpu: x.cpu ?? null, ram: x.ram ?? null, disk: x.disk ?? null,
+    vms: x.vms ?? null, lxc: x.lxc ?? null, running: x.running ?? null, stopped: x.stopped ?? null,
+    uptime: x.uptime || null, cluster: x.cluster || null, quorum: x.quorum ?? null,
+    storages: x.storages || null, stores: x.stores || null,
+    used: x.used ?? null, failed: x.failed ?? null, lastGood: x.lastGood || null,
+    in24: x.in24 ?? null, spam: x.spam ?? null, virus: x.virus ?? null,
+    collectorError: x.error || null
+  };
+}
+
+function siteView(s, hosts, inv, engine) {
+  const mine = hosts.filter(h => h.site === s.id);
+  const tuns = inv.tunnels
+    .filter(t => t.a === s.id || t.b === s.id)
+    .map(t => engine.tunnels.get(t.id))
+    .filter(Boolean);
+  const reachable = mine.filter(h => h.status !== "crit" && h.monitored);
+  const down = mine.length > 0 && mine.filter(h => h.monitored).length > 0 && reachable.length === 0;
+  return {
+    id: s.id, name: s.name, short: s.short || shortOf(s), place: s.place || "",
+    isp: s.isp || "—", wan: s.wan || "—", wan6: s.wan6 || "—",
+    primary: !!s.primary,
+    uptimeDays: s.uptimeDays ?? null,
+    down,
+    hosts: mine.length,
+    problems: mine.filter(h => h.status === "warn" || h.status === "crit").length,
+    tunnelsOk: tuns.filter(t => t.status === "ok").length,
+    tunnels: tuns.length
+  };
+}
+
+function shortOf(s) {
+  return String(s.id || "").slice(0, 3).toUpperCase();
+}
+
+function tunnelView(t, st = {}) {
+  return {
+    id: t.id, a: t.a, b: t.b,
+    iface: t.iface || "wg0",
+    net: t.net || "—",
+    status: uiStatus(st.status || "unknown"),
+    rtt: st.ms ?? null,
+    loss: null,                 /* braucht mehrere Pakete — kommt mit dem Dauerprober */
+    handshake: null,            /* erst mit dem Firewall-Zugang lesbar (Stufe 3) */
+    rx: null, tx: null,
+    mtu: t.mtu || null, keepalive: t.keepalive || null,
+    probe: t.probe?.ip || null,
+    hist: (st.hist || []).slice(-24),
+    lastSeen: st.lastSeen || null,
+    note: st.note || null
+  };
+}
+
+function incidentViews(engine) {
+  const now = Date.now();
+  const alle = [...engine.incidents.values()];
+  const mitbetroffen = new Map();
+  for (const i of alle) if (i.suppressedBy) mitbetroffen.set(i.suppressedBy, (mitbetroffen.get(i.suppressedBy) || 0) + 1);
+
+  return alle
+    .filter(i => !i.suppressedBy)                       /* Folgemeldungen hängen an der Standortmeldung */
+    .filter(i => !i.silencedUntil || new Date(i.silencedUntil) < now)
+    .map(i => ({
+      id: i.id, sev: i.sev, host: i.host, site: i.site, title: i.title,
+      detail: i.detail, note: i.note, rule: i.rule, src: i.src,
+      first: fmtTime(i.first), ageMin: Math.round((now - new Date(i.first)) / 60000),
+      count: i.count, ack: !!i.ack, kind: i.kind,
+      affected: i.affected || null,
+      rollup: mitbetroffen.get(i.fingerprint) || 0
+    }))
+    .sort((a, b) => sevRank(a.sev) - sevRank(b.sev) || a.ageMin - b.ageMin);
+}
+const sevRank = s => ({ crit: 0, warn: 1, info: 2 }[s] ?? 3);
+
+function certViews(hosts) {
+  return hosts
+    .filter(h => h.tls && h.tls.days != null)
+    .map(h => ({
+      cn: h.tls.cn || h.name,
+      issuer: h.tls.issuer || "unbekannt",
+      days: h.tls.days,
+      where: `${h.name}${h.tls.port ? ":" + h.tls.port : ""}`,
+      selfSigned: !!h.tls.selfSigned,
+      status: h.tls.days <= 14 ? "crit" : h.tls.days <= 30 ? "warn" : "ok"
+    }))
+    .sort((a, b) => a.days - b.days);
+}
+
+function linkViews(inv, byId) {
+  return inv.links.map(g => ({
+    name: g.group,
+    links: g.items.map(i => {
+      const h = i.host ? byId.get(i.host) : null;
+      return { n: i.name || (h ? h.name : i.url), u: i.url || (h ? h.url : "#"), h: i.host || null };
+    })
+  }));
+}
+
+/* Die Ansicht „Einstellungen → Datenquellen“ spiegelt den echten Stand:
+   welcher Typ ist wie oft vorhanden, wo liegen Zugangsdaten, was wird
+   bislang nur angepingt. */
+function integrationViews(inv, secrets, engine) {
+  const byType = new Map();
+  for (const h of inv.hosts) {
+    const e = byType.get(h.type) || { type: h.type, targets: 0, withCred: 0, errors: 0 };
+    e.targets++;
+    if (secrets?.has(h.id)) e.withCred++;
+    const st = engine.hosts.get(h.id);
+    if (st?.extra?.error) e.errors++;
+    byType.set(h.type, e);
+  }
+  return [...byType.values()].map(e => {
+    const t = TYPES[e.type] || { label: e.type, api: null };
+    const supported = !!t.api;
+    return {
+      name: t.label,
+      type: e.type,
+      method: !supported ? "nur Erreichbarkeit (Prüfung ohne Zugang)"
+        : e.withCred ? "API-Token" : "API-Token — noch nicht hinterlegt",
+      targets: e.targets,
+      every: `${inv.settings.interval} s`,
+      status: e.errors ? "warn" : (supported && !e.withCred) ? "idle" : "ok",
+      note: e.errors ? `${e.errors} System(e) melden einen Fehler beim Abruf`
+        : supported
+          ? (e.withCred ? `${e.withCred} von ${e.targets} mit Zugangsdaten` : "In der Verwaltung Zugangsdaten hinterlegen")
+          : "Sammler folgt in einer späteren Stufe"
+    };
+  }).sort((a, b) => b.targets - a.targets);
+}
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  const today = new Date().toDateString() === d.toDateString();
+  const t = d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  return today ? t : `${d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" })} ${t}`;
+}

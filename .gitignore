@@ -3,3 +3,9 @@ node_modules/
 *.log
 .idea/
 .vscode/
+secrets.json
+incidents.json
+*.bak
+inventory.yaml.tmp
+_shots.mjs
+_dbg.mjs

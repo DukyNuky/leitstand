@@ -7,6 +7,7 @@
    ============================================================ */
 
 :root {
+  color-scheme: dark;
   --bg:        #0B1014;
   --bg-rail:   #080C10;
   --bg-grid:   rgba(255,255,255,.022);
@@ -40,6 +41,7 @@
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
+    color-scheme: light;
     --bg:        #EDF1F4;
     --bg-rail:   #E2E8ED;
     --bg-grid:   rgba(20,40,60,.035);
@@ -67,6 +69,7 @@
 }
 
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg:        #EDF1F4;
   --bg-rail:   #E2E8ED;
   --bg-grid:   rgba(20,40,60,.035);
@@ -224,7 +227,10 @@ button { font: inherit; color: inherit; }
 .panel-body--flush { padding: 0; }
 
 /* ---------- Kennzahlen ---------- */
-.kpi { padding: 13px 15px; display: flex; flex-direction: column; gap: 3px; text-align: left; cursor: pointer; width: 100%; }
+.kpi {
+  padding: 13px 15px; display: flex; flex-direction: column; gap: 3px; text-align: left;
+  cursor: pointer; width: 100%; background: transparent; border: 0; color: inherit;
+}
 .kpi:hover { background: var(--panel-3); }
 .kpi-label { font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
 .kpi-value { font-family: var(--f-display); font-size: 27px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
@@ -413,3 +419,20 @@ pre.raw {
   .nav { flex-direction: row; flex-wrap: wrap; }
   .nav-label, .rail-foot { display: none; }
 }
+
+/* ---------- Verwaltung ---------- */
+.bar[data-tone="idle"] > i { background: var(--idle); }
+.admin-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px 14px; }
+@media (max-width: 620px) { .admin-grid { grid-template-columns: 1fr; } }
+.admin-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.admin-label { font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.admin-input {
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r);
+  padding: 7px 9px; color: var(--text); font: inherit; font-size: 13px; width: 100%;
+}
+.admin-input:focus { outline: none; border-color: var(--accent); }
+.admin-input[readonly] { color: var(--dim); background: var(--panel-3); }
+.admin-input::placeholder { color: var(--faint); opacity: .7; }
+select.admin-input { font-family: var(--f-sans); cursor: pointer; }
+.admin-hint { font-size: 11.5px; color: var(--faint); }
+.inspector-body .admin-grid + .admin-grid { margin-top: 4px; }

@@ -6,6 +6,10 @@ prüfen — insbesondere bei OPNsense-Plugins ändern sie sich zwischen Releases
 
 ## Proxmox VE — 6 Knoten
 
+> **Gebaut** — `server/src/collectors/proxmox.js`. In der Oberfläche unter
+> *Verwaltung → + System* anlegen; „Verbindung testen" prüft Erreichbarkeit und
+> API in einem Zug und nennt bei 401/403 den wahrscheinlichen Grund.
+
 | | |
 |---|---|
 | Zugang | API-Token, Rolle `PVEAuditor` (nur lesen), `Authorization: PVEAPIToken=leitstand@pve!ro=<uuid>` |
@@ -18,6 +22,9 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 
 ## Proxmox Backup Server — 2 Instanzen
 
+> **Gebaut** — meldet fehlgeschlagene Verify-, GC- und Sync-Aufträge der letzten
+> 24 Stunden als kritische Störung.
+
 | | |
 |---|---|
 | Zugang | API-Token `PBSAPIToken=…`, Rolle `DatastoreAudit`, Port 8007 |
@@ -27,6 +34,8 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 | Meldet per Mail | Notification-Matcher für `verify`, `garbage collection`, `sync` — der Regelfall für die Störung im Entwurf |
 
 ## Proxmox Mail Gateway
+
+> **Gebaut** — Tagesstatistik über `/statistics/mail`.
 
 | | |
 |---|---|
@@ -130,11 +139,17 @@ Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
 
 ## Eigene Prüfungen
 
-Nicht jedes System liefert alles. Der Leitstand bringt drei eigene Prober mit:
+> **Gebaut** — `server/src/probe.js`.
 
-1. **Erreichbarkeit** — ICMP und TCP-Port alle 15 s, drei Fehlschläge bis rot
-2. **TLS** — Restlaufzeit aller veröffentlichten Zertifikate, täglich
-3. **Tunnelgüte** — ICMP über jeden Site-to-Site-Tunnel für Latenz und Verlust
+Nicht jedes System liefert alles. Der Leitstand bringt eigene Prober mit:
+
+1. **Erreichbarkeit** — ICMP und TCP-Port im eingestellten Takt, drei Fehlschläge bis rot
+2. **TLS** — Restlaufzeit jedes HTTPS-Ziels, eigensignierte Zertifikate werden erkannt und nicht abgelehnt
+3. **Tunnelgüte** — TCP/ICMP auf die Gegenstelle im Transfernetz, also durch den Tunnel hindurch
+4. **DNS** — Auflösungstest gegen die AdGuard-Instanzen
+
+Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
+übersprungen statt als Ausfall gewertet; die TCP-Prüfung trägt dann allein.
 
 ## Zugänge anlegen — Kurzfassung
 

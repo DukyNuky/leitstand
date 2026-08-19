@@ -25,6 +25,12 @@ function chip(s, text) { return `<span class="chip chip--${esc(s)}">${esc(text ?
 function tone(pct, warn=75, crit=90) { return pct >= crit ? "crit" : pct >= warn ? "warn" : "ok"; }
 
 function meter(label, pct, opts={}) {
+  if (pct == null || !Number.isFinite(pct)) {
+    return `<div class="meter">
+      <div class="meter-top"><span>${esc(label)}</span><b class="faint">${esc(opts.text ?? "—")}</b></div>
+      <div class="bar" data-tone="idle"><i style="width:0"></i></div>
+    </div>`;
+  }
   const t = opts.tone || tone(pct, opts.warn, opts.crit);
   return `<div class="meter">
     <div class="meter-top"><span>${esc(label)}</span><b>${opts.text ?? pct + " %"}</b></div>
@@ -34,6 +40,11 @@ function meter(label, pct, opts={}) {
 
 /* Sparkline als Inline-SVG: Fläche + betonter Endpunkt. */
 function spark(vals, opts={}) {
+  /* Leere oder lückenhafte Reihen kommen vor, solange ein System noch nie
+     geantwortet hat — daraus darf kein kaputtes SVG werden. */
+  vals = (Array.isArray(vals) ? vals : []).filter(v => Number.isFinite(v));
+  if (!vals.length) vals = [0, 0];
+  if (vals.length === 1) vals = [vals[0], vals[0]];
   const w = opts.w || 108, h = opts.h || 28, pad = 2;
   const max = Math.max(...vals, 1), min = Math.min(...vals, 0);
   const span = (max - min) || 1;
@@ -52,19 +63,34 @@ function spark(vals, opts={}) {
   </svg>`;
 }
 
+function fmtWhen(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const heute = new Date().toDateString() === d.toDateString();
+  const t = d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  return heute ? t : `${d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" })} ${t}`;
+}
+
 function ago(min) {
-  if (min == null) return "—";
+  if (min == null || !Number.isFinite(min)) return "—";
   if (min < 1) return "gerade eben";
   if (min < 60) return `vor ${Math.round(min)} min`;
   if (min < 1440) return `vor ${Math.floor(min / 60)} h ${Math.round(min % 60)} min`;
   return `vor ${Math.floor(min / 1440)} T`;
 }
 function hs(sec) {
+  if (sec == null || !Number.isFinite(sec)) return "—";
   if (sec >= 3600) return `${Math.floor(sec / 3600)} h ${Math.floor((sec % 3600) / 60)} min`;
   if (sec >= 60) return `${Math.floor(sec / 60)} min ${sec % 60} s`;
   return `${sec} s`;
 }
 const SRC_LABEL = { mail:"E-Mail", poll:"Abfrage", api:"API", webhook:"Webhook" };
+
+/* Wert anzeigen, wenn er bekannt ist — sonst einen Strich. Stufe 1 kennt
+   viele Kennzahlen noch nicht; erfunden wird an dieser Stelle nichts. */
+const nz = (v, suffix = "") => (v == null || v === "" || (typeof v === "number" && !Number.isFinite(v)) ? "—" : `${v}${suffix}`);
+const LIVE = () => !!(window.LEITSTAND && window.LEITSTAND.live);
 
 const ICON = {
   lage:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 13h4l2.5-7 4 14 2.5-7H21"/></svg>',
@@ -89,7 +115,8 @@ const VIEWS = [
   { id:"dienste", label:"Dienste",      icon:"dienste", group:"Infrastruktur" },
   { id:"post",    label:"Alarm-Postfach", icon:"post",  group:"Betrieb" },
   { id:"links",   label:"Startseite",   icon:"links",   group:"Betrieb" },
-  { id:"cfg",     label:"Einstellungen",icon:"cfg",     group:"Betrieb" }
+  { id:"cfg",     label:"Einstellungen",icon:"cfg",     group:"Betrieb" },
+  { id:"verwaltung", label:"Verwaltung",  icon:"cfg",     group:"Betrieb" }
 ];
 
 /* ============================================================
@@ -106,6 +133,11 @@ const state = {
   paletteQ: "",
   paletteIdx: 0,
   inspector: null,
+  adminTab: "hosts",
+  form: null,
+  credentials: {},
+  settings: null,
+  connecting: false,
   incidents: INCIDENTS.map(i => ({ ...i })),
   mails: MAILS.map(m => ({ ...m })),
   hosts: HOSTS.map(h => ({ ...h })),
@@ -157,9 +189,11 @@ function renderAlarmstrip() {
     { k:"Warnungen", v:warnCount(), tone: warnCount() ? "warn" : "ok", go:"lage" },
     { k:"Systeme", v:`${hostsUp}/${state.hosts.length}`, tone: hostsUp === state.hosts.length ? "ok" : "warn", go:"compute" },
     { k:"Tunnel", v:`${tunOk}/${state.tunnels.length}`, tone: tunOk === state.tunnels.length ? "ok" : "warn", go:"vpn" },
-    { k:"Backups 24 h", v:`${bkOk}/${BACKUPS.length}`, tone: bkOk === BACKUPS.length ? "ok" : "warn", go:"dienste" },
-    { k:"Zert. < 30 T", v:certWarn, tone: certWarn ? "warn" : "ok", go:"dienste" },
-    { k:"Alarm-Mails", v:unreadMails(), tone: unreadMails() ? "warn" : "ok", go:"post" }
+    /* Was es noch nicht gibt, wird als Strich gezeigt — nicht als „0 von 0“,
+       das wie ein Messwert aussieht. */
+    { k:"Backups 24 h", v: BACKUPS.length ? `${bkOk}/${BACKUPS.length}` : "—", tone: !BACKUPS.length ? "idle" : bkOk === BACKUPS.length ? "ok" : "warn", go:"dienste" },
+    { k:"Zert. < 30 T", v: CERTS.length ? certWarn : "—", tone: !CERTS.length ? "idle" : certWarn ? "warn" : "ok", go:"dienste" },
+    { k:"Alarm-Mails", v: MAILS.length ? unreadMails() : "—", tone: !MAILS.length ? "idle" : unreadMails() ? "warn" : "ok", go:"post" }
   ];
   return `<div class="alarmstrip">${cells.map(c => `
     <button class="alarmcell" data-tone="${c.tone}" data-action="view" data-view="${c.go}">
@@ -209,6 +243,20 @@ function incidentRows(list) {
   </tr>`).join("");
 }
 
+function avgRtt() {
+  const live = state.tunnels.filter(t => t.rtt != null);
+  return live.length ? `${Math.round(live.reduce((a, t) => a + t.rtt, 0) / live.length)} ms` : "—";
+}
+
+/* Im Livebetrieb entsteht der Ereignisstrom aus den Störungen selbst —
+   erfundene Einträge wären hier besonders irreführend. */
+function liveEvents() {
+  return state.incidents.slice(0, 12).map(i => ({
+    t: i.first, s: i.src || "poll", sev: i.sev,
+    txt: `<b>${esc(i.host)}</b>: ${esc(i.title)}${i.count > 1 ? ` <span class="faint">(${i.count}×)</span>` : ""}`
+  }));
+}
+
 function viewLage() {
   const inc = openIncidents().sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev] || a.ageMin - b.ageMin);
   const hosts = state.hosts.filter(inSite);
@@ -216,10 +264,10 @@ function viewLage() {
     { l:"Erreichbarkeit", v:`${Math.round(hosts.filter(h => h.status !== "crit").length / hosts.length * 100)} %`, s:`${hosts.filter(h => h.status === "crit").length} Systeme ohne Antwort`, t: hosts.some(h => h.status === "crit") ? "warn" : "ok", go:"compute" },
     { l:"Offene Störungen", v:critCount() + warnCount(), s:`${critCount()} kritisch · ${warnCount()} Warnung`, t: critCount() ? "crit" : "warn", go:"lage" },
     { l:"VPN-Tunnel", v:`${state.tunnels.filter(t => t.status === "ok").length}/${state.tunnels.length}`, s:"Site-to-Site WireGuard", t: state.tunnels.some(t => t.status === "crit") ? "crit" : "warn", go:"vpn" },
-    { l:"Ø Tunnel-Latenz", v:`${Math.round(state.tunnels.filter(t => t.rtt).reduce((a, t) => a + t.rtt, 0) / state.tunnels.filter(t => t.rtt).length)} ms`, s:"über alle aktiven Strecken", t:"ok", go:"vpn" }
+    { l:"Ø Tunnel-Latenz", v:avgRtt(), s:"über alle aktiven Strecken", t:"ok", go:"vpn" }
   ];
 
-  const events = [
+  const events = LIVE() ? liveEvents() : [
     { t:"10:08", s:"api",  txt:"Portainer Büro: <b>paperless-gotenberg</b> neu gestartet (Exit 137)", sev:"warn" },
     { t:"09:32", s:"mail", txt:"Mailcow-Watchdog: Queue über Schwellwert (47)", sev:"warn" },
     { t:"09:00", s:"poll", txt:"AdGuard RZ: Upstream-Latenz > 100 ms", sev:"warn" },
@@ -251,11 +299,11 @@ function viewLage() {
     <div class="panel">
       <div class="panel-head"><h3>Ereignisstrom</h3><span class="hint">heute</span></div>
       <div class="panel-body panel-body--flush"><div class="tl">
-        ${events.map(e => `<div class="tl-item">
+        ${events.length ? events.map(e => `<div class="tl-item">
           <span class="tl-time">${esc(e.t)}</span>
           <span class="tl-rail">${dot(e.sev)}</span>
-          <span><span class="tl-text">${e.txt}</span><br><span class="tl-src">${esc(SRC_LABEL[e.s])}</span></span>
-        </div>`).join("")}
+          <span><span class="tl-text">${e.txt}</span><br><span class="tl-src">${esc(SRC_LABEL[e.s] || e.s)}</span></span>
+        </div>`).join("") : '<div class="empty">Nichts vorgefallen — alle Prüfungen unauffällig.</div>'}
       </div></div>
     </div>
   </div>
@@ -283,10 +331,10 @@ function siteCard(s) {
       <div class="spacer"></div>${chip("plain", s.short)}
     </div>
     <div class="stat-row">
-      <div class="stat"><span class="stat-k">WAN</span><span class="stat-v">${esc(s.wan)}</span></div>
+      ${stat("WAN", nz(s.wan === "—" ? null : s.wan))}
       <div class="stat"><span class="stat-k">Systeme</span><span class="stat-v">${hosts.length}${bad ? ` <span style="color:var(--warn)">▲${bad}</span>` : ""}</span></div>
-      <div class="stat"><span class="stat-k">Tunnel</span><span class="stat-v">${tuns.filter(t => t.status === "ok").length}/${tuns.length}</span></div>
-      <div class="stat"><span class="stat-k">Uptime</span><span class="stat-v">${s.uptimeDays ? s.uptimeDays + " T" : "—"}</span></div>
+      <div class="stat"><span class="stat-k">Tunnel</span><span class="stat-v">${tuns.length ? `${tuns.filter(t => t.status === "ok").length}/${tuns.length}` : "—"}</span></div>
+      ${stat("Uptime", s.uptimeDays ? s.uptimeDays + " T" : "—")}
     </div>
   </div>`;
 }
@@ -370,19 +418,22 @@ function pveCard(h) {
       <div class="right"><div class="card-meta">${esc(h.cluster !== "—" ? h.cluster : "standalone")}</div>
       <div class="card-meta">v${esc(h.version)}</div></div>
     </div>
-    <div class="col" style="gap:7px">
+    ${hasMetrics(h) ? `<div class="col" style="gap:7px">
       ${meter("CPU", h.cpu)}${meter("RAM", h.ram)}${meter("Speicher", h.disk)}
-    </div>
+    </div>` : `<div class="row" style="gap:8px;font-size:12px;color:var(--faint)">
+      ${dot("idle")}<span>Kennzahlen erst mit hinterlegtem API-Token — Verwaltung → ${esc(h.name)}</span></div>`}
     <div class="stat-row">
-      <div class="stat"><span class="stat-k">VMs</span><span class="stat-v">${h.vms}</span></div>
-      <div class="stat"><span class="stat-k">LXC</span><span class="stat-v">${h.lxc}</span></div>
-      <div class="stat"><span class="stat-k">Temp</span><span class="stat-v">${h.temp} °C</span></div>
-      <div class="stat"><span class="stat-k">Laufzeit</span><span class="stat-v">${esc(h.uptime)}</span></div>
-      <div class="spacer"></div>${spark(h.hist, { color: h.status === "warn" ? "var(--warn)" : "var(--accent)" })}
+      ${stat("VMs", nz(h.vms))}${stat("LXC", nz(h.lxc))}
+      ${h.temp != null ? stat("Temp", h.temp + " °C") : stat("Antwort", nz(h.ms, " ms"))}
+      ${stat("Laufzeit", nz(h.uptime))}
+      <div class="spacer"></div>${spark(h.hist && h.hist.length ? h.hist : [0, 0], { color: h.status === "warn" ? "var(--warn)" : "var(--accent)" })}
     </div>
     ${h.note ? `<div class="row" style="gap:7px;font-size:12px;color:var(--${h.status})">${dot(h.status)}<span>${esc(h.note)}</span></div>` : ""}
   </div>`;
 }
+
+const hasMetrics = h => h.cpu != null || h.ram != null || h.disk != null;
+const stat = (k, v) => `<div class="stat"><span class="stat-k">${esc(k)}</span><span class="stat-v">${esc(String(v))}</span></div>`;
 
 function simpleRows(hosts, cols) {
   return hosts.map(h => `<tr data-sev="${h.status}" data-action="inspect" data-kind="host" data-id="${h.id}">
@@ -410,8 +461,8 @@ function viewCompute() {
       <div class="panel-body panel-body--flush tablewrap">
         <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Standort</th><th>Belegung</th><th>Letzter Lauf</th></tr></thead><tbody>
         ${store.length ? simpleRows(store, [
-          h => meter("", h.poolUsed ?? h.used, { text:(h.poolUsed ?? h.used) + " %" }),
-          h => `<span class="mono">${esc(h.lastGood || h.scrub || "—")}</span>`
+          h => { const u = h.poolUsed ?? h.used; return meter("", u, { text: u != null ? u + " %" : "—" }); },
+          h => `<span class="mono">${esc(fmtWhen(h.lastGood) || h.scrub || "—")}</span>`
         ]) : '<tr><td colspan="5"><div class="empty">Keine Treffer.</div></td></tr>'}
         </tbody></table>
       </div>
@@ -422,9 +473,9 @@ function viewCompute() {
       <div class="panel-body panel-body--flush tablewrap">
         <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Standort</th><th>Stacks</th><th>Container</th><th>Ungesund</th></tr></thead><tbody>
         ${cont.length ? simpleRows(cont, [
-          h => `<span class="mono">${h.stacks}</span>`,
-          h => `<span class="mono">${h.containers}</span>`,
-          h => h.unhealthy ? `<span class="chip chip--warn">${h.unhealthy}</span>` : `<span class="mono faint">0</span>`
+          h => `<span class="mono">${nz(h.stacks)}</span>`,
+          h => `<span class="mono">${nz(h.containers)}</span>`,
+          h => h.unhealthy ? `<span class="chip chip--warn">${h.unhealthy}</span>` : `<span class="mono faint">${h.unhealthy === 0 ? 0 : "—"}</span>`
         ]) : '<tr><td colspan="6"><div class="empty">Keine Treffer.</div></td></tr>'}
         </tbody></table>
       </div>
@@ -463,11 +514,11 @@ function viewNetz() {
         <td class="sev">${dot(f.status)}</td>
         <td><div class="mono">${esc(f.name)}</div><div class="t-sub">${esc(f.role)}</div></td>
         <td>${chip("plain", siteShort(f.site))}</td>
-        <td class="mono">${esc(f.version)}${f.update ? `<br><span class="chip chip--warn">→ ${esc(f.update)}</span>` : ""}</td>
+        <td class="mono">${esc(nz(f.version))}${f.update ? `<br><span class="chip chip--warn">→ ${esc(f.update)}</span>` : ""}</td>
         <td>${f.ha === "MASTER" ? chip("ok", "Master") : f.ha === "BACKUP" ? chip("info", "Backup") : '<span class="faint">—</span>'}</td>
-        <td style="min-width:150px">${meter("", Math.round(f.states / f.statesMax * 100), { text: f.states.toLocaleString("de-DE") })}</td>
-        <td class="mono">${f.thrIn} / ${f.thrOut} Mbit</td>
-        <td class="mono">${f.wgPeers}</td>
+        <td style="min-width:150px">${meter("", f.states != null && f.statesMax ? Math.round(f.states / f.statesMax * 100) : null, { text: f.states != null ? f.states.toLocaleString("de-DE") : "—" })}</td>
+        <td class="mono">${f.thrIn != null ? `${f.thrIn} / ${f.thrOut} Mbit` : "—"}</td>
+        <td class="mono">${nz(f.wgPeers)}</td>
         <td class="right">${spark(f.hist, { color: f.status === "crit" ? "var(--crit)" : f.status === "warn" ? "var(--warn)" : "var(--accent)" })}</td>
       </tr>`).join("") : '<tr><td colspan="9"><div class="empty">Keine Treffer.</div></td></tr>'}
       </tbody></table>
@@ -507,7 +558,7 @@ function viewVpn() {
       if (a === b) return `<td><div class="mcell" data-s="none">·</div></td>`;
       const t = state.tunnels.find(x => (x.a === a && x.b === b) || (x.a === b && x.b === a));
       if (!t) return `<td><div class="mcell" data-s="none">–</div></td>`;
-      return `<td><button class="mcell" data-s="${t.status}" data-action="inspect" data-kind="tunnel" data-id="${t.id}" title="${esc(siteName(a))} ↔ ${esc(siteName(b))}">${t.status === "crit" ? "×" : t.rtt + "ms"}</button></td>`;
+      return `<td><button class="mcell" data-s="${t.status}" data-action="inspect" data-kind="tunnel" data-id="${t.id}" title="${esc(siteName(a))} ↔ ${esc(siteName(b))}">${t.status === "crit" ? "×" : t.rtt != null ? t.rtt + "ms" : "·"}</button></td>`;
     }).join("")}</tr>`).join("")}
   </tbody></table>`;
 
@@ -522,10 +573,10 @@ function viewVpn() {
           <td class="sev">${dot(t.status)}</td>
           <td><div>${esc(siteName(t.a))} <span class="faint">↔</span> ${esc(siteName(t.b))}</div><div class="t-sub mono">${esc(t.net)}</div></td>
           <td class="mono faint">${esc(t.iface)}</td>
-          <td class="mono" style="color:var(--${t.status === "ok" ? "text" : t.status})">${esc(hs(t.handshake))}</td>
-          <td class="mono">${t.loss} %</td>
-          <td class="mono faint">${esc(t.rx)} / ${esc(t.tx)}</td>
-          <td class="right">${t.rtt ? `<span class="mono">${t.rtt} ms</span> ` : ""}${spark(t.hist, { w:74, color: t.status === "crit" ? "var(--crit)" : t.status === "warn" ? "var(--warn)" : "var(--ok)" })}</td>
+          <td class="mono" style="color:var(--${t.status === "ok" ? "text" : t.status})">${t.handshake != null ? esc(hs(t.handshake)) : `<span class="faint" title="Erst mit Firewall-Zugang lesbar">—</span>`}</td>
+          <td class="mono">${nz(t.loss, " %")}</td>
+          <td class="mono faint">${t.rx != null ? `${esc(t.rx)} / ${esc(t.tx)}` : nz(t.probe && "über " + t.probe)}</td>
+          <td class="right">${t.rtt != null ? `<span class="mono">${t.rtt} ms</span> ` : ""}${spark(t.hist && t.hist.length ? t.hist : [0, 0], { w:74, color: t.status === "crit" ? "var(--crit)" : t.status === "warn" ? "var(--warn)" : "var(--ok)" })}</td>
         </tr>`).join("") : '<tr><td colspan="7"><div class="empty">Keine Tunnel für diese Auswahl.</div></td></tr>'}
         </tbody></table>
       </div>
@@ -584,12 +635,12 @@ function viewDienste() {
       <div class="spacer"></div><span class="hint">${ag.reduce((a, h) => a + h.queries, 0).toLocaleString("de-DE")} Anfragen / 24 h</span></div>
     <div class="panel-body"><div class="grid g3">${ag.map(h => serviceCard(h, `
       <div class="stat-row">
-        <div class="stat"><span class="stat-k">Anfragen 24 h</span><span class="stat-v">${(h.queries / 1000).toFixed(1)}k</span></div>
-        <div class="stat"><span class="stat-k">Geblockt</span><span class="stat-v">${h.blockedPct} %</span></div>
-        <div class="stat"><span class="stat-k">Ø Antwort</span><span class="stat-v" style="color:var(--${h.avgMs > 100 ? "warn" : "text"})">${h.avgMs} ms</span></div>
+        ${stat("Anfragen 24 h", h.queries != null ? (h.queries / 1000).toFixed(1) + "k" : "—")}
+        ${stat("Geblockt", nz(h.blockedPct, " %"))}
+        <div class="stat"><span class="stat-k">Ø Antwort</span><span class="stat-v" style="color:var(--${h.avgMs > 100 ? "warn" : "text"})">${nz(h.avgMs ?? h.ms, " ms")}</span></div>
         <div class="spacer"></div>${spark(h.hist, { w:80, color: h.status === "warn" ? "var(--warn)" : "var(--accent)" })}
       </div>
-      <div class="card-meta">Top-Blockade: <span class="mono">${esc(h.top)}</span></div>`)).join("") || '<div class="empty">Keine Treffer.</div>'}</div></div>
+      ${h.top ? `<div class="card-meta">Top-Blockade: <span class="mono">${esc(h.top)}</span></div>` : ""}`)).join("") || '<div class="empty">Keine Treffer.</div>'}</div></div>
   </div>
 
   <div class="grid g2">
@@ -598,17 +649,14 @@ function viewDienste() {
       <div class="panel-body"><div class="col">${mail.map(h => serviceCard(h, h.type === "mailcow" ? `
         <div class="col" style="gap:7px">${meter("Speicher", h.storage)}</div>
         <div class="stat-row">
-          <div class="stat"><span class="stat-k">Warteschlange</span><span class="stat-v" style="color:var(--${h.queue > 25 ? "warn" : "text"})">${h.queue}</span></div>
-          <div class="stat"><span class="stat-k">Domains</span><span class="stat-v">${h.domains}</span></div>
-          <div class="stat"><span class="stat-k">Postfächer</span><span class="stat-v">${h.mailboxes}</span></div>
-          <div class="stat"><span class="stat-k">RBL</span><span class="stat-v" style="color:var(--warn)">${esc(h.rbl)}</span></div>
+          <div class="stat"><span class="stat-k">Warteschlange</span><span class="stat-v" style="color:var(--${h.queue > 25 ? "warn" : "text"})">${nz(h.queue)}</span></div>
+          ${stat("Domains", nz(h.domains))}${stat("Postfächer", nz(h.mailboxes))}
+          ${h.rbl ? `<div class="stat"><span class="stat-k">RBL</span><span class="stat-v" style="color:var(--warn)">${esc(h.rbl)}</span></div>` : ""}
           <div class="spacer"></div>${spark(h.hist, { w:80, color:"var(--warn)" })}
         </div>` : `
         <div class="stat-row">
-          <div class="stat"><span class="stat-k">Eingang 24 h</span><span class="stat-v">${h.in24}</span></div>
-          <div class="stat"><span class="stat-k">Spam</span><span class="stat-v">${h.spam}</span></div>
-          <div class="stat"><span class="stat-k">Viren</span><span class="stat-v">${h.virus}</span></div>
-          <div class="stat"><span class="stat-k">Quarantäne</span><span class="stat-v">${h.quarantine}</span></div>
+          ${stat("Eingang 24 h", nz(h.in24))}${stat("Spam", nz(h.spam))}
+          ${stat("Viren", nz(h.virus))}${stat("Quarantäne", nz(h.quarantine))}
           <div class="spacer"></div>${spark(h.hist, { w:80 })}
         </div>`)).join("") || '<div class="empty">Keine Treffer.</div>'}</div></div>
     </div>
@@ -617,10 +665,9 @@ function viewDienste() {
       <div class="panel-head"><h3>Smart Home</h3><span class="hint">Home Assistant</span></div>
       <div class="panel-body"><div class="col">${ha.map(h => serviceCard(h, `
         <div class="stat-row">
-          <div class="stat"><span class="stat-k">Entitäten</span><span class="stat-v">${h.entities}</span></div>
-          <div class="stat"><span class="stat-k">Nicht verfügbar</span><span class="stat-v" style="color:var(--info)">${h.unavailable}</span></div>
-          <div class="stat"><span class="stat-k">Automationen</span><span class="stat-v">${h.automations}</span></div>
-          <div class="stat"><span class="stat-k">Integrationen</span><span class="stat-v">${h.integrations}</span></div>
+          ${stat("Entitäten", nz(h.entities))}
+          <div class="stat"><span class="stat-k">Nicht verfügbar</span><span class="stat-v" style="color:var(--info)">${nz(h.unavailable)}</span></div>
+          ${stat("Automationen", nz(h.automations))}${stat("Integrationen", nz(h.integrations))}
         </div>`)).join("") || '<div class="empty">Keine Treffer.</div>'}</div></div>
     </div>
   </div>
@@ -632,8 +679,10 @@ function viewDienste() {
       <table class="t"><thead><tr><th style="width:34px"></th><th>Common Name</th><th>Aussteller</th><th>Terminiert auf</th><th>Restlaufzeit</th><th class="right"></th></tr></thead><tbody>
       ${CERTS.map(c => `<tr data-sev="${c.status}">
         <td class="sev">${dot(c.status)}</td><td class="mono">${esc(c.cn)}</td>
-        <td class="faint">${esc(c.issuer)}</td><td class="mono faint">${esc(c.where)}</td>
-        <td style="min-width:180px">${meter("", Math.max(3, Math.min(100, Math.round(c.days / 90 * 100))), { text: c.days + " Tage", tone: c.days <= 14 ? "crit" : c.days <= 30 ? "warn" : "ok" })}</td>
+        <td class="faint">${esc(c.issuer)}${c.selfSigned ? ' <span class="chip chip--plain">eigensigniert</span>' : ""}</td><td class="mono faint">${esc(c.where)}</td>
+        <td style="min-width:180px">${meter("", c.days < 0 ? 100 : Math.max(3, Math.min(100, Math.round(c.days / 90 * 100))),
+          { text: c.days < 0 ? `seit ${Math.abs(c.days)} T abgelaufen` : c.days + " Tage",
+            tone: c.days <= 14 ? "crit" : c.days <= 30 ? "warn" : "ok" })}</td>
         <td class="right">${c.days <= 30 ? `<button class="btn btn--sm" data-action="renew" data-cn="${esc(c.cn)}">Erneuerung anstoßen</button>` : ""}</td>
       </tr>`).join("")}
       </tbody></table>
@@ -1105,15 +1154,32 @@ function toast(title, msg, tone) {
 /* ============================================================
    Zeichnen & Verdrahten
    ============================================================ */
-const RENDERERS = { lage:viewLage, sites:viewSites, compute:viewCompute, netz:viewNetz, vpn:viewVpn, dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg };
+const RENDERERS = { lage:viewLage, sites:viewSites, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
+  dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung };
 
 function render() {
   const scroll = $("#scroll") ? $("#scroll").scrollTop : 0;
+
+  /* Ein offenes Formular darf eine Aktualisierung aus dem Netz überleben:
+     Eingaben in den Zustand sichern, danach Fokus und Schreibmarke zurück. */
+  let focus = null;
+  if (state.form && state.form.open) {
+    collectForm();
+    const a = document.activeElement;
+    if (a && (a.dataset.field || a.dataset.cred))
+      focus = { sel: a.dataset.field ? `[data-field="${a.dataset.field}"]` : `[data-cred="${a.dataset.cred}"]`, pos: a.selectionStart };
+  }
   $("#rail-nav").innerHTML = renderRail();
   $("#top").innerHTML = renderTopbar();
-  $("#wrap").innerHTML = (RENDERERS[state.view] || viewLage)();
-  $("#overlays").innerHTML = renderInspector() + renderPalette();
+  $("#wrap").innerHTML = state.connecting
+    ? `<div class="panel"><div class="empty">Verbinde mit dem Leitstand …</div></div>`
+    : (RENDERERS[state.view] || viewLage)();
+  $("#overlays").innerHTML = renderInspector() + renderAdminForm() + renderPalette();
   if ($("#scroll")) $("#scroll").scrollTop = scroll;
+  if (focus) {
+    const el = $(focus.sel);
+    if (el) { el.focus(); try { el.setSelectionRange(focus.pos, focus.pos); } catch {} }
+  }
   const pq = $("#pq");
   if (pq) { pq.focus(); pq.setSelectionRange(pq.value.length, pq.value.length); }
 }
@@ -1160,10 +1226,32 @@ document.addEventListener("click", ev => {
     }
     case "ack": {
       const i = byId(state.incidents, el.dataset.id);
-      if (i) { i.ack = !i.ack; toast(i.ack ? "Quittiert" : "Quittierung aufgehoben", `${i.id} — ${i.title}`, i.ack ? "ok" : ""); }
+      if (!i) break;
+      const on = !i.ack;
+      i.ack = on;
+      toast(on ? "Quittiert" : "Quittierung aufgehoben", `${i.id} — ${i.title}`, on ? "ok" : "");
+      if (LIVE()) window.LEITSTAND.call("POST", `/api/incidents/${encodeURIComponent(i.id)}/ack`, { on })
+        .catch(e => toast("Nicht gespeichert", e.message, "crit"));
       render(); break;
     }
     case "renew": toast("Erneuerung angestoßen", `ACME-Lauf für ${el.dataset.cn} eingeplant.`, "ok"); break;
+
+    /* ---- Verwaltung ---- */
+    case "admintab": state.adminTab = el.dataset.tab; render(); break;
+    case "admin-new": openForm(el.dataset.kind, "new"); break;
+    case "admin-edit": openForm(el.dataset.kind, "edit", el.dataset.id); break;
+    case "admin-delete": adminDelete(el.dataset.kind, el.dataset.id); break;
+    case "admin-reload": adminCall("POST", "/api/admin/reload", null, "Bestand neu eingelesen"); break;
+    case "admin-check": adminCall("POST", "/api/admin/check", null, "Durchlauf ausgelöst"); break;
+    case "admin-save-settings": saveSettings(); break;
+    case "form-close": state.form = null; render(); break;
+    case "form-toggle": {
+      const f = state.form; if (!f) break;
+      f.data[el.dataset.field] = f.data[el.dataset.field] === false ? true : false;
+      collectForm(); render(); break;
+    }
+    case "form-test": formTest(); break;
+    case "form-save": formSave(); break;
     case "toast": toast("Erledigt", el.dataset.msg); break;
   }
 });
@@ -1204,6 +1292,7 @@ window.addEventListener("hashchange", () => {
 const jitter = (v, amp, lo=0, hi=100) => Math.max(lo, Math.min(hi, Math.round(v + (Math.random() - .5) * amp)));
 
 setInterval(() => {
+  if (LIVE()) return;                       /* echte Werte kommen vom Server */
   if (state.paletteOpen || document.activeElement === $("#q")) return;
   for (const h of state.hosts) {
     if (h.status === "crit" && h.cpu === 0) continue;
@@ -1222,7 +1311,7 @@ setInterval(() => {
 /* Nach kurzer Zeit trifft eine Alarm-Mail ein — zeigt den Weg
    Gerät -> Postfach -> Regel -> Störung -> Ampel in einem Rutsch. */
 setTimeout(() => {
-  if (state.injected) return;
+  if (LIVE() || state.injected) return;
   state.injected = true;
   state.mails.unshift({
     id:"m0", from:"root@pve-hq-02.int.kraemersippe.de", subject:"pve-hq-02: swap usage critical (94 %)",
@@ -1240,9 +1329,421 @@ setTimeout(() => {
   render();
 }, 24000);
 
-/* Start */
+/* ============================================================
+   Start und Anbindung an den Server
+   ============================================================ */
+function applyLive(st) {
+  SITES = st.sites; HOSTS = st.hosts; TUNNELS = st.tunnels; INCIDENTS = st.incidents;
+  LINKGROUPS = st.links; CERTS = st.certs; INTEGRATIONS = st.integrations;
+  HAPROXY = st.haproxy || []; PEERS = st.peers || []; BACKUPS = st.backups || [];
+  MAILS = st.mails || []; MAILRULES = st.mailrules || []; ROUTES = st.routes || [];
+
+  state.hosts = HOSTS;
+  state.tunnels = TUNNELS;
+  state.incidents = INCIDENTS;
+  state.mails = MAILS;
+  state.connecting = false;
+  render();
+  markSource();
+}
+
+function markSource() {
+  const el = $("#datasource");
+  if (!el) return;
+  const L = window.LEITSTAND;
+  if (L && L.live) {
+    const t = L.lastRun ? new Date(L.lastRun).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+    el.innerHTML = `<span class="dot dot--ok"></span><span class="faint" style="font-size:11px">Live · ${L.interval || "?"} s · ${esc(t)}</span>`;
+  } else {
+    el.innerHTML = `<span class="demo-tag">Entwurf</span><span class="faint" style="font-size:11px">Beispieldaten</span>`;
+  }
+}
+
 (() => {
   const v = location.hash.replace("#/", "");
   if (RENDERERS[v]) state.view = v;
-  render();
+
+  const L = window.LEITSTAND;
+  if (L && L.pending) {
+    state.connecting = true;
+    render();
+    L.onState(st => { applyLive(st); if (state.credentials && !Object.keys(state.credentials).length) loadAdmin(); });
+    L.onFail(() => { state.connecting = false; render(); markSource(); });
+  } else {
+    render();
+    markSource();
+  }
 })();
+
+/* ---------- Verwaltung: Daten und Aktionen ---------- */
+async function loadAdmin() {
+  if (!LIVE()) return;
+  try {
+    const inv = await window.LEITSTAND.call("GET", "/api/admin/inventory");
+    state.credentials = inv.credentials || {};
+    state.settings = inv.settings || null;
+    if (state.view === "verwaltung") render();
+  } catch (e) { console.warn("Verwaltung nicht ladbar:", e.message); }
+}
+
+function openForm(kind, mode, id) {
+  let data = {};
+  if (mode === "edit") {
+    if (kind === "hosts") {
+      const h = byId(state.hosts, id);
+      data = { id: h.id, type: h.type, site: h.site, ip: h.ip || "", url: h.url || "", role: h.role || "", monitor: h.monitored !== false };
+    } else if (kind === "sites") {
+      const s = SITES.find(x => x.id === id);
+      data = { id: s.id, name: s.name, short: s.short || "", place: s.place || "", isp: s.isp || "", wan: s.wan === "—" ? "" : s.wan };
+    } else {
+      const t = byId(state.tunnels, id);
+      data = { id: t.id, a: t.a, b: t.b, iface: t.iface || "", net: t.net || "", probeIp: t.probe || "", probePort: "" };
+    }
+  } else {
+    if (kind === "hosts") data = { type: "pve", site: (SITES[0] || {}).id, monitor: true };
+    if (kind === "tunnels") data = { a: (SITES[0] || {}).id, b: (SITES[1] || SITES[0] || {}).id, iface: "wg0" };
+  }
+  state.form = { open: true, kind, mode, data, test: null, error: null, busy: false, cred: {} };
+  render();
+}
+
+/* Eingaben einsammeln, bevor neu gezeichnet wird — sonst gehen sie verloren. */
+function collectForm() {
+  const f = state.form;
+  if (!f) return;
+  for (const el of document.querySelectorAll("[data-field]")) f.data[el.dataset.field] = el.value;
+  for (const el of document.querySelectorAll("[data-cred]")) f.cred[el.dataset.cred] = el.value;
+}
+
+function formPayload() {
+  const f = state.form, d = { ...f.data };
+  if (f.kind === "tunnels") {
+    d.probe = { ip: d.probeIp };
+    if (d.probePort) d.probe.port = Number(d.probePort);
+    delete d.probeIp; delete d.probePort;
+  }
+  for (const k of Object.keys(d)) if (d[k] === "") delete d[k];
+  if (f.kind === "hosts") d.monitor = f.data.monitor !== false;
+  return d;
+}
+
+async function formTest() {
+  collectForm();
+  const f = state.form;
+  f.busy = true; f.error = null; render();
+  try {
+    const cred = {};
+    for (const [k, v] of Object.entries(f.cred || {})) if (v) cred[k] = v;
+    f.test = await window.LEITSTAND.call("POST", "/api/admin/test", { ...formPayload(), credentials: Object.keys(cred).length ? cred : undefined });
+  } catch (e) { f.error = e.message; }
+  f.busy = false; render();
+}
+
+async function formSave() {
+  collectForm();
+  const f = state.form;
+  if (!f.data.id) { f.error = "Kennung fehlt."; render(); return; }
+  f.busy = true; f.error = null; render();
+  try {
+    const path = `/api/admin/${f.kind}` + (f.mode === "edit" ? `/${encodeURIComponent(f.data.id)}` : "");
+    await window.LEITSTAND.call(f.mode === "edit" ? "PUT" : "POST", path, formPayload());
+
+    const cred = {};
+    for (const [k, v] of Object.entries(f.cred || {})) if (v) cred[k] = v;
+    if (f.kind === "hosts" && Object.keys(cred).length)
+      await window.LEITSTAND.call("POST", `/api/admin/credentials/${encodeURIComponent(f.data.id)}`, cred);
+
+    await window.LEITSTAND.call("POST", "/api/admin/check");
+    await loadAdmin();
+    toast("Gespeichert", `${f.data.id} — Prüfung läuft.`, "ok");
+    state.form = null;
+  } catch (e) { f.error = e.message; f.busy = false; }
+  render();
+}
+
+async function adminDelete(kind, id) {
+  const wort = kind === "hosts" ? "System" : kind === "sites" ? "Standort" : "Tunnel";
+  if (!window.confirm(`${wort} „${id}“ wirklich entfernen?\n\nDer Bestand wird gespeichert; eine Sicherung liegt als inventory.yaml.bak daneben.`)) return;
+  try {
+    await window.LEITSTAND.call("DELETE", `/api/admin/${kind}/${encodeURIComponent(id)}`);
+    await loadAdmin();
+    toast("Entfernt", `${wort} ${id} ist raus.`, "ok");
+  } catch (e) { toast("Nicht entfernt", e.message, "crit"); }
+}
+
+async function adminCall(method, path, body, msg) {
+  try { await window.LEITSTAND.call(method, path, body); await loadAdmin(); toast("Erledigt", msg, "ok"); }
+  catch (e) { toast("Fehlgeschlagen", e.message, "crit"); }
+}
+
+async function saveSettings() {
+  const body = {};
+  for (const el of document.querySelectorAll("[data-setting]")) {
+    const v = el.value.trim();
+    body[el.dataset.setting] = v === "true" ? true : v === "false" ? false : (isNaN(Number(v)) ? v : Number(v));
+  }
+  try {
+    const r = await window.LEITSTAND.call("PUT", "/api/admin/settings", body);
+    state.settings = r.settings;
+    toast("Gespeichert", "Schwellwerte übernommen — gilt ab dem nächsten Durchlauf.", "ok");
+    render();
+  } catch (e) { toast("Nicht gespeichert", e.message, "crit"); }
+}
+
+window.LeitstandUI = { render, state, applyLive, go };
+
+/* ============================================================
+   Ansicht: Verwaltung
+   Systeme, Standorte und Tunnel anlegen und ändern — samt
+   Zugangsdaten und Verbindungstest, ohne die Datei anzufassen.
+   ============================================================ */
+const HOST_TYPES = [
+  ["pve", "Proxmox VE", 8006, true], ["pbs", "Proxmox Backup Server", 8007, true],
+  ["pmg", "Proxmox Mail Gateway", 8006, true], ["opnsense", "OPNsense", 443, false],
+  ["pfsense", "pfSense", 443, false], ["truenas", "TrueNAS SCALE", 443, false],
+  ["mailcow", "Mailcow", 443, false], ["adguard", "AdGuard Home", 443, false],
+  ["portainer", "Portainer", 9443, false], ["hass", "Home Assistant", 8123, false],
+  ["other", "Sonstiges", 443, false]
+];
+const typeLabel = t => (HOST_TYPES.find(x => x[0] === t) || [, t])[1];
+const typeHasApi = t => !!(HOST_TYPES.find(x => x[0] === t) || [])[3];
+
+function viewVerwaltung() {
+  if (!LIVE()) return `<div class="panel"><div class="panel-body">
+    <div class="sec-title">Verwaltung</div>
+    <p class="muted" style="margin:0 0 12px">Hier werden Systeme angelegt, Zugangsdaten hinterlegt und Verbindungen geprüft.
+    Das schreibt in <span class="mono">inventory.yaml</span> und braucht deshalb den laufenden Dienst.</p>
+    <pre class="raw">cd server
+npm install
+npm start        # danach http://localhost:8080</pre>
+    <p class="muted" style="margin:12px 0 0;font-size:12.5px">Im Entwurf ohne Server siehst du weiterhin den Beispielbestand.</p>
+  </div></div>`;
+
+  const tabs = [["hosts", "Systeme"], ["sites", "Standorte"], ["tunnels", "Tunnel"], ["settings", "Schwellwerte"]];
+  const tab = state.adminTab || "hosts";
+  const head = `<div class="row">
+    <div class="seg">${tabs.map(([id, l]) => `<button data-action="admintab" data-tab="${id}" aria-pressed="${tab === id}">${esc(l)}</button>`).join("")}</div>
+    <div class="spacer"></div>
+    <button class="btn" data-action="admin-reload">Bestand neu einlesen</button>
+    <button class="btn" data-action="admin-check">Jetzt prüfen</button>
+    ${tab !== "settings" ? `<button class="btn btn--primary" data-action="admin-new" data-kind="${tab}">+ ${tab === "hosts" ? "System" : tab === "sites" ? "Standort" : "Tunnel"}</button>` : ""}
+  </div>`;
+
+  if (tab === "settings") return head + adminSettings();
+  if (tab === "sites") return head + adminSites();
+  if (tab === "tunnels") return head + adminTunnels();
+  return head + adminHosts();
+}
+
+function adminHosts() {
+  const rows = state.hosts.slice().sort((a, b) => String(a.site).localeCompare(String(b.site)) || a.id.localeCompare(b.id));
+  return `<div class="panel">
+    <div class="panel-head"><h3>Systeme</h3><span class="hint">${rows.length} angelegt</span>
+      <div class="spacer"></div><span class="hint">Prüfungen werden aus Typ und Adresse abgeleitet</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th><th>Kennung</th><th>Typ</th><th>Standort</th><th>Adresse</th>
+        <th>Prüfungen</th><th>Zugang</th><th class="right"></th></tr></thead><tbody>
+      ${rows.map(h => `<tr data-sev="${h.status}">
+        <td class="sev">${dot(h.status)}</td>
+        <td><div class="mono">${esc(h.id)}</div><div class="t-sub">${esc(h.role || "")}</div></td>
+        <td>${chip("plain", typeLabel(h.type))}</td>
+        <td>${chip("plain", siteShort(h.site))}</td>
+        <td class="mono faint">${esc(h.ip || h.url || "—")}</td>
+        <td class="mono faint" style="font-size:11px">${(h.checks || []).map(c => c.kind + (c.port ? "/" + c.port : "")).join(" · ") || "—"}</td>
+        <td>${!typeHasApi(h.type) ? '<span class="faint">—</span>'
+            : (state.credentials && state.credentials[h.id]) ? chip("ok", "Token") : chip("warn", "fehlt")}</td>
+        <td class="right">
+          <button class="btn btn--sm" data-action="admin-edit" data-kind="hosts" data-id="${esc(h.id)}">Bearbeiten</button>
+          <button class="btn btn--sm" data-action="admin-delete" data-kind="hosts" data-id="${esc(h.id)}">Löschen</button>
+        </td>
+      </tr>`).join("")}
+      </tbody></table>
+    </div>
+  </div>`;
+}
+
+function adminSites() {
+  return `<div class="panel">
+    <div class="panel-head"><h3>Standorte</h3><span class="hint">${SITES.length} angelegt</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th>Kennung</th><th>Name</th><th>Ort</th><th>Anschluss</th><th>Systeme</th><th class="right"></th></tr></thead><tbody>
+      ${SITES.map(s => `<tr>
+        <td class="mono">${esc(s.id)}</td><td>${esc(s.name)}</td><td class="faint">${esc(s.place || "—")}</td>
+        <td class="faint">${esc(s.isp || "—")}</td>
+        <td class="mono">${state.hosts.filter(h => h.site === s.id).length}</td>
+        <td class="right">
+          <button class="btn btn--sm" data-action="admin-edit" data-kind="sites" data-id="${esc(s.id)}">Bearbeiten</button>
+          <button class="btn btn--sm" data-action="admin-delete" data-kind="sites" data-id="${esc(s.id)}">Löschen</button>
+        </td></tr>`).join("")}
+      </tbody></table>
+    </div></div>`;
+}
+
+function adminTunnels() {
+  return `<div class="panel">
+    <div class="panel-head"><h3>Tunnel</h3><span class="hint">${state.tunnels.length} angelegt</span>
+      <div class="spacer"></div><span class="hint">Gemessen wird durch den Tunnel auf die Gegenstelle</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th style="width:34px"></th><th>Kennung</th><th>Strecke</th><th>Interface</th><th>Transfernetz</th><th>Gegenstelle</th><th class="right"></th></tr></thead><tbody>
+      ${state.tunnels.map(t => `<tr data-sev="${t.status}">
+        <td class="sev">${dot(t.status)}</td>
+        <td class="mono">${esc(t.id)}</td>
+        <td>${esc(siteName(t.a))} ↔ ${esc(siteName(t.b))}</td>
+        <td class="mono faint">${esc(t.iface || "—")}</td>
+        <td class="mono faint">${esc(t.net || "—")}</td>
+        <td class="mono">${esc(t.probe || "—")}</td>
+        <td class="right">
+          <button class="btn btn--sm" data-action="admin-edit" data-kind="tunnels" data-id="${esc(t.id)}">Bearbeiten</button>
+          <button class="btn btn--sm" data-action="admin-delete" data-kind="tunnels" data-id="${esc(t.id)}">Löschen</button>
+        </td></tr>`).join("")}
+      </tbody></table>
+    </div></div>`;
+}
+
+function adminSettings() {
+  const s = state.settings || {};
+  const f = (key, label, hint) => `<label class="admin-field">
+    <span class="admin-label">${esc(label)}</span>
+    <input class="admin-input" data-setting="${key}" value="${esc(s[key] ?? "")}">
+    <span class="admin-hint">${esc(hint)}</span></label>`;
+  return `<div class="panel">
+    <div class="panel-head"><h3>Schwellwerte</h3><span class="hint">wann eine Ampel umspringt</span>
+      <div class="spacer"></div><button class="btn btn--primary btn--sm" data-action="admin-save-settings">Speichern</button></div>
+    <div class="panel-body"><div class="admin-grid">
+      ${f("interval", "Abstand der Durchläufe", "Sekunden zwischen zwei Runden")}
+      ${f("timeout", "Zeitlimit je Prüfung", "Sekunden")}
+      ${f("fail_threshold", "Fehlschläge bis Rot", "davor gilt Gelb")}
+      ${f("slow_ms", "Grenze „langsam“", "Millisekunden bis Gelb")}
+      ${f("tls_warn_days", "Zertifikat: Warnung", "Tage Restlaufzeit")}
+      ${f("tls_crit_days", "Zertifikat: kritisch", "Tage Restlaufzeit")}
+      ${f("history", "Verlaufspunkte", "je System vorgehalten")}
+      ${f("icmp", "ICMP verwenden", "true oder false")}
+    </div></div>
+  </div>`;
+}
+
+/* ---------- Formular als Schublade ---------- */
+/* Was der Benutzer gerade getippt hat, hat Vorrang vor dem, was der Server
+   kennt. Sonst räumt ein Neuzeichnen — etwa nach „Verbindung testen“ — das
+   eingegebene Geheimnis weg, und Speichern legt stillschweigend nichts an.
+   Gespeicherte Geheimnisse kommen nur maskiert zurück und werden deshalb
+   nie in das Feld zurückgeschrieben. */
+function inpc(key, label, cred, ph, typed) {
+  const wert = typed && typed[key] != null && typed[key] !== ""
+    ? typed[key]
+    : (key === "secret" ? "" : (cred[key] ?? ""));
+  return `<label class="admin-field">
+    <span class="admin-label">${esc(label)}</span>
+    <input class="admin-input" data-cred="${key}" type="${key === "secret" ? "password" : "text"}"
+      value="${esc(wert)}" placeholder="${esc(ph || "")}" autocomplete="off">
+  </label>`;
+}
+
+function renderAdminForm() {
+  const f = state.form;
+  if (!f || !f.open) return "";
+  const d = f.data;
+  const isHost = f.kind === "hosts", isSite = f.kind === "sites", isTun = f.kind === "tunnels";
+  const title = f.mode === "new"
+    ? (isHost ? "System anlegen" : isSite ? "Standort anlegen" : "Tunnel anlegen")
+    : `${esc(d.id)} bearbeiten`;
+
+  const inp = (key, label, hint, opts = {}) => `<label class="admin-field">
+    <span class="admin-label">${esc(label)}${opts.req ? ' <span style="color:var(--crit)">*</span>' : ""}</span>
+    <input class="admin-input" data-field="${key}" value="${esc(d[key] ?? "")}" ${opts.ro ? "readonly" : ""} placeholder="${esc(opts.ph || "")}">
+    ${hint ? `<span class="admin-hint">${esc(hint)}</span>` : ""}</label>`;
+
+  const sel = (key, label, options, hint) => `<label class="admin-field">
+    <span class="admin-label">${esc(label)}</span>
+    <select class="admin-input" data-field="${key}">
+      ${options.map(([v, l]) => `<option value="${esc(v)}" ${String(d[key]) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}
+    </select>
+    ${hint ? `<span class="admin-hint">${esc(hint)}</span>` : ""}</label>`;
+
+  let body = "";
+  if (isHost) {
+    const cred = (state.credentials || {})[d.id] || {};
+    body = `
+      <div class="admin-grid">
+        ${inp("id", "Kennung", "eindeutig, erscheint überall", { req: true, ro: f.mode === "edit", ph: "pve-hq-01" })}
+        ${sel("type", "Typ", HOST_TYPES.map(t => [t[0], t[1]]), "bestimmt Standardport und Sammler")}
+        ${sel("site", "Standort", SITES.map(s => [s.id, s.name]))}
+        ${inp("ip", "IP-Adresse", "für ICMP und als Rückfall", { ph: "10.10.1.11" })}
+        ${inp("url", "Oberfläche", "leer lassen: wird aus IP und Typ gebildet", { ph: "https://10.10.1.11:8006" })}
+        ${inp("role", "Beschreibung", "erscheint unter dem Namen", { ph: "Cluster-Node · Ryzen 9 5950X" })}
+      </div>
+      <label class="row" style="gap:9px;cursor:pointer">
+        <span class="switch" role="switch" aria-checked="${d.monitor !== false}" data-action="form-toggle" data-field="monitor"></span>
+        <span>Überwachen <span class="faint">— aus für Laborsysteme, die nicht alarmieren sollen</span></span>
+      </label>
+
+      ${typeHasApi(d.type) ? `
+      <div>
+        <div class="sec-title">Zugangsdaten — ${esc(typeLabel(d.type))}</div>
+        <div class="admin-grid">
+          ${inpc("user", "Benutzer@Realm", cred, "leitstand@pve", f.cred)}
+          ${inpc("tokenId", "Token-ID", cred, "ro", f.cred)}
+          ${inpc("secret", "Geheimnis", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "aus der Anlage-Maske kopieren", f.cred)}
+        </div>
+        <p class="admin-hint" style="margin:8px 0 0">Nur lesend: in Proxmox unter <span class="mono">Datacenter → Permissions → API Tokens</span>
+        anlegen und dem Benutzer die Rolle <span class="mono">PVEAuditor</span> auf <span class="mono">/</span> mit Vererbung geben.</p>
+      </div>` : `<p class="admin-hint" style="margin:0">Für ${esc(typeLabel(d.type))} prüft der Leitstand vorerst nur die Erreichbarkeit — ein Sammler folgt in einer späteren Stufe.</p>`}`;
+  } else if (isSite) {
+    body = `<div class="admin-grid">
+      ${inp("id", "Kennung", "kurz, z. B. hq", { req: true, ro: f.mode === "edit", ph: "hq" })}
+      ${inp("name", "Name", "", { req: true, ph: "HQ Zuhause" })}
+      ${inp("short", "Kürzel", "für die Filterleiste, sonst abgeleitet", { ph: "HQ" })}
+      ${inp("place", "Ort", "", { ph: "Köln" })}
+      ${inp("isp", "Anschluss", "", { ph: "Vodafone Kabel 1000/50" })}
+      ${inp("wan", "WAN-Adresse", "rein informativ", { ph: "91.64.203.17" })}
+    </div>`;
+  } else if (isTun) {
+    body = `<div class="admin-grid">
+      ${inp("id", "Kennung", "", { req: true, ro: f.mode === "edit", ph: "wg-hq-rz" })}
+      ${sel("a", "Von", SITES.map(s => [s.id, s.name]))}
+      ${sel("b", "Nach", SITES.map(s => [s.id, s.name]))}
+      ${inp("iface", "Interface", "wie auf der Firewall", { ph: "wg0" })}
+      ${inp("net", "Transfernetz", "", { ph: "10.99.0.0/30" })}
+      ${inp("probeIp", "Gegenstelle im Tunnel", "diese Adresse wird gemessen", { req: true, ph: "10.99.0.2" })}
+      ${inp("probePort", "Port der Gegenstelle", "leer: nur ICMP", { ph: "22" })}
+    </div>
+    <p class="admin-hint" style="margin:0">Der Handshake selbst wird erst mit dem Firewall-Zugang lesbar. Bis dahin zählt, was zählt: ob durch den Tunnel eine Antwort kommt.</p>`;
+  }
+
+  const t = f.test;
+  return `<div class="scrim" data-action="form-close"></div>
+  <aside class="inspector" role="dialog" aria-label="${esc(title)}">
+    <div class="inspector-head">
+      <div style="min-width:0"><div class="view-kicker">Verwaltung</div><h2 style="font-size:17px">${title}</h2></div>
+      <div class="spacer"></div>
+      <button class="btn btn--ghost" data-action="form-close" aria-label="Schließen">✕</button>
+    </div>
+    <div class="inspector-body">
+      ${f.error ? `<div class="row" style="gap:8px;align-items:flex-start;color:var(--crit)">${dot("crit")}<span style="font-size:13px;white-space:pre-line">${esc(f.error)}</span></div>` : ""}
+      ${body}
+      ${t ? `<div>
+        <div class="sec-title">Ergebnis der Prüfung</div>
+        <div class="panel" style="background:var(--panel-2)"><div class="panel-body">
+          <div class="row" style="gap:8px;margin-bottom:8px">${dot(t.reachable ? (t.api && t.api.ok ? "ok" : "warn") : "crit")}
+            <b>${esc(t.summary)}</b></div>
+          ${(t.steps || []).map(x => `<div class="row" style="gap:8px;font-size:12.5px;padding:3px 0">
+            ${dot(x.ok === null ? "idle" : x.ok ? "ok" : "crit")}
+            <span class="mono">${esc(x.kind)}${x.port ? "/" + x.port : ""}</span>
+            <span class="faint">${esc(x.detail || "")}</span>
+            <span class="spacer"></span><span class="mono faint">${x.ms != null ? x.ms + " ms" : ""}</span></div>`).join("")}
+          ${t.api ? `<div class="hr" style="margin:8px 0"></div>
+            <div class="row" style="gap:8px;font-size:12.5px;align-items:flex-start">
+              ${dot(t.api.ok ? "ok" : t.api.soft ? "idle" : "crit")}
+              <span>${esc(t.api.detail)}${t.api.hint ? `<br><span class="faint">${esc(t.api.hint)}</span>` : ""}</span>
+            </div>` : ""}
+        </div></div>
+      </div>` : ""}
+    </div>
+    <div class="inspector-foot">
+      <button class="btn btn--primary" data-action="form-save" ${f.busy ? "disabled" : ""}>${f.busy ? "…" : "Speichern"}</button>
+      ${isHost ? `<button class="btn" data-action="form-test" ${f.busy ? "disabled" : ""}>Verbindung testen</button>` : ""}
+      <button class="btn" data-action="form-close">Abbrechen</button>
+    </div>
+  </aside>`;
+}
