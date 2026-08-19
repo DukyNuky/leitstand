@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leitstand</title>
+<meta name="description" content="Zentrale Schaltstelle für Heimnetz und Außenstandorte — Ampeln, Störungen, VPN-Tunnel und Startseite in einem.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Hauptnavigation">
+    <div class="brand">
+      <span class="brand-mark"><i></i></span>
+      <span><span class="brand-name">Leitstand</span><br><span class="brand-sub">Heimnetz · 5 Standorte</span></span>
+    </div>
+    <div id="rail-nav"></div>
+    <div class="rail-foot">
+      <div class="row" style="gap:6px;font-size:11.5px;color:var(--faint)">
+        <span class="kbd">⌘K</span><span>Sprung</span>
+        <span class="kbd">1–9</span><span>Ansicht</span>
+      </div>
+      <div class="row" style="gap:7px"><span class="demo-tag">Mockup</span><span class="faint" style="font-size:11px">Beispieldaten</span></div>
+    </div>
+  </nav>
+  <main class="main" id="scroll">
+    <div id="top"></div>
+    <div class="wrap" id="wrap"></div>
+  </main>
+</div>
+<div id="overlays"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="assets/data.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
