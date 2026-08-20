@@ -12,6 +12,15 @@ import { requestJson } from "../http.js";
 const PREFIX = { pve: "PVEAPIToken", pbs: "PBSAPIToken", pmg: "PMGAPIToken" };
 const DEFAULT_PORT = { pve: 8006, pbs: 8007, pmg: 8006 };
 
+/* Der häufigste Grund für „erreichbar, aber keine Kennzahlen": die Rolle
+   wurde dem Benutzer gegeben, nicht dem Token. Bei aktivierter Privilege
+   Separation — der Vorgabe beim Anlegen — gilt sie dann nicht. Proxmox
+   sagt das nicht, es liefert einfach weniger. */
+export const RECHTEHINWEIS =
+  "In Proxmox unter Datacenter → Permissions → Add → API Token Permission eintragen: "
+  + "Pfad /, Rolle PVEAuditor, Propagate an. Eine Berechtigung, die nur dem Benutzer "
+  + "gegeben wurde, gilt bei „Privilege Separation“ nicht für seine Token.";
+
 export function authHeader(type, cred) {
   if (!cred) return null;
   if (cred.tokenId && cred.secret) {
@@ -122,22 +131,27 @@ export async function collectPve(host, cred) {
     out.status = "warn";
     out.note = `Bestandsliste nicht abrufbar: ${resRes.error}`;
   } else {
-    const mine = (resRes.data?.data || []).filter(r => r.node === me.node);
-    if (!mine.length) {
-      /* Jeder Knoten führt mindestens seinen eigenen Speicher. Kommt gar
-         nichts zurück, darf der Token die Liste nicht lesen. */
+    const alle = resRes.data?.data || [];
+    const mine = alle.filter(r => r.node === me.node);
+    /* Der Knoten selbst steht ebenfalls in dieser Liste (type: node).
+       Gemeint sind aber Gäste und Speicher — kommt davon nichts, darf der
+       Token sie nicht sehen. Der Knoteneintrag allein ist kein Bestand:
+       daraus 0 VMs zu zählen wäre wieder ein erfundener Messwert. */
+    const bestand = mine.filter(r => r.type !== "node");
+    if (!bestand.length) {
       unbekannt(out);
       out.status = "warn";
-      out.note = "Bestandsliste ist leer — dem Token fehlen vermutlich Rechte: "
-        + "Rolle PVEAuditor auf / mit Vererbung setzen";
+      out.note = (alle.length ? "Nur Knoten-Einträge sichtbar, keine Gäste und keine Speicher"
+        : "Die Bestandsliste kommt leer zurück")
+        + " — dem Token fehlen Leserechte. " + RECHTEHINWEIS;
     } else {
-      const guests = mine.filter(r => r.type === "qemu" || r.type === "lxc");
-      out.vms = mine.filter(r => r.type === "qemu").length;
-      out.lxc = mine.filter(r => r.type === "lxc").length;
+      const guests = bestand.filter(r => r.type === "qemu" || r.type === "lxc");
+      out.vms = bestand.filter(r => r.type === "qemu").length;
+      out.lxc = bestand.filter(r => r.type === "lxc").length;
       out.running = guests.filter(r => r.status === "running").length;
       out.stopped = guests.filter(r => r.status !== "running" && r.template !== 1).length;
 
-      const storages = mine.filter(r => r.type === "storage" && r.maxdisk);
+      const storages = bestand.filter(r => r.type === "storage" && r.maxdisk);
       out.storages = storages.map(s => ({ name: s.storage, used: pct(s.disk / s.maxdisk) }));
       fullest = out.storages.slice().sort((a, b) => (b.used ?? 0) - (a.used ?? 0))[0] || null;
     }

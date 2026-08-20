@@ -136,3 +136,67 @@ test("Ein Typ ohne Sammler sagt das, statt Aufrufe zu erfinden", async () => {
   assert.equal(b.api.length, 0);
   assert.match(b.fazit, /noch keinen Sammler/);
 });
+
+/* ---------- Der Fall aus dem Betrieb ----------
+   Ein Token, das die Knoten sehen darf, aber sonst nichts: /cluster/resources
+   antwortet mit 200 und liefert ausschließlich node-Einträge, /cluster/status
+   wird mit „Permission check failed (/, Sys.Audit)" abgelehnt. Weil der Knoten
+   selbst in der Liste steht, sah sie nicht leer aus — gezählt wurden 0 VMs bei
+   grüner Ampel, und die Diagnose gab Entwarnung. */
+const TOKEN_BETRIEB = `monitoring@pam!leitstand=${GEHEIM}`;
+const CRED_BETRIEB = { user: "monitoring@pam", tokenId: "leitstand", secret: GEHEIM };
+
+function pveNurKnoten() {
+  const namen = ["pve2", "pve3", "pve1", "zeus"];
+  return http.createServer((req, res) => {
+    const send = (code, data, roh) => {
+      const b = roh || JSON.stringify({ data });
+      res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(b) });
+      res.end(b);
+    };
+    if ((req.headers.authorization || "").replace(/^PVEAPIToken=/, "") !== TOKEN_BETRIEB) return send(401, null);
+    const p = new URL(req.url, "http://x").pathname;
+    if (p === "/api2/json/version") return send(200, { version: "9.2.5", release: "9.2" });
+    if (p === "/api2/json/nodes")
+      return send(200, namen.map(n => ({ node: n, status: "online", cpu: .11, mem: 8e9, maxmem: 32e9, disk: 2e10, maxdisk: 1e11, uptime: 5e5 })));
+    if (p === "/api2/json/cluster/resources")
+      return send(200, namen.map(n => ({ type: "node", node: n, status: "online", id: "node/" + n })));
+    if (p === "/api2/json/cluster/status")
+      return send(403, null, '{"message":"Permission check failed (/, Sys.Audit)\\n","data":null}');
+    return send(404, null);
+  });
+}
+
+test("Nur Knoten-Einträge sind kein Bestand — die Diagnose sagt das", async () => {
+  const srv = pveNurKnoten();
+  const url = await new Promise(r => srv.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${srv.address().port}`)));
+  try {
+    const b = await diagnoseHost(
+      { id: "pve2", name: "pve2", type: "pve", url, checks: [{ kind: "tcp", port: Number(new URL(url).port) }] },
+      CRED_BETRIEB, { icmp: false, timeout: 2 });
+
+    assert.equal(b.ok, false, "das ist keine Entwarnung wert");
+    assert.match(b.api.find(a => a.pfad === "/cluster/resources").befund, /NUR Knoten-Einträge/);
+    assert.match(b.fazit, /keine Gäste/);
+    assert.match(b.fazit, /Sys\.Audit/, "der abgelehnte Aufruf wird als Beleg genannt");
+    assert.match(b.fazit, /API Token Permission/, "und was konkret zu tun ist");
+  } finally { srv.close(); }
+});
+
+/* Ein abgelehnter Aufruf, der als „optional" gilt, ist trotzdem ein Befund:
+   er benennt das fehlende Recht. */
+test("Auch ein abgelehnter optionaler Aufruf zählt als Befund", async () => {
+  const b = await stelle({ resStatus: 200 });
+  assert.equal(b.ok, true, "hier ist alles in Ordnung — Gegenprobe");
+
+  const srv = pveNurKnoten();
+  const url = await new Promise(r => srv.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${srv.address().port}`)));
+  try {
+    const b2 = await diagnoseHost({ id: "pve2", name: "pve2", type: "pve", url, checks: [] },
+      CRED_BETRIEB, { icmp: false, timeout: 2 });
+    const status = b2.api.find(a => a.pfad === "/cluster/status");
+    assert.equal(status.optional, true);
+    assert.equal(status.ok, false);
+    assert.equal(b2.ok, false, "trotz „optional“ kein Freispruch");
+  } finally { srv.close(); }
+});

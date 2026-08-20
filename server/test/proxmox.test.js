@@ -190,3 +190,38 @@ test("Verbindungstest nennt bei Erfolg, was der Token sehen darf", async () => {
     assert.match(r.detail, /1 Gäste und 1 Speicher sichtbar/);
   } finally { srv.close(); }
 });
+
+/* Der Knoten selbst steht ebenfalls in /cluster/resources. Kommen nur solche
+   Einträge zurück, ist die Liste inhaltlich leer — man sieht es ihr nur nicht
+   an. Genau daran wurden 0 VMs gezählt, bei grüner Ampel. */
+test("Nur Knoten-Einträge zählen nicht als null Gäste", async () => {
+  const { srv, host: h } = await anMit([
+    { type: "node", node: "n1", status: "online", id: "node/n1" },
+    { type: "node", node: "n2", status: "online", id: "node/n2" }
+  ]);
+  try {
+    const r = await collectPve(h, irgendeinToken);
+    assert.equal(r.vms, null, "unbekannt, nicht null Stück");
+    assert.equal(r.lxc, null);
+    assert.equal(r.storages, null);
+    assert.equal(r.status, "warn");
+    assert.match(r.note, /Nur Knoten-Einträge/);
+    assert.match(r.note, /API Token Permission/, "mit der konkreten Anweisung");
+  } finally { srv.close(); }
+});
+
+test("Der Knoteneintrag verfälscht die Zählung nicht", async () => {
+  const { srv, host: h } = await anMit([
+    { type: "node", node: "n1", status: "online", id: "node/n1" },
+    { type: "qemu", node: "n1", vmid: 100, status: "running" },
+    { type: "lxc", node: "n1", vmid: 200, status: "running" },
+    { type: "storage", node: "n1", storage: "local", disk: 10e9, maxdisk: 100e9 }
+  ]);
+  try {
+    const r = await collectPve(h, irgendeinToken);
+    assert.equal(r.vms, 1);
+    assert.equal(r.lxc, 1);
+    assert.equal(r.storages.length, 1);
+    assert.notEqual(r.status, "warn");
+  } finally { srv.close(); }
+});

@@ -270,6 +270,7 @@ Die häufigsten Befunde:
 | `401` / Anmeldung abgelehnt | Token-ID lautet vollständig `Benutzer@Realm!Name`; das Geheimnis gibt es nur beim Anlegen zu sehen |
 | `403` auf `/cluster/resources` | Rolle `PVEAuditor` auf `/` mit Vererbung — bei *Privilege Separation* dem **Token**, nicht nur dem Benutzer |
 | Liste kommt **leer** zurück | dasselbe: Proxmox filtert diese Liste nach Rechten, statt sie abzulehnen |
+| `NUR Knoten-Einträge` | der Token darf die Knoten sehen, aber weder Gäste noch Speicher — die Rolle greift nicht auf `/` |
 | `Kennung kommt in der Knotenliste nicht vor` | die Kennung muss dem Knotennamen im Cluster entsprechen |
 | `404` | falscher Port: VE 8006, Backup Server 8007, Mail Gateway 8006 |
 
@@ -305,7 +306,7 @@ server/
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   110 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   114 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -319,7 +320,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 110 Tests
+cd server && npm test     # 114 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen

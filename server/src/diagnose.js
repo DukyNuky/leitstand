@@ -15,7 +15,7 @@
      Schritt, der nicht durchkam, nicht auf den letzten. */
 
 import { runCheck } from "./probe.js";
-import { authHeader, baseUrl } from "./collectors/proxmox.js";
+import { authHeader, baseUrl, RECHTEHINWEIS } from "./collectors/proxmox.js";
 import { requestJson } from "./http.js";
 
 /* Welche Aufrufe der jeweilige Sammler tatsächlich braucht. Die Reihenfolge
@@ -143,7 +143,13 @@ function befundFuer(host, pfad, data) {
     if (!alle.length) return "Die Liste ist leer — Proxmox filtert sie nach Rechten, das ist also ein Rechteproblem";
     const jeKnoten = zaehle(alle.map(r => r.node || "(ohne Knoten)"));
     const jeTyp = zaehle(alle.map(r => r.type));
-    return `${alle.length} Einträge — Typen: ${alsListe(jeTyp)} · Knoten: ${alsListe(jeKnoten)}`;
+    const kopf = `${alle.length} Einträge — Typen: ${alsListe(jeTyp)} · Knoten: ${alsListe(jeKnoten)}`;
+    /* Der Knoten selbst steht hier auch drin. Kommen ausschließlich solche
+       Einträge, ist die Liste inhaltlich genauso leer — nur sieht man es
+       ihr nicht an. */
+    const bestand = alle.filter(r => r.type !== "node");
+    if (!bestand.length) return kopf + " — NUR Knoten-Einträge: keine Gäste, keine Speicher sichtbar";
+    return kopf;
   }
 
   if (pfad === "/cluster/status") {
@@ -186,10 +192,29 @@ function fazit(host, b) {
     return { problem: true, text: `Der Abruf bricht bei ${wo} ab.` };
   }
 
+  /* Ein abgelehnter Aufruf, der als „optional" gilt, ist trotzdem ein
+     Befund: er sagt, welches Recht fehlt. Als Nebensache abzutun, was die
+     Ursache benennt, wäre der Sinn der Diagnose verfehlt. */
+  const rechtefehler = b.api.find(a => !a.ok && a.status === 403);
   const res = b.api.find(a => a.pfad === "/cluster/resources");
-  if (res?.ok && /Liste ist leer/.test(res.befund || ""))
-    return { problem: true, text: "Anmeldung und Rechte auf /nodes stimmen, aber die Bestandsliste kommt leer zurück. "
-      + "Proxmox filtert sie nach Rechten statt sie abzulehnen — die Rolle greift also nicht auf / oder nicht auf dem Token." };
+  const nurKnoten = res?.ok && /NUR Knoten-Einträge/.test(res.befund || "");
+  const leer = res?.ok && /Liste ist leer/.test(res.befund || "");
+
+  if (nurKnoten || leer) {
+    const was = leer ? "die Bestandsliste kommt leer zurück"
+      : "es kommen nur Knoten-Einträge zurück — keine Gäste, keine Speicher";
+    const dazu = rechtefehler
+      ? ` Passend dazu wird ${rechtefehler.pfad} abgelehnt${
+          /Sys\.Audit/.test(rechtefehler.antwort || "") ? " (Sys.Audit auf / fehlt)" : ""}.`
+      : "";
+    return { problem: true, text: `Der Token darf die Knoten sehen, aber ${was}.${dazu} `
+      + `Proxmox filtert diese Liste nach Rechten, statt sie abzulehnen — die Rolle greift also nicht auf „/“. ${RECHTEHINWEIS}` };
+  }
+
+  if (rechtefehler)
+    return { problem: true, text: `Die Kennzahlen kommen an, aber ${rechtefehler.pfad} wird abgelehnt`
+      + `${/Sys\.Audit/.test(rechtefehler.antwort || "") ? " (Sys.Audit auf / fehlt)" : ""}. `
+      + `Clustername und Quorum bleiben deshalb leer. ${RECHTEHINWEIS}` };
 
   const nodes = b.api.find(a => a.pfad === "/nodes");
   if (nodes?.ok && /KEINER passt/.test(nodes.befund || ""))
