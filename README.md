@@ -224,6 +224,55 @@ Das Token vorher in Proxmox anlegen unter
 `PVEAuditor` auf `/` mit Vererbung geben. **Nur lesend** — der Leitstand
 schreibt nichts.
 
+## Wenn ein System nichts liefert
+
+Erreichbar, Token hinterlegt, Rechte gesetzt — und trotzdem keine Kennzahlen.
+Von außen ist nicht zu erraten, an welcher Stelle es klemmt, deshalb zeigt die
+**Diagnose** jeden Aufruf einzeln, den der Sammler macht.
+
+In der Oberfläche: System anklicken → **Diagnose**. Oder im Terminal:
+
+```bash
+cd server && npm run probe                 # Übersicht aller Systeme mit Sammler
+npm run probe pve-01                       # eines, jeder Aufruf einzeln
+docker exec leitstand node src/cli.js pve-01   # im Container
+```
+
+```
+System   pve-01  (pve)
+API      https://10.10.1.11:8006
+Zugang   PVEAPIToken=leitstand@pve!ro=••••••••
+
+Netz
+  OK  tcp/8006       3 ms  Port 8006 offen
+
+API
+  OK  /version              -> Version 8.3.2 (8.3)
+  OK  /nodes                -> 1 Knoten: pve-01 — „pve-01" passt zur Kennung
+  !!  /cluster/resources    -> Zugriff verweigert (403)
+
+Woran es hängt:
+  Angemeldet, aber ohne Leserechte: /cluster/resources. Rolle PVEAuditor auf /
+  mit Vererbung setzen — bei „Privilege Separation“ dem Token selbst, nicht
+  nur dem Benutzer.
+```
+
+Das **Geheimnis verlässt den Dienst nie**, auch nicht in der Diagnose: gezeigt
+wird die *Form* der Kopfzeile, damit ein Tippfehler in der Token-ID auffällt,
+ohne den Schlüssel preiszugeben. Ein Test wacht darüber. Der Bericht lässt sich
+deshalb bedenkenlos in eine Meldung kopieren — in der Oberfläche über *Als Text*.
+
+Die häufigsten Befunde:
+
+| Was dasteht | Was zu tun ist |
+|---|---|
+| `kein API-Token hinterlegt` | Verwaltung → System bearbeiten → Zugangsdaten |
+| `401` / Anmeldung abgelehnt | Token-ID lautet vollständig `Benutzer@Realm!Name`; das Geheimnis gibt es nur beim Anlegen zu sehen |
+| `403` auf `/cluster/resources` | Rolle `PVEAuditor` auf `/` mit Vererbung — bei *Privilege Separation* dem **Token**, nicht nur dem Benutzer |
+| Liste kommt **leer** zurück | dasselbe: Proxmox filtert diese Liste nach Rechten, statt sie abzulehnen |
+| `Kennung kommt in der Knotenliste nicht vor` | die Kennung muss dem Knotennamen im Cluster entsprechen |
+| `404` | falscher Port: VE 8006, Backup Server 8007, Mail Gateway 8006 |
+
 ## Bedienung
 
 | Eingabe | Wirkung |
@@ -253,8 +302,10 @@ server/
   src/secrets.js          Zugangsdaten, 0600, nach außen nur maskiert
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
   src/version.js          welche Fassung läuft: Abbild, Arbeitsbaum oder Dateistand
+  src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
+  src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   99 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   110 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -268,7 +319,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 99 Tests
+cd server && npm test     # 110 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen

@@ -169,6 +169,7 @@ const state = {
   settings: null,
   runtime: null,
   invFile: null,
+  diagnose: null,             /* Befund zu einem System, siehe diagnoseAnsicht */
   fassung: null,              /* der Stand, mit dem diese Seite geladen wurde */
   gestartet: null,            /* Startzeitpunkt des Dienstes beim Laden dieser Seite */
   neueFassung: null,          /* ein davon abweichender Stand im Dienst */
@@ -1294,6 +1295,86 @@ function viewCfg() {
 }
 
 /* ============================================================
+   Diagnose
+
+   Jeder Aufruf, den der Sammler macht, einzeln — mit dem, was zurückkam.
+   Gedacht für den Fall „erreichbar, Rechte angeblich gesetzt, trotzdem
+   keine Werte": von außen ist nicht zu erraten, an welcher Stelle es
+   klemmt, also wird jede einzeln gezeigt.
+   ============================================================ */
+function diagnoseAnsicht(h) {
+  const d = state.diagnose;
+  if (!d || d.id !== h.id) return "";
+
+  if (d.busy) return `<div><div class="sec-title">Diagnose</div>
+    <div class="empty">Läuft — jeder Aufruf wird einzeln gemacht …</div></div>`;
+
+  if (d.error) return `<div><div class="sec-title">Diagnose</div>
+    <div class="row" style="gap:8px;align-items:flex-start;color:var(--crit)">${dot("crit")}
+      <span style="font-size:13px">${esc(d.error)}</span></div></div>`;
+
+  const b = d.result;
+  if (!b) return "";
+
+  const zeile = (ok, name, rechts, unten) => `
+    <div style="padding:6px 0;border-bottom:1px solid var(--line)">
+      <div class="row" style="gap:8px">
+        ${dot(ok === null ? "idle" : ok ? "ok" : "crit")}
+        <span class="mono" style="font-size:12.5px">${esc(name)}</span>
+        <span class="spacer"></span>
+        <span class="mono faint" style="font-size:11px">${esc(rechts || "")}</span>
+      </div>
+      ${unten ? `<div class="faint" style="font-size:11.5px;padding-left:20px;white-space:normal">${unten}</div>` : ""}
+    </div>`;
+
+  return `<div>
+    <div class="row"><div class="sec-title" style="margin:0">Diagnose</div>
+      <div class="spacer"></div>
+      <button class="btn btn--sm" data-action="diagnose" data-id="${esc(h.id)}">Erneut</button>
+      <button class="btn btn--sm" data-action="diagnose-text">${d.text ? "Ansicht" : "Als Text"}</button>
+    </div>
+
+    ${d.text ? `<pre class="raw" style="max-height:340px;overflow:auto">${esc(b.text || "")}</pre>` : `
+      <div class="row" style="gap:8px;align-items:flex-start;margin:8px 0 12px;color:var(--${b.ok ? "ok" : "warn"})">
+        ${dot(b.ok ? "ok" : "warn")}
+        <span style="font-size:13px;white-space:normal"><b>${esc(b.fazit)}</b></span>
+      </div>
+
+      ${b.ziel ? `<dl class="kv">
+        <dt>API</dt><dd class="mono">${esc(b.ziel)}</dd>
+        <dt>Zugang</dt><dd class="mono" style="white-space:normal">${b.zugang?.vorhanden
+          ? esc(b.zugang.form) : `<span class="faint">— ${esc(b.zugang?.hinweis || "keiner")}</span>`}</dd>
+        ${b.zugang?.vorhanden && b.zugang.hinweis
+          ? `<dt></dt><dd style="color:var(--warn)">${esc(b.zugang.hinweis)}</dd>` : ""}
+      </dl>` : ""}
+
+      <div class="sec-title" style="margin-top:10px">Netz</div>
+      ${b.netz.map(n => zeile(n.uebersprungen ? null : n.ok, n.schritt,
+        n.ms != null ? n.ms + " ms" : "", esc(n.detail || ""))).join("") || '<div class="empty">keine Prüfung</div>'}
+
+      ${b.api.length ? `<div class="sec-title" style="margin-top:10px">Aufrufe des Sammlers</div>
+        ${b.api.map(a => zeile(a.ok, a.pfad + (a.optional ? "  (optional)" : ""),
+          a.ms != null ? a.ms + " ms" : (a.status ? "HTTP " + a.status : ""),
+          `${esc(a.zweck)}<br><span style="color:var(--${a.ok ? "dim" : "crit"})">${
+            esc(a.ok ? a.befund || "" : a.fehler)}</span>${
+            a.antwort ? `<br><span class="mono" style="font-size:10.5px">${esc(a.antwort)}</span>` : ""}`)).join("")}` : ""}
+    `}
+  </div>`;
+}
+
+async function diagnose(id) {
+  if (!requireLive()) return;
+  state.diagnose = { id, busy: true, result: null, error: null, text: false };
+  render();
+  try {
+    state.diagnose = { id, busy: false, result: await window.LEITSTAND.call("POST", "/api/admin/diagnose", { id }), error: null, text: false };
+  } catch (e) {
+    state.diagnose = { id, busy: false, result: null, error: e.message, text: false };
+  }
+  render();
+}
+
+/* ============================================================
    Inspector
    ============================================================ */
 /* Im Fuß jedes Inspectors stehen nur Aktionen, die der Dienst wirklich
@@ -1372,6 +1453,7 @@ function inspectorContent(kind, id) {
             meter(s.name, s.used, { text: s.used != null ? s.used + " %" : "—" })).join("")}</div></div>` : ""}
         ${h.collectorError ? `<div class="row" style="gap:8px;align-items:flex-start;color:var(--warn)">${dot("warn")}
           <span style="font-size:12.5px">Abruf über die API: ${esc(h.collectorError)}</span></div>` : ""}
+        ${diagnoseAnsicht(h)}
         ${(h.hist || []).length ? `<div><div class="sec-title">Antwortzeit</div>${spark(h.hist, { w:460, h:70, color:`var(--${h.status === "ok" ? "accent" : h.status})` })}</div>` : ""}
         ${inc.length ? `<div><div class="sec-title">Offene Meldungen</div>${inc.map(i => `
           <div class="row" style="gap:8px;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer" data-action="inspect" data-kind="incident" data-id="${esc(i.id)}">
@@ -1379,6 +1461,7 @@ function inspectorContent(kind, id) {
             <span class="spacer"></span><span class="mono faint" style="font-size:11px">${esc(i.id)}</span></div>`).join("")}</div>` : ""}`,
       foot:`
         ${h.url ? `<a class="btn btn--primary" href="${esc(h.url)}" target="_blank" rel="noopener">${ICON.ext} Oberfläche öffnen</a>` : ""}
+        <button class="btn" data-action="diagnose" data-id="${esc(h.id)}">Diagnose</button>
         <button class="btn" data-action="check-now">Jetzt prüfen</button>
         ${inc.length ? `<button class="btn" data-action="silence" data-id="${esc(h.id)}" data-minutes="120">2 h stummschalten</button>` : ""}
         <button class="btn" data-action="admin-edit" data-kind="hosts" data-id="${esc(h.id)}">Bearbeiten</button>`
@@ -1650,6 +1733,8 @@ document.addEventListener("click", ev => {
     case "ack": ackIncident(el.dataset.id); break;
     case "silence": silenceHost(el.dataset.id, Number(el.dataset.minutes) || 120); break;
     case "check-now": checkNow(); break;
+    case "diagnose": diagnose(el.dataset.id); break;
+    case "diagnose-text": if (state.diagnose) { state.diagnose.text = !state.diagnose.text; render(); } break;
     /* Hart neu laden: nach einem Redeploy soll auch das JavaScript neu
        kommen, nicht nur der Zustand. */
     case "reload": location.reload(); break;

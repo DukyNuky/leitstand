@@ -15,6 +15,7 @@
      POST   /api/admin/credentials/:id    Zugangsdaten setzen
      DELETE /api/admin/credentials/:id
      POST   /api/admin/test       Verbindung prüfen, ohne zu speichern
+     POST   /api/admin/diagnose   jeden Aufruf einzeln zeigen — { id }
      POST   /api/admin/reload     inventory.yaml neu einlesen
      POST   /api/admin/check      sofortigen Durchlauf auslösen  */
 
@@ -29,6 +30,7 @@ import { buildState } from "./api.js";
 import { makeCollectors, TESTERS } from "./collectors/proxmox.js";
 import { runCheck } from "./probe.js";
 import { buildInfo } from "./version.js";
+import { diagnoseHost, alsText } from "./diagnose.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const startedAt = new Date().toISOString();
@@ -209,6 +211,19 @@ export function createServer(opts = {}) {
     if (p === "/api/admin/test" && m === "POST") {
       const body = await readJson(req);
       return json(res, 200, await testTarget(body));
+    }
+
+    /* Diagnose eines bereits angelegten Systems: jeder Aufruf, den der
+       Sammler macht, einzeln — samt dem, was zurückkam. Für den Fall
+       „erreichbar, Rechte gesetzt, trotzdem keine Werte". */
+    if (p === "/api/admin/diagnose" && m === "POST") {
+      const body = await readJson(req);
+      const host = inv.hosts.find(h => String(h.id) === String(body.id));
+      if (!host) return json(res, 404, { error: `System „${body.id}“ ist nicht angelegt.` });
+      const bericht = await diagnoseHost(host, secrets.get(host.id), inv.settings);
+      /* Die Textfassung kommt mit: so lässt sich der Befund aus der
+         Oberfläche heraus kopieren, ohne ihn dort nachzubauen. */
+      return json(res, 200, { ...bericht, text: alsText(bericht) });
     }
 
     if (p === "/api/admin/reload" && m === "POST") {
