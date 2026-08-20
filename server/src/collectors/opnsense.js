@@ -49,6 +49,12 @@ export const PFADE = [
     zweck: "Arbeitsspeicher und Last"
   },
   {
+    pfad: "/api/diagnostics/system/system_time",
+    alternativen: ["/api/diagnostics/system/systemTime"],
+    zweck: "Laufzeit und Last — in system_information stehen sie nicht",
+    optional: true
+  },
+  {
     pfad: "/api/diagnostics/system/system_disk",
     alternativen: ["/api/diagnostics/system/systemDisk"],
     zweck: "Plattenbelegung",
@@ -127,3 +133,225 @@ function hintFor(r) {
   if (r.status === 404) return "Erreicht, aber kein OPNsense-Endpunkt — Adresse und Port prüfen.";
   return null;
 }
+
+/* ============================================================
+   Sammler
+
+   Gebaut gegen die Felder einer echten OPNsense 26.1 — abgelesen aus
+   einem Diagnosebericht, nicht aus der Dokumentation, die keine
+   Antwortschemata nennt. Wo die Gestalt zwischen Fassungen schwanken
+   kann, wird nachsichtig gelesen und im Zweifel null gemeldet.
+
+   Auffälligkeiten, die hier Arbeit machen:
+   - memory.total kommt als Zeichenkette, memory.used als Zahl.
+   - Die WireGuard-Felder tragen Bindestriche, nicht Unterstriche, und
+     nur die Peer-Zeilen führen einen Handshake — die Zeile je
+     Schnittstelle hat dort null stehen.
+   - Die Schnittstellenstatistik ist nach Klartextnamen verschlüsselt
+     („[LAN] (vtnet0) / bc:24:…"); die echten Zähler stehen in den
+     Zeilen mit network „<Link#N>", die IP-Zeilen sind Teilmengen.
+   ============================================================ */
+
+/* Zähler sind kumulativ. Durchsatz gibt es deshalb erst ab dem zweiten
+   Durchlauf — davor steht ein Strich, keine Null.
+
+   Der Schlüssel enthält die Adresse, nicht nur die Kennung: zeigt ein
+   System plötzlich woandershin, antwortet ein anderes Gerät mit ganz
+   anderen Zählerständen. Die Differenz dazwischen wäre kein Durchsatz,
+   sondern eine Zufallszahl. */
+const zaehlerstand = new Map();
+const zaehlerSchluessel = host => host.id + "@" + baseUrl(host);
+
+export async function collectOpnsense(host, cred) {
+  const [fw, sys, res, disk, ifs, wg, zeit] = await Promise.all([
+    api(host, cred, "/api/core/firmware/status"),
+    ersterTreffer(host, cred, ["/api/diagnostics/system/system_information", "/api/diagnostics/system/systemInformation"]),
+    ersterTreffer(host, cred, ["/api/diagnostics/system/system_resources", "/api/diagnostics/system/systemResources"]),
+    ersterTreffer(host, cred, ["/api/diagnostics/system/system_disk", "/api/diagnostics/system/systemDisk"]),
+    ersterTreffer(host, cred, ["/api/diagnostics/interface/get_interface_statistics", "/api/diagnostics/interface/getInterfaceStatistics"]),
+    api(host, cred, "/api/wireguard/service/show"),
+    ersterTreffer(host, cred, ["/api/diagnostics/system/system_time", "/api/diagnostics/system/systemTime"])
+  ]);
+
+  /* Die Firmware-Auskunft ist der Anker: kommt die nicht, stimmt am
+     Zugang etwas nicht, und alles Weitere wäre Rauschen. */
+  if (!fw.ok) return { error: fw.error, note: fw.error, status: (fw.status === 401 || fw.status === 403) ? "warn" : undefined };
+
+  const out = {};
+  fassung(out, fw.data || {});
+  speicher(out, res.ok ? res.data : null);
+  platte(out, disk.ok ? disk.data : null);
+  laufzeit(out, sys.ok ? sys.data : null, zeit.ok ? zeit.data : null);
+  durchsatz(out, host, ifs.ok ? ifs.data : null);
+  wireguard(out, wg.ok ? wg.data : null, wg.status);
+
+  ampel(out);
+  return out;
+}
+
+/* ---------- Fassung und Aktualisierungen ---------- */
+function fassung(out, d) {
+  out.version = d.product_version || null;
+  out.abi = d.product_abi || null;
+  out.os = d.os_version || null;
+  /* Alles Boolesche kommt hier als "0"/"1". */
+  out.needsReboot = d.needs_reboot === "1" || d.needs_reboot === 1;
+  out.lastCheck = d.last_check || null;
+
+  const listen = ["new_packages", "upgrade_packages", "reinstall_packages"];
+  const offen = listen.reduce((a, k) => a + (Array.isArray(d[k]) ? d[k].length : 0), 0);
+  out.updates = offen;
+  /* Ein Sprung auf eine neue Hauptfassung ist etwas anderes als ein paar
+     Paketaktualisierungen — und wird deshalb getrennt geführt. */
+  out.majorUpgrade = d.upgrade_major_version || null;
+  out.upgradeSets = Array.isArray(d.upgrade_sets) ? d.upgrade_sets.length : null;
+}
+
+/* ---------- Arbeitsspeicher ---------- */
+function speicher(out, d) {
+  const m = d?.memory;
+  if (!m) { out.ram = null; return; }
+  const total = zahl(m.total), used = zahl(m.used);
+  out.ram = total > 0 && used != null ? Math.round((used / total) * 100) : null;
+  out.ramTotalMb = total > 0 ? Math.round(total / 1048576) : null;
+  /* Der ZFS-Cache zählt als belegt, ist aber jederzeit abzugeben. Ohne
+     diesen Zusatz sieht eine gesunde Firewall knapp am Anschlag aus. */
+  const arc = zahl(m.arc);
+  out.ramArcMb = arc > 0 ? Math.round(arc / 1048576) : null;
+}
+
+/* ---------- Platte ---------- */
+function platte(out, d) {
+  const devices = Array.isArray(d?.devices) ? d.devices : null;
+  if (!devices?.length) { out.disk = null; out.disks = null; return; }
+  /* Bei ZFS teilen sich viele Datensätze denselben Vorrat — der Wert für
+     „/" ist der aussagekräftige, alles andere wäre dieselbe Zahl mehrfach. */
+  const wurzel = devices.find(x => x.mountpoint === "/") || devices[0];
+  out.disk = zahl(wurzel.used_pct) ?? null;
+  out.disks = devices
+    .filter(x => x.mountpoint && zahl(x.used_pct) != null)
+    .slice(0, 12)
+    .map(x => ({ name: x.mountpoint, used: zahl(x.used_pct), device: x.device || null }));
+}
+
+/* ---------- Laufzeit ----------
+   In system_information steht sie nicht; system_time führt sie je nach
+   Fassung unter wechselnden Namen. Findet sich nichts, bleibt es beim
+   Strich — geraten wird hier nicht. */
+function laufzeit(out, sys, zeit) {
+  out.name = sys?.name || null;
+  const roh = zeit?.uptime ?? zeit?.uptime_frmt ?? zeit?.["uptime"] ?? null;
+  out.uptime = roh == null ? null : (typeof roh === "number" ? tage(roh) : String(roh));
+  const last = zeit?.loadavg ?? sys?.loadavg ?? null;
+  out.load = last ? String(last) : null;
+}
+
+/* ---------- Durchsatz ---------- */
+function durchsatz(out, host, d) {
+  const stat = d?.statistics;
+  if (!stat || typeof stat !== "object") { out.thrIn = null; out.thrOut = null; return; }
+
+  const physisch = [];
+  for (const [schluessel, w] of Object.entries(stat)) {
+    /* Nur die Zeilen auf Verbindungsebene tragen die Gesamtzähler. */
+    if (!w || !String(w.network || "").startsWith("<Link#")) continue;
+    const name = w.name || schluessel;
+    if (/^(lo|enc|pflog|pfsync|ipfw)/.test(name)) continue;
+    const label = (String(schluessel).match(/^\[([^\]]+)\]/) || [, name])[1];
+    physisch.push({
+      name, label,
+      rx: zahl(w["received-bytes"]), tx: zahl(w["sent-bytes"]),
+      fehler: (zahl(w["received-errors"]) || 0) + (zahl(w["send-errors"]) || 0)
+    });
+  }
+  if (!physisch.length) { out.thrIn = null; out.thrOut = null; return; }
+
+  const jetzt = Date.now();
+  const schluessel = zaehlerSchluessel(host);
+  const vorher = zaehlerstand.get(schluessel);
+  zaehlerstand.set(schluessel, { t: jetzt, je: Object.fromEntries(physisch.map(p => [p.name, { rx: p.rx, tx: p.tx }])) });
+
+  const rate = (name, feld, wert) => {
+    const alt = vorher?.je?.[name]?.[feld];
+    const dt = vorher ? (jetzt - vorher.t) / 1000 : 0;
+    if (alt == null || wert == null || dt <= 0) return null;
+    const delta = wert - alt;
+    if (delta < 0) return null;                   /* Zähler zurückgesetzt — Neustart */
+    return Math.round((delta * 8) / dt / 1000) / 1000;   /* Mbit/s, drei Nachkommastellen */
+  };
+
+  out.interfaces = physisch.map(p => ({
+    name: p.name, label: p.label, fehler: p.fehler,
+    in: rate(p.name, "rx", p.rx), out: rate(p.name, "tx", p.tx)
+  }));
+
+  /* Gibt es eine ausdrücklich als WAN beschriebene Schnittstelle, zählt
+     die — sonst die Summe über alles Physische. */
+  const wan = out.interfaces.find(i => /^wan/i.test(i.label));
+  const summe = f => {
+    const bekannt = out.interfaces.map(i => i[f]).filter(v => v != null);
+    return bekannt.length ? Math.round(bekannt.reduce((a, b) => a + b, 0) * 1000) / 1000 : null;
+  };
+  out.thrIn = wan ? wan.in : summe("in");
+  out.thrOut = wan ? wan.out : summe("out");
+  out.thrQuelle = wan ? wan.label : "alle Schnittstellen";
+}
+
+/* ---------- WireGuard ---------- */
+function wireguard(out, d, status) {
+  const rows = Array.isArray(d?.rows) ? d.rows : null;
+  if (!rows) {
+    out.wgPeers = null;
+    out.peers = null;
+    /* 404 heißt: Plugin nicht eingerichtet. Das ist kein Fehler. */
+    if (status && status !== 404) out.wgFehler = `WireGuard nicht lesbar (${status})`;
+    return;
+  }
+
+  const peers = rows.filter(r => r.type === "peer");
+  out.wgIfaces = rows.filter(r => r.type === "interface").length;
+  out.wgPeers = peers.length;
+  out.peers = peers.map(p => {
+    const alter = zahl(p["latest-handshake-age"]);
+    return {
+      name: p.name || p["public-key"]?.slice(0, 8) || "—",
+      iface: p.if || null,
+      endpoint: p.endpoint || null,
+      allowed: p["allowed-ips"] || null,
+      handshake: alter,                           /* Sekunden, null = nie */
+      seit: p["latest-handshake-epoch"] || null,
+      rx: zahl(p["transfer-rx"]),
+      tx: zahl(p["transfer-tx"]),
+      keepalive: p["persistent-keepalive"] || null
+    };
+  });
+  out.wgStill = out.peers.filter(p => p.handshake == null || p.handshake > 600).length;
+}
+
+/* ---------- Ampel ----------
+   Nur was wirklich gemessen wurde, darf die Farbe bestimmen. Ein
+   ausstehender Neustart oder eine neue Hauptfassung sind Hinweise, keine
+   Störungen — sie stehen als Notiz da, ohne die Ampel zu drehen. */
+function ampel(out) {
+  if (out.disk != null && out.disk >= 90) { out.status = "crit"; out.note = `Platte zu ${out.disk} % belegt`; return; }
+  if (out.ram != null && out.ram >= 90) {
+    out.status = "warn";
+    out.note = `Arbeitsspeicher ${out.ram} % belegt` + (out.ramArcMb ? ` (davon ${out.ramArcMb} MB ZFS-Cache)` : "");
+    return;
+  }
+  if (out.disk != null && out.disk >= 80) { out.status = "warn"; out.note = `Platte zu ${out.disk} % belegt`; return; }
+  if (out.wgFehler) { out.status = "warn"; out.note = out.wgFehler; return; }
+
+  const hinweise = [];
+  if (out.needsReboot) hinweise.push("Neustart steht aus");
+  if (out.updates) hinweise.push(`${out.updates} Aktualisierung(en)`);
+  if (out.majorUpgrade) hinweise.push(`Fassung ${out.majorUpgrade} verfügbar`);
+  if (hinweise.length) out.note = hinweise.join(" · ");
+}
+
+const zahl = v => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const tage = s => `${Math.floor(s / 86400)} T`;

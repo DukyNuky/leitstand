@@ -717,27 +717,39 @@ function viewNetz() {
      Zustandstabelle, CARP-Rolle, Durchsatz und Peers stehen hinter der
      Firewall-API und kommen mit Stufe 3 — solange gibt es sie hier nicht,
      auch nicht als leere Spalte, die man für „null" halten könnte. */
+  /* Mit hinterlegtem Schlüssel liest der Sammler Fassung, Speicher, Platte
+     und Durchsatz; ohne bleibt es bei der Messung von außen. Beides steht
+     in derselben Tabelle — was fehlt, ist ein Strich, keine Null. */
+  const mitApi = fws.some(f => f.version || f.ram != null);
   const firewalls = `<div class="panel">
     <div class="panel-head"><h3>Firewalls</h3>
       <span class="hint">${opn}× OPNsense · ${pf}× pfSense</span>
-      <div class="spacer"></div><span class="hint">geprüft von außen: Erreichbarkeit, Antwortzeit, Zertifikat</span></div>
+      <div class="spacer"></div><span class="hint">${mitApi ? "Kennzahlen über die API, Erreichbarkeit von außen" : "geprüft von außen: Erreichbarkeit, Antwortzeit, Zertifikat"}</span></div>
     <div class="panel-body panel-body--flush tablewrap">
       <table class="t"><thead><tr>
-        <th style="width:34px"></th><th>Gerät</th><th>Standort</th><th>Adresse</th>
-        <th>Prüfungen</th><th>Zertifikat</th><th class="right">Antwortzeit</th></tr></thead><tbody>
+        <th style="width:34px"></th><th>Gerät</th><th>Standort</th><th>Fassung</th>
+        <th>Speicher</th><th>Platte</th><th>Durchsatz</th><th>WG-Peers</th>
+        <th>Zertifikat</th><th class="right">Antwortzeit</th></tr></thead><tbody>
       ${fws.length ? fws.map(f => `<tr data-sev="${f.status}" data-action="inspect" data-kind="host" data-id="${f.id}">
         <td class="sev">${dot(f.status)}</td>
         <td><div class="mono">${esc(f.name)}</div><div class="t-sub">${esc(f.role)}</div></td>
         <td>${chip("plain", siteShort(f.site))}</td>
-        <td class="mono faint">${esc(nz(f.ip))}</td>
-        <td class="mono faint" style="font-size:11px">${checkList(f)}</td>
+        <td class="mono">${fassungsZelle(f)}</td>
+        <td style="min-width:120px">${f.ram != null ? meter("", f.ram, { text: f.ram + " %" }) : '<span class="faint">—</span>'}</td>
+        <td style="min-width:120px">${f.disk != null ? meter("", f.disk, { text: f.disk + " %", warn: 80, crit: 90 }) : '<span class="faint">—</span>'}</td>
+        <td class="mono faint">${durchsatzZelle(f)}</td>
+        <td class="mono">${wgZelle(f)}</td>
         <td>${certCell(f)}</td>
         <td class="right">${histCell(f)}</td>
-      </tr>`).join("") : '<tr><td colspan="7"><div class="empty">Keine Firewall in dieser Auswahl.</div></td></tr>'}
+      </tr>`).join("") : '<tr><td colspan="10"><div class="empty">Keine Firewall in dieser Auswahl.</div></td></tr>'}
       </tbody></table>
     </div>
-    <div class="panel-note">Version, Zustandstabelle, CARP-Rolle, Durchsatz und WireGuard-Handshake liegen hinter der
-      Firewall-API. Der Sammler dafür (OPNsense/pfSense) ist <b>Stufe 3</b>; bis dahin steht hier bewusst nichts.</div>
+    <div class="panel-note">${mitApi
+      ? `Zustandstabelle und CARP-Rolle fehlen noch — sie liegen hinter weiteren Endpunkten der Firewall-API.
+         Für pfSense gibt es bislang gar keinen Sammler; dort wird nur von außen gemessen.`
+      : `Für Kennzahlen braucht es einen API-Schlüssel: bei OPNsense unter
+         <span class="mono">System → Access → Users</span> erzeugen und hier unter <b>Verwaltung</b> hinterlegen.
+         Ohne ihn bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat.`}</div>
   </div>`;
 
   return firewalls + haproxyPanel();
@@ -753,6 +765,31 @@ function checkList(h) {
     if (c.skipped) return `<span class="faint" style="text-decoration:line-through" title="${esc(c.detail || "übersprungen")}">${name}</span>`;
     return `<span style="color:var(--${c.ok ? "ok" : "crit"})" title="${esc(c.detail || "")}">${name}</span>`;
   }).join(" · ");
+}
+
+/* Fassung, und daneben was ansteht. Ein ausstehender Neustart oder eine
+   neue Hauptfassung sind Hinweise, keine Störungen — sie färben die Ampel
+   nicht, sollen aber ins Auge fallen. */
+function fassungsZelle(f) {
+  if (!f.version) return '<span class="faint">—</span>';
+  const marken = [];
+  if (f.needsReboot) marken.push(chip("warn", "Neustart"));
+  if (f.updates) marken.push(chip("info", f.updates + " Updates"));
+  if (f.majorUpgrade) marken.push(chip("info", "→ " + f.majorUpgrade));
+  return `${esc(f.version)}${marken.length ? `<div class="row" style="gap:4px;margin-top:3px">${marken.join("")}</div>` : ""}`;
+}
+
+function durchsatzZelle(f) {
+  if (f.thrIn == null && f.thrOut == null) return '<span class="faint">—</span>';
+  const z = v => (v == null ? "—" : v < 1 ? v.toFixed(2) : v.toFixed(1));
+  return `<span title="${esc(f.thrQuelle || "")}">${z(f.thrIn)} ↓ / ${z(f.thrOut)} ↑ Mbit</span>`;
+}
+
+function wgZelle(f) {
+  if (f.wgPeers == null) return '<span class="faint">—</span>';
+  if (!f.wgPeers) return '<span class="faint">0</span>';
+  const still = f.wgStill || 0;
+  return `${f.wgPeers - still}/${f.wgPeers}${still ? ` <span style="color:var(--idle)">(${still} still)</span>` : ""}`;
 }
 
 function certCell(h) {
@@ -818,14 +855,17 @@ function viewVpn() {
           <td class="mono faint">${esc(t.iface || "—")}</td>
           <td class="mono faint">${esc(nz(t.probe))}</td>
           <td class="mono">${esc(fmtWhen(t.lastSeen) || "—")}</td>
-          <td class="mono faint" title="Der Handshake selbst ist erst mit dem Firewall-Zugang lesbar (Stufe 3)">—</td>
+          <td class="mono faint" title="Die Firewall meldet Handshakes je Peer; welcher zu dieser Strecke gehört, ist noch nicht hinterlegt">—</td>
           <td class="right">${histCell(t, { w: 74, color: "var(--ok)", value: false })}${t.rtt != null ? ` <span class="mono">${t.rtt} ms</span>` : ""}</td>
         </tr>`).join("") : `<tr><td colspan="7"><div class="empty">${SITES.length > 1 ? "Kein Tunnel für diese Auswahl — unter Verwaltung → Tunnel anlegen." : "Kein Tunnel angelegt."}</div></td></tr>`}
         </tbody></table>
       </div>
       <div class="panel-note">Gemessen wird <b>durch</b> den Tunnel auf die Gegenstelle im Transfernetz: das beantwortet
-        die Frage, die zählt — trägt die Strecke gerade? Handshake-Alter, Schlüsselwechsel und übertragene Menge
-        stehen auf der Firewall und kommen mit <b>Stufe 3</b> dazu, ohne diese Messung zu ersetzen.</div>
+        die Frage, die zählt — trägt die Strecke gerade? ${PEERS.length
+          ? `Das Handshake-Alter liest der Leitstand inzwischen von der Firewall (siehe unten), es ist einer Strecke aber
+             noch nicht zugeordnet — dafür muss am Tunnel stehen, welcher Peer gemeint ist.`
+          : `Handshake-Alter und übertragene Menge stehen auf der Firewall; sie kommen dazu, sobald dort ein
+             API-Schlüssel hinterlegt ist — ohne diese Messung zu ersetzen.`}</div>
     </div>
 
     <div class="panel">
@@ -856,10 +896,34 @@ function peerPanel() {
     </tr>`).join("")}
     </tbody></table></div>`;
 
-  if (peers.length) return `<div class="panel">
-    <div class="panel-head"><h3>Endgeräte / Road-Warrior</h3>
-      <span class="hint">${peers.filter(p => p.status === "ok").length} von ${peers.length} aktiv</span></div>
-    ${tabelle}</div>`;
+  if (peers.length) {
+    const aktiv = peers.filter(p => p.status === "ok").length;
+    const still = peers.filter(p => p.status === "idle").length;
+    return `<div class="panel">
+      <div class="panel-head"><h3>WireGuard-Gegenstellen</h3>
+        <span class="hint">${aktiv} von ${peers.length} mit frischem Handshake${still ? ` · ${still} still` : ""}</span>
+        <div class="spacer"></div><span class="hint">gelesen von der Firewall</span></div>
+      <div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th style="width:34px"></th><th>Gegenstelle</th><th>Gelesen von</th>
+          <th>Interface</th><th>Erlaubte Netze</th><th>Endpunkt</th><th>RX / TX</th><th class="right">Handshake</th></tr></thead><tbody>
+        ${peers.map(p => `<tr data-sev="${p.status}">
+          <td class="sev">${dot(p.status)}</td>
+          <td class="mono">${esc(p.name)}</td>
+          <td>${chip("plain", siteShort(p.site))} <span class="mono faint" style="font-size:11px">${esc(p.von || "")}</span></td>
+          <td class="mono faint">${esc(nz(p.iface))}</td>
+          <td class="mono faint">${esc(nz(p.ip === "—" ? null : p.ip))}</td>
+          <td class="mono faint">${esc(nz(p.endpoint === "—" ? null : p.endpoint))}</td>
+          <td class="mono faint">${p.rx ? `${esc(p.rx)} / ${esc(p.tx)}` : "—"}</td>
+          <td class="right mono" title="${esc(p.seit || "")}">${p.handshake == null
+            ? '<span class="faint">nie</span>' : esc(hs(p.handshake))}</td>
+        </tr>`).join("")}
+        </tbody></table>
+      </div>
+      <div class="panel-note">Frisch heißt: Handshake jünger als drei Minuten. Ein Endgerät, das länger schweigt,
+        ist meist einfach aus — deshalb gilt es als <b>ruhend</b> und nicht als gestört. Was hier steht, hat die
+        Firewall gemeldet; gemessen wird die Strecke weiterhin zusätzlich durch den Tunnel.</div>
+    </div>`;
+  }
 
   return ausbaupanel("Endgeräte / Road-Warrior", "Stufe 3",
     `Einzelne Peers kennt nur die Firewall — Name, Endpunkt, letzter Handshake und übertragene Menge stehen in

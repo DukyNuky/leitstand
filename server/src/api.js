@@ -48,8 +48,9 @@ export function buildState(engine, secrets) {
     certs: certViews(hosts),
     links: linkViews(inv, byId),
     integrations: integrationViews(inv, secrets, engine),
-    /* Stufe 1 kennt diese Bereiche noch nicht — leer statt erfunden. */
-    peers: [], haproxy: [], backups: [], mails: [], mailrules: [], routes: []
+    peers: peerViews(inv, engine),
+    /* Diese Bereiche kennt der Dienst noch nicht — leer statt erfunden. */
+    haproxy: [], backups: [], mails: [], mailrules: [], routes: []
   };
 }
 
@@ -65,6 +66,45 @@ function icmpState(inv, engine) {
   if (skipped.length === alle.length)
     return { configured: true, working: false, note: skipped[0].detail || "wird übersprungen" };
   return { configured: true, working: true, note: `${alle.length - skipped.length} von ${alle.length} Prüfungen laufen` };
+}
+
+/* Road-Warrior und Site-to-Site-Gegenstellen, so wie die Firewalls sie
+   melden. Ein Peer hat selbst keinen Standort — er bekommt den des
+   Geräts, das ihn kennt. */
+function peerViews(inv, engine) {
+  const out = [];
+  for (const h of inv.hosts) {
+    const liste = engine.hosts.get(h.id)?.extra?.peers;
+    if (!Array.isArray(liste)) continue;
+    for (const p of liste) {
+      out.push({
+        id: [h.id, p.iface || "wg", p.name].join("/"),
+        name: p.name,
+        device: p.allowed ? "erlaubt: " + p.allowed : (p.iface || ""),
+        site: h.site, von: h.id, iface: p.iface || null,
+        /* Ruhend ist nicht gestört: ein Endgerät darf aus sein. Gemeldet
+           wird das Handshake-Alter, bewertet wird es zurückhaltend. */
+        status: p.handshake == null ? "idle"
+          : p.handshake <= 180 ? "ok"
+          : p.handshake <= 600 ? "warn" : "idle",
+        handshake: p.handshake,
+        seit: p.seit || null,
+        ip: p.allowed || "—",
+        endpoint: p.endpoint || "—",
+        rx: bytes(p.rx), tx: bytes(p.tx)
+      });
+    }
+  }
+  return out.sort((a, b) => (a.handshake ?? 1e9) - (b.handshake ?? 1e9));
+}
+
+/* Menschenlesbar, ohne Nachkommastellen-Theater. */
+function bytes(n) {
+  if (n == null || !Number.isFinite(n)) return null;
+  const e = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < e.length - 1) { v /= 1024; i++; }
+  return (v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)) + " " + e[i];
 }
 
 function hostView(h, st = {}) {
@@ -96,6 +136,15 @@ function hostView(h, st = {}) {
     storages: x.storages || null, stores: x.stores || null,
     used: x.used ?? null, failed: x.failed ?? null, lastGood: x.lastGood || null,
     in24: x.in24 ?? null, spam: x.spam ?? null, virus: x.virus ?? null,
+    /* OPNsense */
+    abi: x.abi || null, os: x.os || null,
+    updates: x.updates ?? null, majorUpgrade: x.majorUpgrade || null,
+    needsReboot: x.needsReboot ?? null, lastCheck: x.lastCheck || null,
+    ramTotalMb: x.ramTotalMb ?? null, ramArcMb: x.ramArcMb ?? null,
+    disks: x.disks || null, load: x.load || null,
+    thrIn: x.thrIn ?? null, thrOut: x.thrOut ?? null, thrQuelle: x.thrQuelle || null,
+    interfaces: x.interfaces || null,
+    wgPeers: x.wgPeers ?? null, wgIfaces: x.wgIfaces ?? null, wgStill: x.wgStill ?? null,
     collectorError: x.error || null
   };
 }

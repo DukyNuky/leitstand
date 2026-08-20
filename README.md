@@ -123,11 +123,12 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version |
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
+| **OPNsense** | Fassung und offene Aktualisierungen, Arbeitsspeicher, Platte, Durchsatz je Schnittstelle, WireGuard-Peers mit Handshake-Alter |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
-Alles andere (OPNsense, pfSense, TrueNAS, AdGuard, Portainer, Mailcow, Home
+Alles andere (pfSense, TrueNAS, AdGuard, Portainer, Mailcow, Home
 Assistant) wird bisher nur auf Erreichbarkeit geprüft. Die Oberfläche zeigt für
 noch unbekannte Kennzahlen einen Strich — **nie einen erfundenen Wert.**
 
@@ -309,14 +310,15 @@ server/
   src/inventory.js        Laden, Prüfen, Zurückschreiben (mit Sicherung)
   src/engine.js           Ampeln, Verlauf, Störungen, Standort-Bündelung
   src/collectors/proxmox.js   VE, Backup Server, Mail Gateway
-  src/collectors/opnsense.js  Zugang und Verbindungstest (Sammler folgt)
+  src/collectors/opnsense.js  Fassung, Speicher, Platte, Durchsatz, WireGuard
+  src/collectors/index.js     alle Sammler an einer Stelle
   src/secrets.js          Zugangsdaten, 0600, nach außen nur maskiert
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
   src/version.js          welche Fassung läuft: Abbild, Arbeitsbaum oder Dateistand
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   129 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   145 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -330,7 +332,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 129 Tests
+cd server && npm test     # 145 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
