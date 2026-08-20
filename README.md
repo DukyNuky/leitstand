@@ -32,12 +32,48 @@ Eigener Bestand an anderer Stelle:
 LEITSTAND_INVENTORY=/pfad/zu/inventory.yaml PORT=8080 node src/server.js
 ```
 
-Als Container:
+## Als Stack in Portainer
+
+**Portainer → Stacks → Add stack → Web editor**, den Inhalt von
+[`docker-compose.yml`](docker-compose.yml) hineinkopieren, *Deploy the stack*.
+Fertig — es wird nichts gebaut, das Abbild kommt aus der GitHub Container
+Registry und enthält Dienst und Oberfläche.
+
+Beim ersten Start ist das Volume leer. Der Leitstand legt dann selbst einen
+Bestand an (aus der im Abbild mitgelieferten Vorlage) und läuft sofort; alles
+Weitere wird unter *Verwaltung* gepflegt. Im Volume liegen danach:
+
+```
+/data/inventory.yaml       Bestand   (Sicherung als inventory.yaml.bak)
+/data/secrets.json         Zugangsdaten, Rechte 0600
+/data/incidents.json       Störungen und Quittierungen, überlebt Neustarts
+```
+
+**Das Abbild ist privat**, solange es das Repository ist. Zwei Wege:
+
+- *Bequem:* auf GitHub unter **Packages → leitstand → Package settings →
+  Change visibility** auf öffentlich stellen. Das Repository bleibt privat, nur
+  das Abbild wird ziehbar. Danach genügt Kopieren und Einsetzen.
+- *Geschlossen:* in Portainer unter **Registries** einmalig `ghcr.io`
+  hinterlegen — Benutzername ist der GitHub-Name, Passwort ein Token mit
+  `read:packages`.
+
+Lieber selbst bauen? **Stacks → Add stack → Repository**, URL des Repositorys,
+Compose-Pfad `docker-compose.yml`, und darin `image:` durch die beiden
+auskommentierten `build:`-Zeilen ersetzen.
+
+### ICMP im Container
+
+Alpine erlaubt unprivilegiertes `ping` nur mit der Fähigkeit `NET_RAW`, die in
+der Compose-Datei bereits gesetzt ist. Fehlt sie, überspringt der Prober ICMP
+und prüft nur TCP — für Weboberflächen reicht das, für reine Ping-Ziele nicht.
+Sollen Geräte im eigenen Netz direkt erreicht werden, ist `network_mode: host`
+oft der einfachere Weg; die Portfreigabe entfällt dann.
+
+### Ohne Portainer
 
 ```bash
-cd server
-mkdir -p data && cp inventory.yaml data/
-docker compose up -d          # http://localhost:8080
+docker compose up -d          # aus der Wurzel des Repositorys
 ```
 
 ## Was Stufe 1 kann
@@ -91,8 +127,12 @@ schreibt nichts.
 ## Aufbau
 
 ```
+Dockerfile                Abbild mit Dienst und Oberfläche
+docker-compose.yml        Stack für Portainer
+.github/workflows/        baut das Abbild bei jedem Push auf main
+
 server/
-  inventory.yaml          Bestand — die einzige Datei, die du pflegst
+  inventory.yaml          Bestand — Vorlage für den ersten Start
   src/probe.js            ICMP, TCP, TLS-Restlaufzeit, DNS, HTTP
   src/inventory.js        Laden, Prüfen, Zurückschreiben (mit Sicherung)
   src/engine.js           Ampeln, Verlauf, Störungen, Standort-Bündelung

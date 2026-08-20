@@ -1,0 +1,49 @@
+# Leitstand — als Stack in Portainer einsetzbar.
+#
+#   Portainer -> Stacks -> Add stack -> Web editor
+#   Diese Datei hineinkopieren, "Deploy the stack".
+#
+# Das Abbild wird bei jedem Push auf main gebaut (siehe
+# .github/workflows/image.yml). Ist das GHCR-Paket privat, muss in Portainer
+# unter Registries einmalig ein Zugang für ghcr.io hinterlegt werden —
+# Benutzername ist der GitHub-Name, Passwort ein Token mit read:packages.
+#
+# Lieber selbst bauen statt ziehen? Dann Stack -> Repository verwenden und
+# die Zeile "image:" durch die beiden auskommentierten "build:"-Zeilen ersetzen.
+
+services:
+  leitstand:
+    image: ghcr.io/dukynuky/leitstand:main
+    # build:
+    #   context: .
+    container_name: leitstand
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      TZ: Europe/Berlin
+      PORT: "8080"
+      # Alles Weitere steht in der Oberfläche unter Verwaltung -> Schwellwerte
+
+    volumes:
+      # Enthält inventory.yaml, secrets.json und incidents.json.
+      # Beim ersten Start wird der Bestand automatisch angelegt.
+      - leitstand-data:/data
+
+    # ICMP an Ziele im eigenen Netz: Alpine erlaubt unprivilegiertes ping
+    # nur mit dieser Fähigkeit. Ohne sie prüft der Leitstand nur TCP —
+    # das genügt für Weboberflächen, nicht für reine Ping-Ziele.
+    cap_add:
+      - NET_RAW
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/state').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  leitstand-data:

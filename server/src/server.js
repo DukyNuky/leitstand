@@ -30,7 +30,13 @@ import { runCheck } from "./probe.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "..");
-const UI = path.resolve(ROOT, "..", "mockup");
+/* Die Oberfläche liegt im Abbild neben dem Programm, im Arbeitsbaum eine
+   Ebene darüber. LEITSTAND_UI schlägt beides. */
+const UI = path.resolve(
+  process.env.LEITSTAND_UI ||
+  [path.join(ROOT, "mockup"), path.resolve(ROOT, "..", "mockup")].find(p => fs.existsSync(p)) ||
+  path.resolve(ROOT, "..", "mockup")
+);
 
 const MIME = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon",
@@ -54,6 +60,11 @@ export function createServer(opts = {}) {
   const beside = name => path.join(path.dirname(invFile), name);
   const secFile = opts.secrets || process.env.LEITSTAND_SECRETS || beside("secrets.json");
   const stateFile = opts.state || process.env.LEITSTAND_STATE || beside("incidents.json");
+
+  /* Erststart: fehlt der Bestand, wird er angelegt — als Vorlage dient die im
+     Abbild mitgelieferte inventory.yaml, sonst ein leeres Gerüst. */
+  const angelegt = Inv.ensure(invFile, opts.seed || process.env.LEITSTAND_SEED || path.join(ROOT, "inventory.yaml"));
+  if (angelegt.created) console.log(`Bestand angelegt: ${invFile}${angelegt.seeded ? " (aus Vorlage)" : " (leeres Gerüst)"}`);
 
   let inv = Inv.load(invFile);
   const secrets = new Secrets(secFile);
@@ -264,7 +275,8 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const s = server.settings();
   server.listen(Number(process.env.PORT) || s.listen, process.env.BIND || s.bind, () => {
     const a = server.address();
-    console.log(`Leitstand hört auf http://${a.address}:${a.port}`);
+    console.log(`Leitstand hört auf http://${a.address === "0.0.0.0" ? "localhost" : a.address}:${a.port}`);
+    console.log(`Oberfläche: ${UI}`);
     console.log(`Bestand: ${server.getInventory().hosts.length} Systeme, Durchlauf alle ${s.interval} s`);
     server.engine.start();
   });

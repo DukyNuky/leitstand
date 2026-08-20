@@ -98,3 +98,43 @@ test("Prüfziel wird notfalls aus der Oberflächen-URL gezogen", async () => {
   assert.equal(targetHost({ kind: "tcp", port: 25, ip: "10.0.0.9" }, { ip: "10.0.0.1" }), "10.0.0.9", "die Prüfung selbst hat den Vorrang");
   assert.equal(targetHost({ kind: "icmp" }, {}), null);
 });
+
+test("Fehlender Bestand wird beim ersten Start angelegt", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-neu-"));
+  const file = path.join(dir, "unterordner", "inventory.yaml");
+  const r = Inv.ensure(file);
+  assert.equal(r.created, true);
+  assert.equal(r.seeded, false, "ohne Vorlage das leere Gerüst");
+  const inv = Inv.load(file);
+  assert.equal(inv.hosts.length, 0);
+  assert.equal(inv.sites.length, 1, "ein Standort, sonst wäre der Bestand ungültig");
+});
+
+test("Vorhandener Bestand wird beim Start nicht angefasst", () => {
+  const file = tmp();
+  Inv.save(file, Inv.normalize(minimal));
+  const vorher = fs.readFileSync(file, "utf8");
+  const r = Inv.ensure(file);
+  assert.equal(r.created, false);
+  assert.equal(fs.readFileSync(file, "utf8"), vorher);
+});
+
+test("Mitgelieferte Vorlage wird als Startbestand übernommen", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-seed-"));
+  const file = path.join(dir, "inventory.yaml");
+  const vorlage = new URL("../inventory.yaml", import.meta.url).pathname;
+  const r = Inv.ensure(file, vorlage);
+  assert.equal(r.seeded, true);
+  assert.ok(Inv.load(file).hosts.length > 5);
+});
+
+test("Unbrauchbare Vorlage kippt den Start nicht", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-kaputt-"));
+  const kaputt = path.join(dir, "vorlage.yaml");
+  fs.writeFileSync(kaputt, "sites: [\n  broken");
+  const file = path.join(dir, "inventory.yaml");
+  const r = Inv.ensure(file, kaputt);
+  assert.equal(r.created, true);
+  assert.equal(r.seeded, false, "auf das Gerüst zurückgefallen");
+  assert.doesNotThrow(() => Inv.load(file));
+});

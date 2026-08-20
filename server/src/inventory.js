@@ -176,3 +176,46 @@ export function restore(file) {
 }
 
 export function resolvePath(p) { return path.resolve(process.cwd(), p); }
+
+/* Ein frisch angelegtes Volume ist leer. Statt mit „Datei nicht gefunden“
+   abzubrechen, legt der Dienst einen Startbestand an — entweder die im Abbild
+   mitgelieferte Vorlage oder, wenn es die nicht gibt, das kleinstmögliche
+   gültige Gerüst. Alles Weitere kommt aus der Verwaltung. */
+export const STARTER = `# Leitstand — Bestand
+#
+# Diese Datei wurde beim ersten Start angelegt. Systeme, Standorte und Tunnel
+# lassen sich in der Oberfläche unter „Verwaltung“ pflegen; von Hand geht es
+# ebenso. Nach einer Änderung von Hand: Verwaltung -> Bestand neu einlesen.
+
+settings:
+  interval: 15
+  timeout: 4
+  fail_threshold: 3
+  slow_ms: 800
+  tls_warn_days: 30
+  tls_crit_days: 14
+  icmp: true
+
+sites:
+  - { id: hq, name: Zuhause, place: "", primary: true }
+
+hosts: []
+tunnels: []
+links: []
+`;
+
+export function ensure(file, seedFrom = null) {
+  if (fs.existsSync(file)) return { created: false, file };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  let text = STARTER;
+  if (seedFrom && fs.existsSync(seedFrom)) {
+    try {
+      const vorlage = fs.readFileSync(seedFrom, "utf8");
+      normalize(YAML.parse(vorlage) || {});      /* nur übernehmen, wenn sie trägt */
+      text = vorlage;
+    } catch { /* Vorlage unbrauchbar — dann eben das Gerüst */ }
+  }
+  fs.writeFileSync(file, text, { mode: 0o640 });
+  return { created: true, file, seeded: text !== STARTER };
+}
