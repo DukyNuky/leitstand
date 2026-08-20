@@ -303,9 +303,17 @@ export function createServer(opts = {}) {
   return server;
 }
 
+/* no-store, nicht bloß no-cache: eine Antwort ohne Angabe darf der Browser
+   nach eigenem Gutdünken aufheben, und ein aufgehobener Zustand ist in
+   einer Überwachung das Schlimmste, was passieren kann — er sieht aus wie
+   eine Messung von jetzt. */
 function json(res, code, obj) {
   const b = JSON.stringify(obj);
-  res.writeHead(code, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(b) });
+  res.writeHead(code, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(b),
+    "cache-control": "no-store"
+  });
   res.end(b);
 }
 function readJson(req) {

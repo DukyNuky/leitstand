@@ -2009,6 +2009,8 @@ npm start        # danach http://localhost:8080</pre>
           ohne Pufferung) durchgereicht werden.</p>
           <div class="row" style="gap:8px;margin-top:14px">
             <button class="btn btn--primary" data-action="reconnect">Erneut verbinden</button>
+            <span class="faint" style="font-size:12.5px">Es wird ohnehin weiter versucht — die Schaltfläche
+              nimmt den nächsten Versuch nur vorweg.</span>
           </div>
         </div>
       </div>

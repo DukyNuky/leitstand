@@ -314,3 +314,17 @@ test("Ein Tunnel ohne Gegenstelle und ohne Peer wird abgewiesen", async () => {
   assert.equal(r.status, 400);
   assert.match(r.body.error, /weder probe\.ip noch ein verknüpfter Peer/);
 });
+
+/* Eine Antwort ohne Angabe darf der Browser nach eigenem Gutdünken
+   aufheben. Ein aufgehobener Zustand sieht aus wie eine Messung von
+   jetzt — in einer Überwachung ist das der schlimmste Fall. */
+test("Der Zustand darf nicht im Zwischenspeicher des Browsers landen", async () => {
+  for (const pfad of ["/api/state", "/api/version"]) {
+    const res = await fetch(base + pfad);
+    assert.equal(res.headers.get("cache-control"), "no-store", `${pfad} ohne no-store`);
+  }
+  /* Die Oberfläche selbst darf zwischengespeichert werden — aber nur mit
+     Rückfrage, sonst überlebt sie einen Redeploy. */
+  const seite = await fetch(base + "/");
+  assert.match(seite.headers.get("cache-control") || "", /no-cache/);
+});
