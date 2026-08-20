@@ -2195,7 +2195,7 @@ window.LeitstandUI = { render, state, applyLive, go };
    ============================================================ */
 const HOST_TYPES = [
   ["pve", "Proxmox VE", 8006, true], ["pbs", "Proxmox Backup Server", 8007, true],
-  ["pmg", "Proxmox Mail Gateway", 8006, true], ["opnsense", "OPNsense", 443, false],
+  ["pmg", "Proxmox Mail Gateway", 8006, true], ["opnsense", "OPNsense", 443, true],
   ["pfsense", "pfSense", 443, false], ["truenas", "TrueNAS SCALE", 443, false],
   ["mailcow", "Mailcow", 443, false], ["adguard", "AdGuard Home", 443, false],
   ["portainer", "Portainer", 9443, false], ["hass", "Home Assistant", 8123, false],
@@ -2203,6 +2203,33 @@ const HOST_TYPES = [
 ];
 const typeLabel = t => (HOST_TYPES.find(x => x[0] === t) || [, t])[1];
 const typeHasApi = t => !!(HOST_TYPES.find(x => x[0] === t) || [])[3];
+
+/* Jede Bauart meldet sich anders an: Proxmox über eine Token-Kopfzeile aus
+   Benutzer, Token-ID und Geheimnis — OPNsense über HTTP Basic mit einem
+   Schlüsselpaar. Ein gemeinsames Formular für beides führte nur dazu, dass
+   man Felder ausfüllt, die niemand liest. */
+function zugangsFelder(type, cred, getippt) {
+  if (type === "opnsense") return `
+    <div class="admin-grid">
+      ${inpc("key", "API-Schlüssel", cred, "der lange Wert aus der Schlüsseldatei", getippt)}
+      ${inpc("secret", "Secret", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "der zweite Wert aus derselben Datei", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0">In OPNsense unter
+    <span class="mono">System → Access → Users</span> beim Benutzer einen API-Schlüssel erzeugen —
+    heruntergeladen wird eine Datei mit beiden Werten. Zum Ablesen genügt ein Benutzer in einer Gruppe
+    mit Leserechten; Schreibrechte braucht der Leitstand nirgends.</p>`;
+
+  return `
+    <div class="admin-grid">
+      ${inpc("user", "Benutzer@Realm", cred, "leitstand@pve", getippt)}
+      ${inpc("tokenId", "Token-ID", cred, "ro", getippt)}
+      ${inpc("secret", "Geheimnis", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "aus der Anlage-Maske kopieren", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0">Nur lesend: in Proxmox unter
+    <span class="mono">Datacenter → Permissions → Add → API Token Permission</span> eintragen —
+    Pfad <span class="mono">/</span>, Rolle <span class="mono">PVEAuditor</span>, Propagate an.
+    Eine Berechtigung, die nur dem Benutzer gilt, greift bei „Privilege Separation“ nicht für seine Token.</p>`;
+}
 
 function viewVerwaltung() {
   if (!LIVE()) return `<div class="panel"><div class="panel-body">
@@ -2464,13 +2491,7 @@ function renderAdminForm() {
       ${typeHasApi(d.type) ? `
       <div>
         <div class="sec-title">Zugangsdaten — ${esc(typeLabel(d.type))}</div>
-        <div class="admin-grid">
-          ${inpc("user", "Benutzer@Realm", cred, "leitstand@pve", f.cred)}
-          ${inpc("tokenId", "Token-ID", cred, "ro", f.cred)}
-          ${inpc("secret", "Geheimnis", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "aus der Anlage-Maske kopieren", f.cred)}
-        </div>
-        <p class="admin-hint" style="margin:8px 0 0">Nur lesend: in Proxmox unter <span class="mono">Datacenter → Permissions → API Tokens</span>
-        anlegen und dem Benutzer die Rolle <span class="mono">PVEAuditor</span> auf <span class="mono">/</span> mit Vererbung geben.</p>
+        ${zugangsFelder(d.type, cred, f.cred)}
       </div>` : `<p class="admin-hint" style="margin:0">Für ${esc(typeLabel(d.type))} prüft der Leitstand vorerst nur die Erreichbarkeit — ein Sammler folgt in einer späteren Stufe.</p>`}`;
   } else if (isSite) {
     const hosts = f.mode === "edit" ? state.hosts.filter(h => h.site === d.id).length : 0;

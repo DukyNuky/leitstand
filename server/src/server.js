@@ -28,6 +28,7 @@ import { Secrets } from "./secrets.js";
 import { Engine } from "./engine.js";
 import { buildState } from "./api.js";
 import { makeCollectors, TESTERS } from "./collectors/proxmox.js";
+import { testConnection as testOpnsense } from "./collectors/opnsense.js";
 import { runCheck } from "./probe.js";
 import { buildInfo } from "./version.js";
 import { diagnoseHost, alsText } from "./diagnose.js";
@@ -266,7 +267,7 @@ export function createServer(opts = {}) {
     const reachable = steps.some(s => s.ok);
 
     let apiTest = null;
-    const tester = TESTERS[host.type];
+    const tester = host.type === "opnsense" ? (h, c) => testOpnsense(h, c) : TESTERS[host.type];
     if (tester) {
       const cred = hasCred(body.credentials) ? body.credentials : secrets.get(body.id);
       if (cred) apiTest = await tester(host, cred);

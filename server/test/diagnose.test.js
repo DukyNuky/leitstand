@@ -200,3 +200,113 @@ test("Auch ein abgelehnter optionaler Aufruf zählt als Befund", async () => {
     assert.equal(b2.ok, false, "trotz „optional“ kein Freispruch");
   } finally { srv.close(); }
 });
+
+/* ---------- OPNsense ----------
+   Zwei Unterschiede zu Proxmox, und beide brauchen eigene Behandlung: die
+   Anmeldung ist HTTP Basic, und die Diagnose-Pfade wurden zwischen den
+   Fassungen umbenannt (systemInformation -> system_information). */
+const OPN_KEY = "abcdefghijklmnop1234567890";
+const OPN_SECRET = "streng-geheim-opnsense";
+const OPN_CRED = { key: OPN_KEY, secret: OPN_SECRET };
+
+function opnsense({ alteSchreibweise = false, wireguard = true, diagnostikVerboten = false } = {}) {
+  return http.createServer((req, res) => {
+    const send = (code, obj) => {
+      const b = JSON.stringify(obj);
+      res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(b) });
+      res.end(b);
+    };
+    const auth = Buffer.from((req.headers.authorization || "").replace(/^Basic /, ""), "base64").toString();
+    if (auth !== `${OPN_KEY}:${OPN_SECRET}`) return send(401, { message: "Authentication failed" });
+
+    const p = new URL(req.url, "http://x").pathname;
+    if (p === "/api/core/firmware/status")
+      return send(200, { status: "ok", product_version: "24.7.5", upgrade_needed: "0" });
+    if (diagnostikVerboten && p.startsWith("/api/diagnostics")) return send(403, { message: "permission denied" });
+
+    const neu = !alteSchreibweise;
+    if (p === (neu ? "/api/diagnostics/system/system_information" : "/api/diagnostics/system/systemInformation"))
+      return send(200, { name: "fw-01.lan", uptime: "12 days", loadavg: "0.21, 0.18, 0.15" });
+    if (p === (neu ? "/api/diagnostics/system/system_resources" : "/api/diagnostics/system/systemResources"))
+      return send(200, { memory: { total: 8589934592, used: 2147483648 } });
+    if (p === "/api/wireguard/service/show") {
+      if (!wireguard) return send(404, { message: "not found" });
+      return send(200, { rows: [
+        { type: "interface", if: "wg0", public_key: "kQx9", private_key: "DARF-NICHT-AUFTAUCHEN" },
+        { type: "peer", if: "wg0", name: "rz", latest_handshake: "22 seconds ago", transfer_rx: "412 GiB" }
+      ] });
+    }
+    return send(404, { message: "endpoint not found" });
+  });
+}
+
+const opnLauf = async (opt, cred = OPN_CRED) => {
+  const srv = opnsense(opt);
+  const url = await new Promise(r => srv.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${srv.address().port}`)));
+  const b = await diagnoseHost({ id: "fw-01", name: "fw-01", type: "opnsense", url, checks: [] },
+    cred, { icmp: false, timeout: 2 });
+  srv.close();
+  return b;
+};
+
+test("OPNsense: alle nötigen Aufrufe kommen durch", async () => {
+  const b = await opnLauf({});
+  assert.equal(b.ok, true);
+  assert.match(b.fazit, /WireGuard ist lesbar/);
+  assert.ok(b.api.find(a => a.pfad === "/api/core/firmware/status").ok);
+  assert.match(b.api.find(a => a.pfad.includes("firmware")).felder, /product_version/);
+});
+
+/* Die Pfade heißen je nach Fassung anders. Statt eine Schreibweise zu
+   verlangen, werden beide probiert — und berichtet, welche antwortet. */
+test("OPNsense: die alte Schreibweise wird gefunden und benannt", async () => {
+  const b = await opnLauf({ alteSchreibweise: true });
+  assert.equal(b.ok, true);
+  const sys = b.api.find(a => a.pfad.includes("system"));
+  assert.equal(sys.pfad, "/api/diagnostics/system/systemInformation");
+  assert.match(sys.befund, /antwortet unter der Schreibweise/);
+});
+
+test("OPNsense: fehlendes WireGuard-Plugin kippt den Befund nicht", async () => {
+  const b = await opnLauf({ wireguard: false });
+  assert.equal(b.ok, true, "WireGuard ist ein Zusatz, keine Voraussetzung");
+  assert.match(b.fazit, /WireGuard antwortet nicht/);
+});
+
+test("OPNsense: gesperrter Diagnose-Zweig wird als Rechtefrage erklärt", async () => {
+  const b = await opnLauf({ diagnostikVerboten: true });
+  assert.equal(b.ok, false);
+  assert.match(b.fazit, /403/);
+  assert.match(b.fazit, /Gruppe des Benutzers/);
+});
+
+test("OPNsense: abgelehnte Anmeldung nennt die Schlüsseldatei", async () => {
+  const b = await opnLauf({}, { key: OPN_KEY, secret: "falsch" });
+  assert.equal(b.ok, false);
+  assert.match(b.fazit, /401/);
+});
+
+test("OPNsense: ohne Schlüssel wird gar nicht erst gefragt", async () => {
+  const b = await opnLauf({}, null);
+  assert.equal(b.api.length, 0);
+  assert.equal(b.zugang.vorhanden, false);
+  assert.match(b.fazit, /kein API-Schlüssel/);
+});
+
+/* Die gemischte Liste ist der Sinn der Sache: die erste Zeile beschreibt
+   die Schnittstelle, erst die zweite trägt den Handshake. */
+test("OPNsense: gemischte Listen zeigen beide Gestalten", async () => {
+  const b = await opnLauf({});
+  const wg = b.api.find(a => a.pfad.includes("wireguard"));
+  assert.match(wg.felder, /latest_handshake/, "die Peer-Zeile muss sichtbar sein");
+  assert.match(wg.felder, /daneben/);
+});
+
+test("OPNsense: Schlüsselmaterial steht in keiner Fassung des Berichts", async () => {
+  const b = await opnLauf({});
+  const alles = JSON.stringify(b) + "\n" + alsText(b);
+  assert.ok(!alles.includes(OPN_SECRET), "das Secret");
+  assert.ok(!alles.includes("DARF-NICHT-AUFTAUCHEN"), "ein privater Schlüssel aus der Antwort");
+  assert.match(alles, /«verborgen»/, "stattdessen ausdrücklich verborgen");
+  assert.match(alles, /abcdefgh…/, "der Schlüsselanfang bleibt, damit man ihn wiedererkennt");
+});

@@ -17,6 +17,7 @@
 import { runCheck } from "./probe.js";
 import { authHeader, baseUrl, RECHTEHINWEIS } from "./collectors/proxmox.js";
 import { requestJson } from "./http.js";
+import * as Opn from "./collectors/opnsense.js";
 
 /* Welche Aufrufe der jeweilige Sammler tatsächlich braucht. Die Reihenfolge
    ist die Reihenfolge der Abhängigkeit: was oben scheitert, macht alles
@@ -53,6 +54,8 @@ export async function diagnoseHost(host, cred, settings = {}) {
       ok: r.ok, ms: r.ms ?? null, detail: r.detail || null, uebersprungen: !!r.skipped
     });
   }
+
+  if (host.type === "opnsense") return await diagnoseOpnsense(host, cred, bericht);
 
   const kollektor = PFADE[host.type];
   if (!kollektor) {
@@ -93,6 +96,112 @@ export async function diagnoseHost(host, cred, settings = {}) {
   bericht.ok = !bericht.fazit.problem;
   bericht.fazit = bericht.fazit.text;
   return bericht;
+}
+
+/* ---------- OPNsense ----------
+   Zwei Unterschiede zu Proxmox, und beide sind der Grund, warum das hier
+   eigene Wege geht: die Anmeldung ist HTTP Basic, und die Antwortfelder
+   sind nirgends dokumentiert. Deshalb wird bei erfolgreichen Aufrufen die
+   *Gestalt* der Antwort mitberichtet — welche Felder es gibt und was
+   ungefähr darin steht. Daraus wird anschließend der Sammler gebaut,
+   gegen Tatsachen statt gegen Vermutungen. */
+async function diagnoseOpnsense(host, cred, bericht) {
+  bericht.ziel = Opn.baseUrl(host);
+  const kopf = Opn.authHeader(cred);
+  bericht.zugang = basicForm(cred, kopf);
+  if (!kopf) {
+    bericht.fazit = "Es ist kein API-Schlüssel hinterlegt. OPNsense meldet mit Schlüssel und Secret an — "
+      + "in OPNsense unter System → Access → Users beim Benutzer erzeugen, dann hier unter "
+      + "Verwaltung → System bearbeiten eintragen.";
+    return bericht;
+  }
+
+  for (const { pfad, alternativen = [], zweck, optional, fehlendOk } of Opn.PFADE) {
+    const r = await Opn.ersterTreffer(host, cred, [pfad, ...alternativen]);
+    const eintrag = {
+      pfad: r.pfad || pfad, zweck, optional: !!optional,
+      ok: !!r.ok, status: r.status ?? null, ms: r.ms ?? null,
+      fehler: r.ok ? null : (r.status === 404 && fehlendOk ? fehlendOk : r.error || "unbekannter Fehler"),
+      antwort: r.ok ? null : kurzfassung(r.body),
+      befund: null, felder: null
+    };
+    if (r.ok) {
+      if (r.pfad !== pfad) eintrag.befund = `antwortet unter der Schreibweise ${r.pfad}`;
+      /* Genau das brauchen wir für den Sammler. */
+      eintrag.felder = gestalt(r.data);
+    }
+    bericht.api.push(eintrag);
+    if (!r.ok && !optional) break;
+  }
+
+  const gescheitert = bericht.api.find(a => !a.ok && !a.optional);
+  if (gescheitert) {
+    bericht.fazit = gescheitert.status === 401
+      ? `Die Anmeldung wird abgelehnt: ${gescheitert.pfad} (401). Schlüssel und Secret prüfen — `
+        + `OPNsense legt beide zusammen in einer Datei ab, wenn man den Schlüssel erzeugt.`
+      : gescheitert.status === 403
+        ? `Angemeldet, aber ohne Rechte: ${gescheitert.pfad} (403). Die Gruppe des Benutzers braucht `
+          + `Leserechte auf diesen Zweig — für reines Ablesen genügen die Diagnostics-Rechte.`
+        : `Der Abruf bricht bei ${gescheitert.pfad} ab (${gescheitert.fehler}).`;
+    return bericht;
+  }
+
+  const wg = bericht.api.find(a => a.pfad.includes("wireguard"));
+  bericht.ok = true;
+  bericht.fazit = "Alle nötigen Aufrufe kommen durch."
+    + (wg?.ok ? " WireGuard ist lesbar — der echte Handshake ist damit in Reichweite."
+      : " WireGuard antwortet nicht; das ist verschmerzbar, solange durch den Tunnel gemessen wird.")
+    + " Die Feldnamen unten sind die Grundlage für den Sammler.";
+  return bericht;
+}
+
+/* Die Gestalt einer Antwort: welche Felder, welcher Art, ungefähr welcher
+   Inhalt. Lange Werte werden gekürzt — es geht um den Bauplan, nicht um
+   die Daten. */
+function gestalt(data, tiefe = 0) {
+  if (data === null || data === undefined) return "null";
+
+  if (Array.isArray(data)) {
+    if (!data.length) return "[] (leer)";
+    const erste = gestalt(data[0], tiefe + 1);
+    /* Listen sind oft gemischt — bei WireGuard etwa eine Zeile je
+       Schnittstelle und eine je Peer, und nur letztere trägt den
+       Handshake. Die erste Zeile allein verschwiege genau das. */
+    const schluessel = o => (o && typeof o === "object" && !Array.isArray(o) ? Object.keys(o).join(",") : "");
+    const andere = data.find(x => schluessel(x) && schluessel(x) !== schluessel(data[0]));
+    return `[${data.length}×] ${erste}${andere ? ` — daneben: ${gestalt(andere, tiefe + 1)}` : ""}`;
+  }
+
+  if (typeof data === "object") {
+    const paare = Object.entries(data).slice(0, tiefe ? 12 : 20);
+    const rest = Object.keys(data).length - paare.length;
+    const inhalt = paare
+      .map(([k, v]) => `${k}: ${GEHEIM_FELD.test(k) ? "«verborgen»" : tiefe >= 3 ? typeof v : gestalt(v, tiefe + 1)}`)
+      .join(", ");
+    return `{ ${inhalt}${rest > 0 ? `, … +${rest} weitere` : ""} }`;
+  }
+
+  if (typeof data === "string") return data.length > 40 ? JSON.stringify(data.slice(0, 40) + "…") : JSON.stringify(data);
+  return String(data);
+}
+
+/* Der Bericht wird herumgereicht. Feldnamen sind harmlos, Inhalte nicht
+   immer — ein privater Schlüssel hat darin nichts zu suchen, auch nicht
+   versehentlich. */
+const GEHEIM_FELD = /private|secret|password|passwd|psk|preshared|token|apikey/i;
+
+function basicForm(cred, kopf) {
+  if (!cred) return { vorhanden: false, hinweis: "kein API-Schlüssel hinterlegt" };
+  const key = cred.key || cred.apiKey || cred.user;
+  if (!kopf) return { vorhanden: false, hinweis: key ? "Secret fehlt" : "Schlüssel fehlt", benutzer: key || null };
+  return {
+    vorhanden: true,
+    /* Basic-Auth ist nur Base64 — die Kopfzeile selbst darf nirgends
+       auftauchen, sonst stünde das Secht lesbar im Bericht. */
+    form: `Basic ${String(key).slice(0, 8)}…:••••••••`,
+    benutzer: key,
+    hinweis: null
+  };
 }
 
 /* Die Form der Kopfzeile — genug, um einen Tippfehler zu sehen, zu wenig,
@@ -259,7 +368,11 @@ export function alsText(b) {
     for (const a of b.api) {
       z.push(`  ${ja(a.ok)}  ${a.pfad}${a.optional ? "  (optional)" : ""}`);
       z.push(`      ${a.zweck}`);
-      if (a.ok) z.push(`      -> ${a.befund}${a.ms != null ? `  [${a.ms} ms]` : ""}`);
+      if (a.ok) {
+        if (a.befund) z.push(`      -> ${a.befund}${a.ms != null ? `  [${a.ms} ms]` : ""}`);
+        else if (a.ms != null) z.push(`      -> geantwortet  [${a.ms} ms]`);
+        if (a.felder) z.push(`      -> Felder: ${a.felder}`);
+      }
       else {
         z.push(`      -> ${a.fehler}`);
         if (a.antwort) z.push(`      -> Antwort: ${a.antwort}`);

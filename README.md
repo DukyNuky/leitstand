@@ -274,6 +274,15 @@ Die häufigsten Befunde:
 | `Kennung kommt in der Knotenliste nicht vor` | die Kennung muss dem Knotennamen im Cluster entsprechen |
 | `404` | falscher Port: VE 8006, Backup Server 8007, Mail Gateway 8006 |
 
+**OPNsense** meldet sich anders an: HTTP Basic mit API-Schlüssel und Secret, beide
+aus derselben Datei, die OPNsense unter *System → Access → Users* erzeugt. Die
+Diagnose kennt die Pfade in beiden Schreibweisen (`systemInformation` der
+älteren Fassungen und `system_information` der neueren) und berichtet, welche
+geantwortet hat. Zu jedem erfolgreichen Aufruf zeigt sie die **Feldnamen** der
+Antwort — die OPNsense-Dokumentation nennt die Endpunkte, aber keine
+Antwortschemata, und daraus wird der Sammler gebaut. Schlüsselmaterial in den
+Antworten (private_key, psk …) wird dabei ausdrücklich verborgen.
+
 ## Bedienung
 
 | Eingabe | Wirkung |
@@ -300,13 +309,14 @@ server/
   src/inventory.js        Laden, Prüfen, Zurückschreiben (mit Sicherung)
   src/engine.js           Ampeln, Verlauf, Störungen, Standort-Bündelung
   src/collectors/proxmox.js   VE, Backup Server, Mail Gateway
+  src/collectors/opnsense.js  Zugang und Verbindungstest (Sammler folgt)
   src/secrets.js          Zugangsdaten, 0600, nach außen nur maskiert
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
   src/version.js          welche Fassung läuft: Abbild, Arbeitsbaum oder Dateistand
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   121 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   129 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -320,7 +330,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 121 Tests
+cd server && npm test     # 129 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
