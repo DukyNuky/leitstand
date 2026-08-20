@@ -197,3 +197,57 @@ test("Kein Ausbruch aus dem Auslieferungsverzeichnis", async () => {
   const res = await fetch(base + "/../server/secrets.json");
   assert.ok(res.status === 404 || res.status === 403, `unerwartet ${res.status}`);
 });
+
+/* ---------- Änderungen müssen sofort ankommen ----------
+   Der Zustandsstrom ist die einzige Quelle der Oberfläche. Meldete eine
+   Bestandsänderung sich dort nicht, sah man einen neu angelegten Standort
+   erst nach dem nächsten Durchlauf — und der dauert so lange wie das
+   langsamste stille System. Genau so entstand der Eindruck, das Anlegen
+   habe nicht funktioniert. */
+test("Ein neuer Standort steht sofort im Zustandsstrom", async () => {
+  const res = await fetch(base + "/api/stream");
+  const leser = res.body.getReader();
+  const dec = new TextDecoder();
+  let puffer = "";
+
+  const naechsterZustand = async () => {
+    while (true) {
+      const i = puffer.indexOf("\n\n");
+      if (i >= 0) {
+        const roh = puffer.slice(0, i);
+        puffer = puffer.slice(i + 2);
+        if (roh.startsWith("data: ")) return JSON.parse(roh.slice(6));
+        continue;
+      }
+      const { value, done } = await leser.read();
+      if (done) throw new Error("Strom zu Ende");
+      puffer += dec.decode(value, { stream: true });
+    }
+  };
+
+  try {
+    await naechsterZustand();                       /* der Erstzustand beim Verbinden */
+    const t0 = Date.now();
+    const r = await call("POST", "/api/admin/sites", { id: "sofort", name: "Sofort da" });
+    assert.equal(r.status, 201);
+
+    const st = await naechsterZustand();
+    assert.ok(st.sites.some(s => s.id === "sofort"), "der Standort ist im gemeldeten Zustand");
+    assert.ok(Date.now() - t0 < 2000, "und zwar sofort, nicht erst nach einem Durchlauf");
+  } finally {
+    leser.cancel().catch(() => {});
+    await call("DELETE", "/api/admin/sites/sofort");
+  }
+});
+
+/* Ein Durchlauf über viele stille Systeme dauert länger als das Intervall.
+   Früher wurde ein zweiter Aufruf dann verworfen — „Jetzt prüfen" tat
+   ausgerechnet dann nichts, wenn es am meisten gebraucht wurde. */
+test("Ein Prüfaufruf während eines Durchlaufs wartet ihn ab, statt zu verpuffen", async () => {
+  const e = srv.engine;
+  const vorher = e.lastRun;
+  const [a, b] = await Promise.all([e.runOnce(), e.runOnce()]);
+  assert.equal(a, b, "beide Aufrufe teilen sich denselben Durchlauf");
+  assert.notEqual(e.lastRun, vorher, "und er ist wirklich gelaufen");
+  assert.equal(e.laufend, null, "danach ist nichts mehr offen");
+});

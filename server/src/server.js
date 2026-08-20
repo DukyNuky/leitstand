@@ -83,7 +83,16 @@ export function createServer(opts = {}) {
      eine Kopie, geprüft und geschrieben wird sie, und erst danach wird sie
      zum gültigen Bestand. Eine abgelehnte Änderung darf den laufenden
      Dienst nicht in einen halben Zustand bringen. */
-  const commit = next => { Inv.save(invFile, next); inv = next; engine.reload(inv); return next; };
+  const commit = next => {
+    Inv.save(invFile, next);
+    inv = next;
+    engine.reload(inv);
+    /* Sofort melden, nicht erst nach dem nächsten Durchlauf: ein neu
+       angelegter Standort soll in der Oberfläche stehen, sobald er
+       gespeichert ist — ungeprüft, aber sichtbar. */
+    engine.announce();
+    return next;
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");

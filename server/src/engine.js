@@ -22,6 +22,7 @@ export class Engine {
     this.seq = 0;
     this.lastRun = null;
     this.running = false;
+    this.laufend = null;                          /* Zusage des gerade laufenden Durchlaufs */
     this.timer = null;
     this.listeners = new Set();
     this.#seed();
@@ -57,20 +58,35 @@ export class Engine {
   onChange(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   #emit() { for (const fn of this.listeners) { try { fn(this); } catch {} } }
 
+  /* Der Bestand hat sich geändert, ohne dass gemessen wurde. Eine
+     Konfigurationsänderung ist auch ein Zustandswechsel: der neue Standort
+     ist da, er ist nur noch ungeprüft. Ohne diese Meldung sähe die
+     Oberfläche ihn erst nach dem nächsten Durchlauf — und der dauert bei
+     vielen stillen Systemen so lange, dass es wie ein Fehler aussieht. */
+  announce() { this.#emit(); }
+
   /* ---------- Durchlauf ---------- */
   async runOnce() {
-    if (this.running) return;
+    /* Läuft schon einer, wird der abgewartet statt ein zweiter gestartet.
+       Früher wurde der Aufruf einfach verworfen — „Jetzt prüfen" tat dann
+       nichts, und zwar ausgerechnet dann, wenn ein Durchlauf lange braucht,
+       weil viele Systeme still sind. */
+    if (this.laufend) return this.laufend;
+    this.laufend = this.#durchlauf();
     this.running = true;
-    try {
-      await Promise.all([
-        ...this.inv.hosts.map(h => this.#checkHost(h)),
-        ...this.inv.tunnels.map(t => this.#checkTunnel(t))
-      ]);
-      this.#rollup();
-      this.lastRun = new Date().toISOString();
-      this.#saveState();
-      this.#emit();
-    } finally { this.running = false; }
+    try { await this.laufend; }
+    finally { this.laufend = null; this.running = false; }
+  }
+
+  async #durchlauf() {
+    await Promise.all([
+      ...this.inv.hosts.map(h => this.#checkHost(h)),
+      ...this.inv.tunnels.map(t => this.#checkTunnel(t))
+    ]);
+    this.#rollup();
+    this.lastRun = new Date().toISOString();
+    this.#saveState();
+    this.#emit();
   }
 
   start() {

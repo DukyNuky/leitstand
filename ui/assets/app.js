@@ -1561,12 +1561,14 @@ async function silenceHost(id, minutes) {
   render();
 }
 
-async function checkNow() {
+/* Der Durchlauf dauert so lange wie das langsamste stille System. Die
+   Rückmeldung kommt deshalb sofort, das Ergebnis über den Zustandsstrom —
+   sonst sähe die Schaltfläche eine halbe Minute lang tot aus. */
+function checkNow() {
   if (!requireLive()) return;
-  try {
-    await window.LEITSTAND.call("POST", "/api/admin/check");
-    toast("Geprüft", "Durchlauf ausgelöst — die Anzeige folgt.", "ok");
-  } catch (e) { toast("Fehlgeschlagen", e.message, "crit"); }
+  toast("Prüfung läuft", "Der Durchlauf ist angestoßen — die Anzeige folgt.", "ok");
+  window.LEITSTAND.call("POST", "/api/admin/check")
+    .catch(e => toast("Fehlgeschlagen", e.message, "crit"));
 }
 
 /* ============================================================
@@ -1893,12 +1895,19 @@ function openForm(kind, mode, id) {
   render();
 }
 
-/* Eingaben einsammeln, bevor neu gezeichnet wird — sonst gehen sie verloren. */
+/* Eingaben einsammeln, bevor neu gezeichnet wird — sonst gehen sie verloren.
+
+   Nur echte Eingabefelder: die Schalter (Überwachen, Hauptstandort) tragen
+   dieselbe `data-field`-Kennung, sind aber <span> ohne `value`. Wurden sie
+   mitgelesen, überschrieb `undefined` den gesetzten Wert — der Schalter ließ
+   sich dann nicht umlegen, und beim Speichern ging seine Stellung verloren. */
 function collectForm() {
   const f = state.form;
   if (!f) return;
-  for (const el of document.querySelectorAll("[data-field]")) f.data[el.dataset.field] = el.value;
-  for (const el of document.querySelectorAll("[data-cred]")) f.cred[el.dataset.cred] = el.value;
+  for (const el of document.querySelectorAll("input[data-field], select[data-field], textarea[data-field]"))
+    f.data[el.dataset.field] = el.value;
+  for (const el of document.querySelectorAll("input[data-cred], select[data-cred], textarea[data-cred]"))
+    f.cred[el.dataset.cred] = el.value;
 }
 
 function formPayload() {
@@ -1949,9 +1958,14 @@ async function formSave() {
     if (f.kind === "hosts" && Object.keys(cred).length)
       await window.LEITSTAND.call("POST", `/api/admin/credentials/${encodeURIComponent(id)}`, cred);
 
-    await window.LEITSTAND.call("POST", "/api/admin/check");
     await loadAdmin();
-    toast("Gespeichert", `${id} — Prüfung läuft.`, "ok");
+    /* Der Prüfdurchlauf wird angestoßen, aber nicht abgewartet: er dauert so
+       lange wie das langsamste stille System — bei einem Dutzend davon eine
+       halbe Minute. Gespeichert ist längst, und der Dienst hat den neuen
+       Bestand schon gemeldet; das Ergebnis der Messung kommt nach. */
+    window.LEITSTAND.call("POST", "/api/admin/check")
+      .catch(e => console.warn("Durchlauf nicht ausgelöst:", e.message));
+    toast("Gespeichert", `${id} — die Prüfung läuft im Hintergrund.`, "ok");
     state.form = null;
   } catch (e) { f.error = e.message; f.busy = false; }
   render();

@@ -218,6 +218,39 @@ test("Inspector, Verwaltung und Formulare zeichnen für jeden Fall", async () =>
   }
 });
 
+/* Die Schalter im Formular („Überwachen", „Hauptstandort") tragen dieselbe
+   data-field-Kennung wie die Eingabefelder, sind aber <span> ohne `value`.
+   Wurden sie beim Einsammeln mitgelesen, überschrieb `undefined` den
+   gesetzten Wert: der Schalter ließ sich nicht umlegen, und beim Speichern
+   ging seine Stellung verloren. Hier steht ein DOM, das beide Fälle
+   auseinanderhält — genau wie ein Browser es täte. */
+test("Ein Schalter im Formular überlebt das Einsammeln der Eingaben", async () => {
+  const zustand = await echterZustand();
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+
+  const eingabe = { dataset: { field: "name" }, value: "Zweigstelle", tagName: "INPUT" };
+  const schalter = { dataset: { field: "primary" }, tagName: "SPAN" };      /* kein value */
+  sandbox.document.querySelectorAll = sel =>
+    sel.startsWith("[data-field]") ? [eingabe, schalter]                    /* wie früher: alles */
+      : /input\[data-field\]/.test(sel) ? [eingabe]                         /* jetzt: nur Felder */
+      : [];
+
+  vm.runInContext(`openForm("sites","new")`, sandbox);
+  vm.runInContext(`state.form.data = { id:"zweig", name:"", primary:true }`, sandbox);
+  vm.runInContext(`collectForm()`, sandbox);
+
+  assert.equal(vm.runInContext("state.form.data.primary", sandbox), true,
+    "der Schalter darf vom Einsammeln nicht zurückgesetzt werden");
+  assert.equal(vm.runInContext("state.form.data.name", sandbox), "Zweigstelle",
+    "echte Eingabefelder werden weiterhin gelesen");
+
+  /* Und er lässt sich umlegen, statt beim nächsten Zeichnen zurückzuspringen. */
+  vm.runInContext(`state.form.data.primary = !state.form.data.primary; collectForm();`, sandbox);
+  assert.equal(vm.runInContext("state.form.data.primary", sandbox), false);
+});
+
 /* Bei automatischem Redeploy läuft im Browser weiter das alte JavaScript,
    während der Dienst schon der neue ist. Genau das muss auffallen. */
 test("Ein neu ausgerollter Stand wird erkannt und gemeldet", async () => {

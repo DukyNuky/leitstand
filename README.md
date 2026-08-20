@@ -254,7 +254,7 @@ server/
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
   src/version.js          welche Fassung läuft: Abbild, Arbeitsbaum oder Dateistand
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   91 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   94 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -268,7 +268,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 91 Tests
+cd server && npm test     # 94 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
