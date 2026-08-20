@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import * as Inv from "../src/inventory.js";
-import { Engine } from "../src/engine.js";
+import { Engine, findePeer } from "../src/engine.js";
 
 /* Ein echter, offener Port als Prüfziel — keine Attrappe der Prüfung selbst. */
 function openPort() {
@@ -272,5 +272,152 @@ test("Erreichbar, aber Abruf scheitert — das darf nicht grün bleiben", async 
   const st = e.hosts.get("ziel");
   assert.equal(st.status, "warn");
   assert.match(st.note, /Abruf nicht möglich.*403/);
+  await p.close();
+});
+
+/* ============================================================
+   Tunnel ↔ WireGuard-Peer
+
+   Die Firewall meldet Peers, der Bestand benennt einen davon. Was hier
+   schiefgehen kann, ist nicht die Zuordnung an sich, sondern ihre
+   Nachlässigkeit: der falsche Peer, ein Peer aus der Vorrunde, oder eine
+   Ampel, die aus einer Verknüpfung mehr macht, als sie hergibt.
+   ============================================================ */
+
+/* Ein Bestand mit Firewall und Strecke; `peers` ist, was der Sammler meldet. */
+function mitPeer({ peer, probe, peers, timeoutPort }) {
+  return Inv.normalize({
+    settings: { icmp: false, timeout: 1, fail_threshold: 2, history: 10 },
+    sites: [{ id: "hq", name: "HQ" }, { id: "rz", name: "RZ" }],
+    hosts: [{ id: "fw", type: "opnsense", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: timeoutPort }] }],
+    links: [],
+    tunnels: [{ id: "wg", a: "hq", b: "rz", iface: "wg0", ...(probe ? { probe } : {}), ...(peer ? { peer } : {}) }]
+  });
+}
+
+const PEERLISTE = [
+  { name: "WG-Schweiz", key: "AqujlFK4", iface: "wg0", handshake: 80, rx: 1157470889, tx: 4185660632, endpoint: "178.39.98.174:8909", allowed: "0.0.0.0/0" },
+  { name: "laptop", key: "BbcdEfGh", iface: "wg1", handshake: null, rx: 0, tx: 0, endpoint: null, allowed: "10.99.0.2/32" }
+];
+
+test("Der verknüpfte Peer landet am Tunnel, samt Handshake und Mengen", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", name: "WG-Schweiz", key: "AqujlFK4" }, probe: { ip: "127.0.0.1", port: p.port }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: PEERLISTE }) } });
+  await e.runOnce();
+
+  const st = e.tunnels.get("wg");
+  assert.equal(st.status, "ok", "gemessen wird weiterhin durch den Tunnel");
+  assert.equal(st.peer.name, "WG-Schweiz");
+  assert.equal(st.peer.handshake, 80);
+  assert.equal(st.peer.rx, 1157470889);
+  assert.equal(st.peerNote, null);
+  await p.close();
+});
+
+/* Der Handshake steht in den Daten der Firewall, und die werden im selben
+   Durchlauf erst geholt. Würde er während der Tunnelprüfung gelesen, wäre
+   er stets eine Runde alt — beim ersten Durchlauf also gar nicht da. */
+test("Der Handshake ist schon im ersten Durchlauf da, nicht erst im zweiten", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", key: "AqujlFK4" }, probe: { ip: "127.0.0.1", port: p.port }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: PEERLISTE }) } });
+  await e.runOnce();
+  assert.equal(e.tunnels.get("wg").peer?.handshake, 80);
+  await p.close();
+});
+
+test("Ohne Gegenstelle im Transfernetz entsteht der Zustand aus dem Handshake", async () => {
+  const p = await openPort();
+  let alter = 80;
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", key: "AqujlFK4" }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: [{ ...PEERLISTE[0], handshake: alter }] }) } });
+
+  await e.runOnce();
+  assert.equal(e.tunnels.get("wg").status, "ok");
+  assert.equal(e.tunnels.get("wg").rtt, undefined, "ohne Messung gibt es keine Latenz");
+  assert.equal(e.incidents.size, 0);
+
+  alter = 400;
+  await e.runOnce();
+  assert.equal(e.tunnels.get("wg").status, "warn");
+
+  alter = 4000;
+  await e.runOnce();
+  const st = e.tunnels.get("wg");
+  assert.equal(st.status, "crit");
+  assert.match(st.note, /Seit 1 h 6 min kein Handshake/);
+  const inc = [...e.incidents.values()].find(i => i.kind === "tunnel");
+  assert.equal(inc.rule, "tunnel.handshake");
+  assert.match(inc.detail, /Durch den Tunnel wird nicht gemessen/);
+  await p.close();
+});
+
+/* Ein Handshake, den es nie gab, ist kein Ausfall: die Gegenstelle hat
+   sich schlicht noch nicht gemeldet. Grau, nicht rot. */
+test("Ein Peer ohne jeden Handshake bleibt grau", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", key: "BbcdEfGh" }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: PEERLISTE }) } });
+  await e.runOnce();
+  assert.equal(e.tunnels.get("wg").status, "idle");
+  assert.equal(e.incidents.size, 0, "„noch nie gemeldet“ ist keine Störung");
+  await p.close();
+});
+
+test("Der Schlüssel sticht den Namen — eine Umbenennung bricht die Verknüpfung nicht", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", name: "WG-Schweiz", key: "AqujlFK4" }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: [{ ...PEERLISTE[0], name: "WG-Zuerich" }] }) } });
+  await e.runOnce();
+  assert.equal(e.tunnels.get("wg").peer.name, "WG-Zuerich", "gefunden wurde er über den Schlüssel");
+  assert.equal(e.tunnels.get("wg").status, "ok");
+  await p.close();
+});
+
+test("Einen Peer, den die Firewall nicht mehr meldet, sagt der Tunnel an", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", name: "WG-Weg", key: "ZZZZ" }, probe: { ip: "127.0.0.1", port: p.port }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: PEERLISTE }) } });
+  await e.runOnce();
+  const st = e.tunnels.get("wg");
+  assert.equal(st.peer, null);
+  assert.match(st.peerNote, /WG-Weg.*nicht mehr/);
+  assert.equal(st.status, "ok", "die Messung durch den Tunnel bleibt davon unberührt");
+  await p.close();
+});
+
+/* Lieber kein Treffer als der falsche: ein falscher Treffer meldete den
+   Handshake eines fremden Geräts als den dieser Strecke. */
+test("Ein mehrdeutiger Name ergibt keinen Treffer", () => {
+  const doppelt = [
+    { name: "WG", key: "A", iface: "wg0", handshake: 10 },
+    { name: "WG", key: "B", iface: "wg1", handshake: 900 }
+  ];
+  assert.equal(findePeer(doppelt, { host: "fw", name: "WG" }), null);
+  assert.equal(findePeer(doppelt, { host: "fw", name: "WG", iface: "wg1" })?.key, "B",
+    "mit Interface ist es eindeutig");
+  assert.equal(findePeer(doppelt, { host: "fw", name: "WG", key: "A" })?.key, "A");
+});
+
+/* Kommt durch den Tunnel eine Antwort, während der verknüpfte Peer seit
+   zehn Minuten schweigt, trägt eine andere Strecke als die verknüpfte.
+   Das ist keine Störung — aber es gehört gesagt. */
+test("Widersprechen sich Messung und Handshake, gibt es eine Notiz statt einer Störung", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitPeer({ peer: { host: "fw", key: "AqujlFK4" }, probe: { ip: "127.0.0.1", port: p.port }, timeoutPort: p.port }),
+    { collectors: { opnsense: async () => ({ peers: [{ ...PEERLISTE[0], handshake: 4000 }] }) } });
+  await e.runOnce();
+  const st = e.tunnels.get("wg");
+  assert.equal(st.status, "ok");
+  assert.match(st.note, /richtigen Peer/);
+  assert.equal([...e.incidents.values()].filter(i => i.kind === "tunnel").length, 0);
   await p.close();
 });

@@ -133,18 +133,31 @@ ist der Auffangkanal für alles, was keine Schnittstelle hat.
 | 1b | Verwaltung in der Oberfläche: Standorte, Systeme, Tunnel, Startseite, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
 | 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
 | 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** |
-| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | offen — ersetzt die Ersatzmessung durch den Tunnel |
+| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, Durchsatz, Peers und Handshake am Tunnel; Zustandstabelle, CARP und pfSense offen |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
 | 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | offen — bislang nur Erreichbarkeit |
 | 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
 
 ### Was in Stufe 1 bewusst anders gelöst ist
 
-**Tunnel ohne Firewall-Zugang.** Der WireGuard-Handshake steht erst mit Stufe 3
-zur Verfügung. Bis dahin misst der Leitstand *durch* den Tunnel: in
-`inventory.yaml` bekommt jeder Tunnel eine `probe`-Adresse im Transfernetz.
-Das braucht keinerlei Zugangsdaten und beantwortet die Frage, die zählt — trägt
-die Strecke gerade? Der Handshake wird später ergänzt, nicht ersetzt.
+**Tunnel: zwei Zeugen, nicht einer.** Der Leitstand misst *durch* den Tunnel —
+jeder Tunnel bekommt in `inventory.yaml` eine `probe`-Adresse im Transfernetz.
+Das braucht keinerlei Zugangsdaten und beantwortet die Frage, die zählt: trägt
+die Strecke gerade?
+
+Dazu darf ein Tunnel einen `peer` benennen — einen WireGuard-Peer auf einer
+Firewall, die der Leitstand ausliest. Der liefert Handshake-Alter und
+übertragene Menge. Beides zusammen ist mehr als jedes für sich: der Handshake
+sagt, wann die Strecke zuletzt *stand*, die Messung, ob gerade etwas
+hindurchkommt. Widersprechen sie sich — Antwort da, Handshake uralt —, dann
+zeigt die Verknüpfung auf den falschen Peer, und genau das schreibt der Dienst
+als Notiz an die Strecke, ohne die Ampel zu drehen.
+
+Zugeordnet wird über den **öffentlichen Schlüssel**, nicht über den Namen: der
+Schlüssel übersteht eine Umbenennung auf der Firewall. Ein Name greift nur als
+Rückfall und nur, wenn er eindeutig ist — lieber kein Treffer als der falsche,
+denn ein falscher meldete den Handshake eines fremden Geräts als den dieser
+Strecke.
 
 **Erreichbar, aber Abruf scheitert.** Ein System, das antwortet, dessen API-Zugang
 aber abgelehnt wird, geht auf Gelb statt still ohne Kennzahlen dazustehen. Ein

@@ -79,7 +79,7 @@ export function normalize(doc) {
     ...(s.short ? { short: normalizeKuerzel(s.short) } : {})
   }));
   const hosts = (doc.hosts || []).map(h => normalizeHost(h));
-  const tunnels = (doc.tunnels || []).map(t => ({ ...t, id: String(t.id) }));
+  const tunnels = (doc.tunnels || []).map(t => normalizeTunnel(t));
   const links = (doc.links || []).map(g => ({
     group: g.group,
     items: (g.items || []).map(i => ({ ...i }))
@@ -99,6 +99,36 @@ export function normalizeHost(h) {
   }
   host.checks = (host.checks && host.checks.length) ? host.checks : defaultChecks(host);
   return host;
+}
+
+/* ---------- Tunnel ----------
+   Ein Tunnel darf einen WireGuard-Peer benennen, den eine Firewall meldet:
+
+     peer: { host: fw-01, iface: wg0, name: WG-Schweiz, key: Aqujl… }
+
+   Der öffentliche Schlüssel ist die belastbare Kennung — er bleibt, wenn
+   der Peer auf der Firewall umbenannt wird. Name und Interface stehen
+   trotzdem dabei: als lesbare Beschriftung und als Rückfall für Bestände,
+   die von Hand gepflegt wurden und den Schlüssel nicht kennen.
+
+   Ein leerer Peer wird entfernt statt als null geführt — sonst stünde nach
+   jedem Lösen der Verknüpfung ein `peer: null` in der Datei. Ein Peer mit
+   Inhalt bleibt dagegen stehen, auch wenn er unvollständig ist: über den
+   soll sich die Prüfung beschweren, statt ihn stillschweigend fallen zu
+   lassen. Wer von Hand etwas Halbes einträgt, hat eine Meldung verdient
+   und keine Verknüpfung, die einfach nicht da ist. */
+export function normalizeTunnel(t) {
+  const o = { ...t, id: String(t.id) };
+  const p = o.peer;
+  const leer = !p || typeof p !== "object" || Array.isArray(p)
+    || !["host", "iface", "name", "key"].some(k => p[k]);
+  if (leer) delete o.peer;
+  else {
+    o.peer = {};
+    for (const k of ["host", "iface", "name", "key"]) if (p[k]) o.peer[k] = String(p[k]);
+  }
+  if (o.probe && !o.probe.ip) delete o.probe;
+  return o;
 }
 
 /* Aus url und ip die naheliegenden Prüfungen ableiten. */
@@ -143,7 +173,16 @@ export function validate(inv) {
   }
   for (const t of inv.tunnels) {
     if (!siteIds.has(t.a) || !siteIds.has(t.b)) errs.push(`Tunnel ${t.id}: Standort a oder b ist nicht angelegt.`);
-    if (!t.probe?.ip) errs.push(`Tunnel ${t.id}: probe.ip fehlt — ohne Gegenstelle im Tunnel lässt sich nichts messen.`);
+    if (t.peer) {
+      if (!t.peer.host) errs.push(`Tunnel ${t.id}: Beim Peer fehlt das System, das ihn meldet (peer.host).`);
+      else if (!hostIds.has(t.peer.host)) errs.push(`Tunnel ${t.id}: Der Peer soll von „${t.peer.host}“ gelesen werden — dieses System ist nicht angelegt.`);
+      if (!t.peer.key && !t.peer.name) errs.push(`Tunnel ${t.id}: Der Peer hat keine Kennung — es braucht den öffentlichen Schlüssel oder wenigstens den Namen.`);
+    }
+    /* Eines von beidem muss es sein: entweder wird durch den Tunnel
+       gemessen, oder die Firewall meldet den Handshake. Ohne beides gäbe
+       es zu dieser Strecke schlicht nichts zu sagen. */
+    if (!t.probe?.ip && !t.peer)
+      errs.push(`Tunnel ${t.id}: weder probe.ip noch ein verknüpfter Peer — so ließe sich nichts messen.`);
   }
   for (const g of inv.links) for (const i of g.items) {
     if (i.host && !hostIds.has(i.host)) errs.push(`Verknüpfung „${i.name}“: System „${i.host}“ ist nicht angelegt.`);
@@ -172,7 +211,7 @@ export function save(file, inv) {
     settings: inv.settings,
     sites: inv.sites,
     hosts: inv.hosts.map(stripDerived),
-    tunnels: inv.tunnels,
+    tunnels: inv.tunnels.map(normalizeTunnel),
     links: inv.links
   };
   const text = HEADER + YAML.stringify(out, { lineWidth: 0, defaultStringType: "PLAIN", singleQuote: false });

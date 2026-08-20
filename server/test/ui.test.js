@@ -342,3 +342,122 @@ links: []
   assert.match(seiten.cfg, /alle <span class="mono">42 s/, "das echte Intervall steht da");
   assert.match(seiten.dienste, /Warnung ab 21 Tagen/, "die echte Zertifikatsschwelle steht da");
 });
+
+/* ============================================================
+   Tunnel ↔ WireGuard-Peer
+
+   Der Zustand wird hier von Hand ergänzt, wo der Testserver ihn nicht
+   liefern kann: die Peers kämen von einer echten Firewall. Was hier
+   geprüft wird, ist ohnehin die Oberfläche — die ist eine reine Funktion
+   des Zustands, gleich woher der kommt.
+   ============================================================ */
+
+const PEERZUSTAND = [
+  { id: "fw/wg0/WG-Schweiz", name: "WG-Schweiz", key: "Aqujl", iface: "wg0", von: "fw", site: "rz",
+    device: "erlaubt: 0.0.0.0/0", status: "ok", handshake: 80, seit: "2026-08-20 14:15:56",
+    ip: "0.0.0.0/0", endpoint: "178.39.98.174:8909", rx: "1.1 GB", tx: "3.9 GB", tunnel: "wg-hq-rz" },
+  { id: "fw/wg1/laptop", name: "laptop", key: "Bbcd", iface: "wg1", von: "fw", site: "rz",
+    device: "erlaubt: 10.99.0.2/32", status: "idle", handshake: null, seit: null,
+    ip: "10.99.0.2/32", endpoint: "—", rx: null, tx: null, tunnel: null }
+];
+
+async function mitPeers(peer = { host: "fw", iface: "wg0", name: "WG-Schweiz", key: "Aqujl" }, gefunden = true) {
+  const zustand = await echterZustand();
+  zustand.peers = PEERZUSTAND;
+  Object.assign(zustand.tunnels[0], {
+    handshake: gefunden ? 80 : null,
+    rx: gefunden ? "1.1 GB" : null, tx: gefunden ? "3.9 GB" : null,
+    peer: peer && { ...peer, gefunden, endpoint: gefunden ? "178.39.98.174:8909" : null,
+      allowed: gefunden ? "0.0.0.0/0" : null, seit: gefunden ? "2026-08-20 14:15:56" : null,
+      keepalive: gefunden ? "10" : null, note: gefunden ? null : "Den Peer „WG-Schweiz“ meldet fw nicht mehr" }
+  });
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  return { sandbox, ziele, zustand };
+}
+
+test("Der verknüpfte Peer steht mit echtem Handshake in der Tunnelzeile", async () => {
+  const { sandbox, ziele } = await mitPeers();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "vpn";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.match(html, /1 min 20 s/, "das Handshake-Alter, nicht ein Strich");
+  assert.match(html, /1\.1 GB \/ 3\.9 GB/);
+  assert.ok(!/noch nicht zugeordnet|Stufe 3/.test(html), "der alte Vorbehalt gehört weg, sobald es zugeordnet ist");
+  /* Die Peertabelle zeigt umgekehrt, welcher Peer eine Strecke trägt. */
+  assert.match(html, /data-kind="tunnel" data-id="wg-hq-rz"/);
+});
+
+test("Ein hinterlegter, aber nicht gemeldeter Peer wird nicht als „nie“ ausgegeben", async () => {
+  const { sandbox, ziele } = await mitPeers(
+    { host: "fw", iface: "wg0", name: "WG-Schweiz", key: "Aqujl" }, false);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "vpn";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /nicht gemeldet/);
+
+  ui.state.inspector = { kind: "tunnel", id: "wg-hq-rz" };
+  ui.render();
+  assert.match(ziele.get("#overlays").innerHTML, /nicht mehr/);
+});
+
+test("Ohne Verknüpfung sagt die Oberfläche, wo man sie herstellt", async () => {
+  const { sandbox, ziele } = await mitPeers(null);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "vpn";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML, /Verwaltung → Tunnel/);
+});
+
+/* Das Formular ist der Ort, an dem die Verknüpfung entsteht — und der
+   Ort, an dem sie am ehesten verlorengeht. */
+test("Das Tunnelformular bietet die gemeldeten Peers zur Auswahl an", async () => {
+  const { sandbox, ziele } = await mitPeers();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+
+  assert.match(html, /data-field="peerRef"/);
+  assert.match(html, /<optgroup label="fw">/);
+  assert.match(html, /wg1 · laptop/, "auch die, die noch an keiner Strecke hängen");
+  assert.match(html, /value="fw\/wg0\/WG-Schweiz" selected/, "die bestehende Verknüpfung ist vorgewählt");
+});
+
+test("Gespeichert wird der Schlüssel, nicht nur der Name", async () => {
+  const { sandbox } = await mitPeers();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.deepEqual(p.peer, { host: "fw", iface: "wg0", name: "WG-Schweiz", key: "Aqujl" });
+  assert.deepEqual(p.probe, { ip: "10.255.255.3", port: 22 }, "und die Messung bleibt daneben stehen");
+});
+
+test("Die Verknüpfung zu lösen schickt ausdrücklich null", async () => {
+  const { sandbox } = await mitPeers();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz"); state.form.data.peerRef = "";`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.peer, null, "ein fehlendes Feld ließe die alte Verknüpfung stehen");
+});
+
+/* Meldet die Firewall gerade nicht, darf allein das Öffnen des Formulars
+   die Verknüpfung nicht wegwerfen. */
+test("Ein nicht gemeldeter Peer überlebt das Öffnen des Formulars", async () => {
+  const { sandbox, ziele } = await mitPeers(
+    { host: "fw", iface: "wg0", name: "WG-Anderswo", key: "Zzzz" }, false);
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  assert.match(ziele.get("#overlays").innerHTML, /zurzeit nicht gemeldet/);
+
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.peer.key, "Zzzz");
+});
+
+test("Ohne gemeldete Peers steht im Formular, was dafür fehlt", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  vm.runInContext(`openForm("tunnels", "new", null)`, sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.ok(!/data-field="peerRef"/.test(html), "eine leere Auswahlliste hilft niemandem");
+  assert.match(html, /API-Schlüssel/);
+});

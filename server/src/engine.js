@@ -83,6 +83,7 @@ export class Engine {
       ...this.inv.hosts.map(h => this.#checkHost(h)),
       ...this.inv.tunnels.map(t => this.#checkTunnel(t))
     ]);
+    this.#peerZuTunnel();
     this.#rollup();
     this.lastRun = new Date().toISOString();
     this.#saveState();
@@ -177,6 +178,10 @@ export class Engine {
   async #checkTunnel(t) {
     const st = this.tunnels.get(t.id);
     if (!st) return;
+    /* Ohne Gegenstelle im Transfernetz gibt es hier nichts zu messen — dann
+       hängt dieser Tunnel an einem verknüpften Peer, und sein Zustand
+       entsteht später aus dessen Handshake. */
+    if (!t.probe?.ip) { st.checks = []; return; }
     const s = this.inv.settings;
     const target = { ip: t.probe.ip };
     const checks = t.probe.port
@@ -207,6 +212,76 @@ export class Engine {
       title: status === "crit" ? `Tunnel ${t.iface} trägt nicht` : "Tunnel auffällig",
       rule: "tunnel.unreachable",
       detail: `Gemessen wird durch den Tunnel auf ${t.probe.ip}${t.probe.port ? ":" + t.probe.port : ""} (${t.net}).`,
+      kind: "tunnel"
+    });
+  }
+
+  /* ---------- Peer je Tunnel ----------
+     Läuft nach den Systemprüfungen, nicht in ihnen: der Handshake steht in
+     den Daten der Firewall, und die werden im selben Durchlauf erst geholt.
+     Wer ihn während der Tunnelprüfung liest, liest immer den der Vorrunde. */
+  #peerZuTunnel() {
+    for (const t of this.inv.tunnels) {
+      const st = this.tunnels.get(t.id);
+      if (!st) continue;
+      st.peer = null;
+      st.peerNote = null;
+      if (!t.peer) continue;
+
+      const liste = this.hosts.get(t.peer.host)?.extra?.peers;
+      const treffer = findePeer(liste, t.peer);
+      const bez = t.peer.name || String(t.peer.key || "").slice(0, 8);
+
+      if (treffer) st.peer = { ...treffer, host: t.peer.host };
+      else if (!Array.isArray(liste))
+        st.peerNote = `${t.peer.host} meldet keine WireGuard-Peers — fehlen dort die Zugangsdaten?`;
+      else
+        st.peerNote = `Den Peer „${bez}“ meldet ${t.peer.host} nicht mehr — dort umbenannt oder entfernt?`;
+
+      if (!t.probe?.ip) { this.#tunnelAusHandshake(t, st); continue; }
+
+      /* Durch den Tunnel kommt eine Antwort, der verknüpfte Peer schweigt
+         seit zehn Minuten: dann trägt eine andere Strecke als die
+         verknüpfte. Das ist keine Störung, sondern ein Hinweis auf eine
+         falsche Verknüpfung — es bleibt bei einer Notiz. */
+      if (st.status === "ok" && st.peer?.handshake > 600)
+        st.note = `trägt, aber der verknüpfte Peer „${st.peer.name}“ schweigt seit ${kurzeDauer(st.peer.handshake)} — zeigt die Verknüpfung auf den richtigen Peer?`;
+      else if (st.status === "ok" && st.peerNote) st.note = st.peerNote;
+    }
+  }
+
+  /* Ohne Messung durch den Tunnel ist der Handshake das einzige Zeugnis.
+     Er ist schwächer als eine Antwort von der Gegenstelle: er sagt, dass
+     die Strecke stand, nicht dass gerade etwas hindurchkommt. Deshalb wird
+     er zurückhaltend bewertet, und in der Notiz steht, woher er stammt. */
+  #tunnelAusHandshake(t, st) {
+    const p = st.peer;
+    st.ms = null;
+    st.checks = [];
+    let status, note;
+    if (!p) { status = "idle"; note = st.peerNote; }
+    else if (p.handshake == null) { status = "idle"; note = "Kein Handshake — diese Gegenstelle hat sich noch nie gemeldet."; }
+    else if (p.handshake <= 180) {
+      status = "ok"; note = null;
+      st.fails = 0;
+      /* Wann die Strecke zuletzt stand, weiß der Peer genauer als wir: sein
+         Handshake-Alter ist eine Messung, kein Zeitpunkt unseres Durchlaufs. */
+      st.lastSeen = new Date(Date.now() - p.handshake * 1000).toISOString();
+    } else if (p.handshake <= 600) {
+      status = "warn"; note = `Letzter Handshake vor ${kurzeDauer(p.handshake)} — laut ${p.host}.`;
+      st.lastSeen = new Date(Date.now() - p.handshake * 1000).toISOString();
+    } else {
+      status = "crit"; note = `Seit ${kurzeDauer(p.handshake)} kein Handshake — laut ${p.host}.`;
+      st.lastSeen = new Date(Date.now() - p.handshake * 1000).toISOString();
+    }
+
+    st.status = status;
+    st.note = note;
+    this.#reconcile(t.id, t.b, status, note, {
+      title: status === "crit" ? `Tunnel ${t.iface || t.id} trägt nicht` : "Tunnel auffällig",
+      rule: "tunnel.handshake",
+      detail: `Bewertet wird der WireGuard-Handshake des Peers „${t.peer.name || t.peer.key}“ auf ${t.peer.host}. `
+        + `Durch den Tunnel wird nicht gemessen — dafür fehlt eine Gegenstelle im Transfernetz (probe.ip).`,
       kind: "tunnel"
     });
   }
@@ -318,6 +393,41 @@ export class Engine {
       for (const [fp, i] of d.incidents || []) this.incidents.set(fp, i);
     } catch {}
   }
+}
+
+/* Welchen der gemeldeten Peers meint dieser Tunnel?
+
+   Zuerst über den öffentlichen Schlüssel — der bleibt, auch wenn der Peer
+   auf der Firewall umbenannt wird. Erst wenn keiner passt (etwa weil der
+   Bestand von Hand gepflegt wurde und den Schlüssel nicht kennt), über
+   Name und Interface. Ein Name allein ist zweideutig genug, dass er nur
+   greift, wenn er genau einmal vorkommt: lieber kein Treffer als der
+   falsche — ein falscher Treffer meldete den Handshake eines fremden
+   Geräts als den dieser Strecke. */
+export function findePeer(liste, wunsch) {
+  if (!Array.isArray(liste) || !liste.length || !wunsch) return null;
+  if (wunsch.key) {
+    const k = liste.find(p => p.key && p.key === wunsch.key);
+    if (k) return k;
+  }
+  if (wunsch.name) {
+    const gleichnamig = liste.filter(p => p.name === wunsch.name);
+    if (wunsch.iface) {
+      const genau = gleichnamig.filter(p => p.iface === wunsch.iface);
+      if (genau.length === 1) return genau[0];
+    }
+    if (gleichnamig.length === 1) return gleichnamig[0];
+  }
+  return null;
+}
+
+/* Kurz und deutsch: „4 min", „2 h 10 min", „3 T". */
+export function kurzeDauer(s) {
+  if (s == null) return "—";
+  if (s < 60) return `${Math.round(s)} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+  return `${Math.floor(s / 86400)} T`;
 }
 
 function rollupDetail(site, still, tunnels) {

@@ -119,11 +119,11 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Erreichbarkeit** | ICMP, TCP-Port, HTTP-Status — alle 15 s, drei Fehlschläge bis Rot |
 | **Antwortzeiten** | Verlauf je System, sichtbar als Sparkline |
 | **Zertifikate** | Restlaufzeit aller TLS-Ziele, Warnung ab 30 Tagen, Rot ab 14 |
-| **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang |
+| **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake des verknüpften Peers |
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version |
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
-| **OPNsense** | Fassung und offene Aktualisierungen, Arbeitsspeicher, Platte, Durchsatz je Schnittstelle, WireGuard-Peers mit Handshake-Alter |
+| **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, Durchsatz je Schnittstelle, WireGuard-Peers mit Handshake-Alter |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
@@ -366,10 +366,13 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
 3. Für Proxmox die Token hinterlegen und *Verbindung testen* — danach sind
    Compute-Ansicht und Speicherbelegung echt
 4. Tunnel eintragen (Gegenstelle im Transfernetz) und die Startseite befüllen
+5. Bei der Firewall den API-Schlüssel hinterlegen, dann am Tunnel den
+   **WireGuard-Peer** auswählen — danach steht in der Tunnelzeile der echte
+   Handshake statt eines Strichs
 
 **Am Werkzeug:**
 
-5. OPNsense-Sammler: Version, Zustandstabelle, CARP, HAProxy und
-   **WireGuard-Handshake** (ergänzt die Messung durch den Tunnel, ersetzt sie nicht)
-6. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
-7. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen
+6. OPNsense: Zustandstabelle, CARP-Rolle und HAProxy-Backends — und ein
+   Sammler für pfSense, für das es bislang gar keinen gibt
+7. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
+8. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen

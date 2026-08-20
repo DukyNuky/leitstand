@@ -161,7 +161,8 @@ export function createServer(opts = {}) {
           if (grund) return json(res, 400, { error: grund });
           body.short = Inv.normalizeKuerzel(body.short);
         }
-        const item = key === "hosts" ? Inv.normalizeHost(body) : body;
+        const item = key === "hosts" ? Inv.normalizeHost(body)
+          : key === "tunnels" ? Inv.normalizeTunnel(body) : body;
         commit({ ...inv, [key]: [...inv[key], item] });
         return json(res, 201, { ok: true, item: inv[key].at(-1) });
       }
@@ -181,7 +182,11 @@ export function createServer(opts = {}) {
             if (grund) return json(res, 400, { error: grund });
             merged.short = Inv.normalizeKuerzel(body.short);
           }
-          const item = key === "hosts" ? Inv.normalizeHost(stripEmptyChecks(merged)) : merged;
+          /* Der Tunnel wird hier mitgeräumt: löst man die Peer-Verknüpfung,
+             schickt die Oberfläche `peer: null` — das gehört entfernt und
+             nicht als null in die Bestandsdatei geschrieben. */
+          const item = key === "hosts" ? Inv.normalizeHost(stripEmptyChecks(merged))
+            : key === "tunnels" ? Inv.normalizeTunnel(merged) : merged;
           const list = inv[key].map((x, n) => (n === i ? item : x));
           commit({ ...inv, [key]: list });
           return json(res, 200, { ok: true, item: inv[key][i] });

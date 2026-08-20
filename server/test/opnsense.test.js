@@ -46,6 +46,16 @@ function opnsense(ab = {}) {
       /* total als Zeichenkette, used als Zahl — genau so kommt es an. */
       return send(200, { memory: { total: "2100785152", total_frmt: "2003", used: 1215534357, arc: "436057280" } });
 
+    if (p === "/api/diagnostics/system/system_time") {
+      if (ab.zeit === false) return send(404, { message: "not found" });
+      /* Genau die Felder, die eine echte 26.1 zurückgibt. */
+      return send(200, ab.zeit ?? {
+        uptime: "3 days, 20:56:43", datetime: "Thu Aug 20 15:43:31 CEST 2026",
+        boottime: "Sun Aug 16 18:46:48 CEST 2026", config: "Thu Aug 20 14:15:35 CEST 2026",
+        loadavg: "0.68, 0.41, 0.35"
+      });
+    }
+
     if (p === "/api/diagnostics/system/system_disk")
       /* Bei ZFS teilen sich viele Datensätze denselben Vorrat. */
       return send(200, { devices: ab.devices ?? [
@@ -269,5 +279,63 @@ test("Ohne Schlüssel wird gar nicht erst gefragt", async () => {
   try {
     const r = await collectOpnsense(host, null);
     assert.match(r.error, /Kein API-Key/);
+  } finally { srv.close(); }
+});
+
+/* ---------- Laufzeit und Last ----------
+   Beides steht nicht in system_information, obwohl der Pfadname das
+   nahelegt — die Vermutung hat sich am Gerät nicht bestätigt. Es kommt
+   aus system_time, und zwar englisch und als Zeichenkette. */
+
+test("Laufzeit und Last kommen aus system_time", async () => {
+  const { srv, host } = await an();
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.uptimeSeconds, 3 * 86400 + 20 * 3600 + 56 * 60 + 43);
+    assert.equal(r.uptime, "3 T 20 h", "auf Deutsch und ohne Sekundenkleinkram");
+    assert.equal(r.load, "0.68, 0.41, 0.35");
+    assert.equal(r.load1, 0.68);
+    assert.match(r.boot, /Aug 16/);
+  } finally { srv.close(); }
+});
+
+test("Fehlt system_time, bleibt es beim Strich statt bei einer Null", async () => {
+  const { srv, host } = await an({ zeit: false });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.uptime, null);
+    assert.equal(r.uptimeSeconds, null);
+    assert.equal(r.load, null);
+    assert.equal(r.load1, null);
+  } finally { srv.close(); }
+});
+
+test("Eine unbekannte Schreibweise der Laufzeit wird durchgereicht, nicht verbogen", async () => {
+  const { srv, host } = await an({ zeit: { uptime: "seit vorgestern", loadavg: "" } });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.uptimeSeconds, null, "was sich nicht lesen lässt, wird nicht geraten");
+    assert.equal(r.uptime, "seit vorgestern");
+    assert.equal(r.load, null);
+  } finally { srv.close(); }
+});
+
+test("Unter einem Tag steht die Laufzeit in Stunden", async () => {
+  const { srv, host } = await an({ zeit: { uptime: "4:05:11", loadavg: "1.5, 1.2, 1.0" } });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.uptime, "4 h 5 min");
+    assert.equal(r.load1, 1.5);
+  } finally { srv.close(); }
+});
+
+/* Der öffentliche Schlüssel ist die Kennung, an der später die Verknüpfung
+   mit einem Tunnel hängt — er muss durchkommen. */
+test("Jeder Peer trägt seinen öffentlichen Schlüssel", async () => {
+  const { srv, host } = await an();
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.peers.find(p => p.name === "WG-Schweiz").key, "Aqujl");
+    assert.equal(r.peers.find(p => p.name === "laptop").key, "Bbcd");
   } finally { srv.close(); }
 });

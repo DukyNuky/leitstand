@@ -72,12 +72,24 @@ function icmpState(inv, engine) {
    melden. Ein Peer hat selbst keinen Standort — er bekommt den des
    Geräts, das ihn kennt. */
 function peerViews(inv, engine) {
+  /* Welche Gegenstelle trägt eine angelegte Strecke? Der Tunnelzustand hat
+     die Zuordnung bereits aufgelöst — hier wird sie nur umgedreht, damit
+     die Peertabelle sie anzeigen kann, statt sie ein zweites Mal (und
+     womöglich anders) zu bestimmen. */
+  const streckeJePeer = new Map();
+  for (const t of inv.tunnels) {
+    const p = engine.tunnels.get(t.id)?.peer;
+    if (p) streckeJePeer.set(`${p.host}|${p.iface || ""}|${p.key || p.name}`, t.id);
+  }
+
   const out = [];
   for (const h of inv.hosts) {
     const liste = engine.hosts.get(h.id)?.extra?.peers;
     if (!Array.isArray(liste)) continue;
     for (const p of liste) {
       out.push({
+        key: p.key || null,
+        tunnel: streckeJePeer.get(`${h.id}|${p.iface || ""}|${p.key || p.name}`) || null,
         id: [h.id, p.iface || "wg", p.name].join("/"),
         name: p.name,
         device: p.allowed ? "erlaubt: " + p.allowed : (p.iface || ""),
@@ -177,18 +189,47 @@ function shortOf(s) {
   return String(s.id || "—").slice(0, 4).toUpperCase();
 }
 
+/* Ein Tunnel wird auf zwei Weisen beurteilt, und die Oberfläche soll
+   auseinanderhalten können, welche gerade zählt:
+
+   „probe"     — es wird durch den Tunnel auf die Gegenstelle gemessen.
+                 Das beantwortet die eigentliche Frage: trägt die Strecke?
+   „handshake" — es gibt keine Gegenstelle, dafür einen verknüpften Peer
+                 auf einer Firewall. Der Handshake sagt, dass die Strecke
+                 stand, nicht dass gerade etwas hindurchkommt.
+
+   Ist beides da, misst der Prober und der Peer liefert zusätzlich
+   Handshake und Mengen. */
 function tunnelView(t, st = {}) {
+  const p = st.peer || null;
   return {
     id: t.id, a: t.a, b: t.b,
-    iface: t.iface || "wg0",
+    iface: p?.iface || t.iface || "wg0",
     net: t.net || "—",
     status: uiStatus(st.status || "unknown"),
     rtt: st.ms ?? null,
     loss: null,                 /* braucht mehrere Pakete — kommt mit dem Dauerprober */
-    handshake: null,            /* erst mit dem Firewall-Zugang lesbar (Stufe 3) */
-    rx: null, tx: null,
+    quelle: t.probe?.ip ? "probe" : "handshake",
+    /* Handshake-Alter in Sekunden, sobald ein Peer verknüpft und gefunden
+       ist — sonst weiterhin null, nicht null-als-Zahl. */
+    handshake: p?.handshake ?? null,
+    rx: bytes(p?.rx), tx: bytes(p?.tx),
+    peer: t.peer ? {
+      host: t.peer.host,
+      name: p?.name || t.peer.name || null,
+      key: p?.key || t.peer.key || null,
+      iface: p?.iface || t.peer.iface || null,
+      endpoint: p?.endpoint || null,
+      allowed: p?.allowed || null,
+      seit: p?.seit || null,
+      keepalive: p?.keepalive || null,
+      gefunden: !!p,
+      note: st.peerNote || null
+    } : null,
     mtu: t.mtu || null, keepalive: t.keepalive || null,
     probe: t.probe?.ip || null,
+    /* Damit das Formular den Port beim Bearbeiten nicht verliert. */
+    probePort: t.probe?.port || null,
     hist: (st.hist || []).slice(-24),
     lastSeen: st.lastSeen || null,
     note: st.note || null

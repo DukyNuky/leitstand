@@ -127,15 +127,28 @@ hosts:
 # ============================================================
 #  Tunnel
 #
-#  Stufe 1 liest den WireGuard-Status noch nicht aus der Firewall.
-#  Stattdessen wird DURCH den Tunnel geprüft: `probe` zeigt auf die
-#  Gegenstelle im Transfernetz. Das misst, was zählt — trägt die Strecke
-#  gerade? — und braucht keinerlei Zugangsdaten.
-#  Ohne `probe.port` wird nur ICMP geprüft.
+#  Eine Strecke lässt sich auf zwei Weisen beurteilen:
+#
+#  `probe`  — es wird DURCH den Tunnel auf die Gegenstelle im Transfernetz
+#             geprüft. Das misst, was zählt (trägt die Strecke gerade?) und
+#             braucht keinerlei Zugangsdaten. Ohne `probe.port` nur ICMP.
+#
+#  `peer`   — der WireGuard-Peer auf einer Firewall, die der Leitstand
+#             ausliest. Daraus kommen Handshake-Alter und übertragene
+#             Menge. Der Handshake sagt etwas anderes als die Messung:
+#             wann die Strecke zuletzt STAND, nicht ob gerade etwas
+#             hindurchkommt.
+#
+#  Eines von beidem muss es sein, am besten beides. Ausgewählt wird der
+#  Peer in der Verwaltung aus dem, was die Firewalls tatsächlich melden —
+#  von Hand geht es auch: `host` ist das System, das ihn meldet, `key` der
+#  öffentliche Schlüssel (überlebt eine Umbenennung), `name` und `iface`
+#  sind Beschriftung und Rückfall.
 # ============================================================
 tunnels:
   - { id: wg-hq-rz, a: hq, b: rz, iface: wg0, net: 10.99.0.0/30,
-      probe: { ip: 10.99.0.2, port: 22 } }
+      probe: { ip: 10.99.0.2, port: 22 },
+      peer: { host: fw-01, iface: wg0, name: WG-Zweitstandort } }
 
 # ============================================================
 #  Startseite

@@ -234,16 +234,44 @@ function platte(out, d) {
     .map(x => ({ name: x.mountpoint, used: zahl(x.used_pct), device: x.device || null }));
 }
 
-/* ---------- Laufzeit ----------
-   In system_information steht sie nicht; system_time führt sie je nach
-   Fassung unter wechselnden Namen. Findet sich nichts, bleibt es beim
-   Strich — geraten wird hier nicht. */
+/* ---------- Laufzeit und Last ----------
+   In system_information steht beides nicht — das war eine Vermutung, die
+   sich am Gerät nicht bestätigt hat. system_time liefert es:
+
+     uptime:  "3 days, 20:56:43"      loadavg: "0.68, 0.41, 0.35"
+
+   Die Laufzeit kommt englisch und wird übersetzt; passt das Muster nicht,
+   bleibt der Text stehen, wie er kam. Erfunden wird nichts.
+
+   Die Last bleibt eine Anzeige ohne Ampel: ohne die Zahl der Kerne sagt
+   0,68 nichts darüber, ob das Gerät kämpft oder sich langweilt. */
 function laufzeit(out, sys, zeit) {
   out.name = sys?.name || null;
-  const roh = zeit?.uptime ?? zeit?.uptime_frmt ?? zeit?.["uptime"] ?? null;
-  out.uptime = roh == null ? null : (typeof roh === "number" ? tage(roh) : String(roh));
+  const roh = zeit?.uptime ?? zeit?.uptime_frmt ?? null;
+  out.uptimeText = roh == null ? null : String(roh);
+  out.uptimeSeconds = sekunden(out.uptimeText);
+  out.uptime = out.uptimeSeconds != null ? dauer(out.uptimeSeconds) : out.uptimeText;
+  out.boot = zeit?.boottime || null;
+
   const last = zeit?.loadavg ?? sys?.loadavg ?? null;
-  out.load = last ? String(last) : null;
+  out.load = last == null ? null : String(last).trim() || null;
+  const erste = out.load ? Number(String(out.load).split(/[,\s]+/)[0]) : NaN;
+  out.load1 = Number.isFinite(erste) ? erste : null;
+}
+
+/* „3 days, 20:56:43" ebenso wie „1 day, 4:05" oder „20:56:43". */
+function sekunden(text) {
+  if (!text) return null;
+  const m = /^(?:(\d+)\s*(?:days?|Tage?|T)[,\s]+)?(\d+):(\d{2})(?::(\d{2}))?/.exec(String(text).trim());
+  if (!m) return null;
+  return (+(m[1] || 0)) * 86400 + (+m[2]) * 3600 + (+m[3]) * 60 + (+(m[4] || 0));
+}
+
+function dauer(s) {
+  const t = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), min = Math.floor((s % 3600) / 60);
+  if (t) return `${t} T ${h} h`;
+  if (h) return `${h} h ${min} min`;
+  return `${min} min`;
 }
 
 /* ---------- Durchsatz ---------- */
@@ -315,6 +343,11 @@ function wireguard(out, d, status) {
     const alter = zahl(p["latest-handshake-age"]);
     return {
       name: p.name || p["public-key"]?.slice(0, 8) || "—",
+      /* Der öffentliche Schlüssel ist die einzige Kennung, die eine
+         Umbenennung auf der Firewall übersteht — daran hängt später die
+         Verknüpfung mit einem Tunnel. Er ist kein Geheimnis: das ganze
+         Verfahren beruht darauf, dass er weitergegeben wird. */
+      key: p["public-key"] || null,
       iface: p.if || null,
       endpoint: p.endpoint || null,
       allowed: p["allowed-ips"] || null,
@@ -354,4 +387,3 @@ const zahl = v => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
-const tage = s => `${Math.floor(s / 86400)} T`;

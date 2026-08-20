@@ -47,8 +47,46 @@ test("Verknüpfung auf ein unbekanntes System wird abgelehnt", () => {
   assert.throws(() => Inv.normalize({ ...minimal, links: [{ group: "G", items: [{ name: "X", host: "weg" }] }] }), /ist nicht angelegt/);
 });
 
-test("Tunnel ohne Gegenstelle wird abgelehnt", () => {
-  assert.throws(() => Inv.normalize({ ...minimal, tunnels: [{ id: "t", a: "hq", b: "hq", probe: {} }] }), /probe\.ip fehlt/);
+test("Tunnel ohne Gegenstelle und ohne Peer wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({ ...minimal, tunnels: [{ id: "t", a: "hq", b: "hq", probe: {} }] }),
+    /weder probe\.ip noch ein verknüpfter Peer/);
+});
+
+/* ---------- Tunnel ↔ WireGuard-Peer ---------- */
+
+test("Ein verknüpfter Peer ersetzt die Gegenstelle im Transfernetz", () => {
+  const inv = Inv.normalize({
+    ...minimal,
+    tunnels: [{ id: "t", a: "hq", b: "hq", peer: { host: "pve-1", name: "WG-Schweiz", key: "Aqujl" } }]
+  });
+  assert.deepEqual(inv.tunnels[0].peer, { host: "pve-1", name: "WG-Schweiz", key: "Aqujl" });
+  assert.equal(inv.tunnels[0].probe, undefined);
+});
+
+test("Ein Peer auf einem nicht angelegten System wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({
+    ...minimal,
+    tunnels: [{ id: "t", a: "hq", b: "hq", probe: { ip: "10.99.0.2" }, peer: { host: "gibtsnicht", name: "X" } }]
+  }), /„gibtsnicht“ gelesen werden/);
+});
+
+test("Ein Peer ohne jede Kennung wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({
+    ...minimal,
+    tunnels: [{ id: "t", a: "hq", b: "hq", probe: { ip: "10.99.0.2" }, peer: { host: "pve-1", iface: "wg0" } }]
+  }), /keine Kennung/);
+});
+
+/* Die Oberfläche schickt beim Lösen der Verknüpfung ausdrücklich null.
+   Das darf nicht als `peer: null` in der Bestandsdatei landen — sonst
+   stünde nach jedem Bearbeiten mehr in der Datei statt weniger. */
+test("Eine gelöste Verknüpfung verschwindet aus der Datei", () => {
+  const file = tmp();
+  const inv = Inv.normalize({ ...minimal, tunnels: [{ id: "t", a: "hq", b: "hq", probe: { ip: "10.99.0.2" } }] });
+  inv.tunnels[0].peer = null;
+  const text = Inv.save(file, inv);
+  assert.ok(!/peer/.test(text), "der leere Peer steht noch in der Datei:\n" + text);
+  assert.equal(Inv.load(file).tunnels[0].peer, undefined);
 });
 
 test("Speichern und erneut laden ergibt denselben Bestand", () => {

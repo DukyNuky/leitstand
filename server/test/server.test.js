@@ -279,3 +279,38 @@ test("Ändern ohne Kürzel im Rumpf lässt das alte in Ruhe", async () => {
   const schlecht = await call("PUT", "/api/admin/sites/hq", { short: "XY" });
   assert.equal(schlecht.status, 400, "wird es aber mitgeschickt, gilt die Regel");
 });
+
+/* ---------- Tunnel ↔ WireGuard-Peer ---------- */
+
+test("Ein Tunnel lässt sich mit einem Peer anlegen und wieder lösen", async () => {
+  await call("POST", "/api/admin/hosts", { id: "fw", type: "opnsense", site: "hq", ip: "127.0.0.1" });
+  const neu = await call("POST", "/api/admin/tunnels", {
+    id: "wg", a: "hq", b: "rz", iface: "wg0",
+    probe: { ip: "127.0.0.1", port: openPort },
+    peer: { host: "fw", iface: "wg0", name: "WG-Schweiz", key: "Aqujl" }
+  });
+  assert.equal(neu.status, 201);
+  assert.deepEqual(neu.body.item.peer, { host: "fw", iface: "wg0", name: "WG-Schweiz", key: "Aqujl" });
+
+  /* Die Oberfläche schickt beim Lösen ausdrücklich null — das darf nicht
+     als `peer: null` in der Bestandsdatei stehenbleiben. */
+  const geloest = await call("PUT", "/api/admin/tunnels/wg", { peer: null });
+  assert.equal(geloest.status, 200);
+  assert.equal(geloest.body.item.peer, undefined);
+  assert.ok(!/peer/.test(fs.readFileSync(path.join(dir, "inventory.yaml"), "utf8")),
+    "der leere Peer steht noch in der Datei");
+});
+
+test("Ein Peer auf einem nicht angelegten System wird abgewiesen", async () => {
+  const r = await call("POST", "/api/admin/tunnels", {
+    id: "wg2", a: "hq", b: "rz", probe: { ip: "127.0.0.1" }, peer: { host: "gibtsnicht", name: "X" }
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /nicht angelegt/);
+});
+
+test("Ein Tunnel ohne Gegenstelle und ohne Peer wird abgewiesen", async () => {
+  const r = await call("POST", "/api/admin/tunnels", { id: "wg3", a: "hq", b: "rz" });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /weder probe\.ip noch ein verknüpfter Peer/);
+});
