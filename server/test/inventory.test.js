@@ -85,10 +85,37 @@ test("Kaputtes YAML nennt den Grund", () => {
   assert.throws(() => Inv.load(file), /YAML lässt sich nicht lesen/);
 });
 
-test("Der mitgelieferte Bestand ist gültig", () => {
+test("Der mitgelieferte Beispielbestand ist gültig", () => {
   const inv = Inv.load(new URL("../inventory.yaml", import.meta.url).pathname);
-  assert.ok(inv.hosts.length >= 20);
-  assert.ok(inv.tunnels.every(t => t.probe?.ip));
+  assert.ok(inv.sites.length >= 1, "mindestens ein Standort");
+  assert.ok(inv.tunnels.every(t => t.probe?.ip), "jeder Tunnel hat eine Gegenstelle");
+  assert.ok(inv.hosts.every(h => h.ip || h.url), "jedes System hat etwas zu prüfen");
+});
+
+/* Der Bestand ist eine Vorlage: er soll jeden Systemtyp einmal zeigen,
+   damit man beim Anpassen sieht, wie ein Eintrag aussieht — und nicht mehr
+   als einmal, damit niemand fremde Beispielgeräte überwacht. */
+test("Der Beispielbestand zeigt jeden Typ genau einmal", () => {
+  const inv = Inv.load(new URL("../inventory.yaml", import.meta.url).pathname);
+  const proTyp = new Map();
+  for (const h of inv.hosts) proTyp.set(h.type, (proTyp.get(h.type) || 0) + 1);
+
+  for (const typ of Object.keys(Inv.TYPES)) {
+    if (typ === "other") continue;                 /* „Sonstiges" kommt mehrfach vor: Leitstand und Labor */
+    assert.equal(proTyp.get(typ), 1, `Typ ${typ} sollte genau ein Beispiel haben`);
+  }
+  assert.ok(inv.hosts.some(h => h.monitor === false), "ein Beispiel für ein unüberwachtes System");
+  assert.ok(inv.hosts.some(h => (h.checks || []).some(c => c.kind === "dns")), "ein Beispiel für eigene Prüfungen");
+});
+
+/* Die Selbstprüfung ist das einzige Beispiel, das wirklich antwortet.
+   Sie muss auf den eigenen Dienst zeigen, sonst ist sie eine Attrappe. */
+test("Der Beispielbestand prüft den Leitstand selbst", () => {
+  const inv = Inv.load(new URL("../inventory.yaml", import.meta.url).pathname);
+  const selbst = inv.hosts.find(h => h.id === "leitstand");
+  assert.ok(selbst, "ein System namens leitstand");
+  assert.match(selbst.url, /127\.0\.0\.1:8080/);
+  assert.equal(selbst.monitor, true);
 });
 
 test("Prüfziel wird notfalls aus der Oberflächen-URL gezogen", async () => {
@@ -125,7 +152,9 @@ test("Mitgelieferte Vorlage wird als Startbestand übernommen", () => {
   const vorlage = new URL("../inventory.yaml", import.meta.url).pathname;
   const r = Inv.ensure(file, vorlage);
   assert.equal(r.seeded, true);
-  assert.ok(Inv.load(file).hosts.length > 5);
+  const inv = Inv.load(file);
+  assert.ok(inv.hosts.length > 1, "die Beispiele kommen mit");
+  assert.ok(inv.hosts.some(h => h.id === "leitstand"), "samt Selbstprüfung");
 });
 
 test("Unbrauchbare Vorlage kippt den Start nicht", () => {

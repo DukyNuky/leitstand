@@ -31,7 +31,7 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 | Endpunkte | `/api2/json/status/datastore-usage`, `/api2/json/nodes/localhost/tasks?running=0`, `/api2/json/admin/datastore/{store}/snapshots` |
 | Kennzahlen | Belegung je Datastore, letzter erfolgreicher Lauf, fehlgeschlagene Verify-/GC-/Sync-Aufträge, Alter der jüngsten Sicherung |
 | Ampel | kein Erfolg in 26 h → rot · fehlgeschlagener Verify → rot · Belegung > 85 % → gelb |
-| Meldet per Mail | Notification-Matcher für `verify`, `garbage collection`, `sync` — der Regelfall für die Störung im Entwurf |
+| Meldet per Mail | Notification-Matcher für `verify`, `garbage collection`, `sync` — der Regelfall für eine Störung aus dem Postfach (Stufe 4) |
 
 ## Proxmox Mail Gateway
 

@@ -49,6 +49,15 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
+      # Wann wurde festgeschrieben, wann gebaut? Beides wandert ins Abbild und
+      # steht danach in der Oberfläche unten links — bei automatischem Redeploy
+      # ist das die einzige verlässliche Antwort auf „läuft schon der neue Stand?"
+      - id: herkunft
+        run: |
+          echo "committed=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "require('./server/package.json').version")" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -56,5 +65,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            LEITSTAND_COMMIT=${{ github.sha }}
+            LEITSTAND_BRANCH=${{ github.ref_name }}
+            LEITSTAND_COMMITTED=${{ steps.herkunft.outputs.committed }}
+            LEITSTAND_BUILT=${{ steps.herkunft.outputs.built }}
+            LEITSTAND_VERSION=${{ steps.herkunft.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

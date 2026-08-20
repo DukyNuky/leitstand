@@ -1,13 +1,15 @@
 /* Aus Bestand + Messwerten die Form bauen, die die Oberfläche erwartet.
 
-   Bewusst dieselben Feldnamen wie im Entwurf (mockup/assets/data.js):
-   dadurch bleibt die Oberfläche unverändert, egal ob sie aus der
-   Beispieldatei oder aus dieser Antwort gespeist wird. Was Stufe 1
-   nicht wissen kann, steht ausdrücklich auf null — nie auf Fantasie. */
+   Diese Antwort ist die einzige Quelle der Oberfläche (ui/assets/app.js) —
+   es gibt keinen Beispielbestand mehr, auf den sie zurückfallen könnte.
+   Was Stufe 1 nicht wissen kann, steht deshalb ausdrücklich auf null und
+   wird als Strich angezeigt — nie als Fantasiewert. */
 
 import { TYPES } from "./inventory.js";
+import { buildInfo } from "./version.js";
 
 const uiStatus = s => (s === "unknown" ? "idle" : s);
+const STARTED = new Date().toISOString();
 
 export function buildState(engine, secrets) {
   const inv = engine.inv;
@@ -19,7 +21,24 @@ export function buildState(engine, secrets) {
       live: true,
       lastRun: engine.lastRun,
       interval: inv.settings.interval,
-      counts: { hosts: hosts.length, sites: inv.sites.length, tunnels: inv.tunnels.length },
+      counts: {
+        hosts: hosts.length, sites: inv.sites.length, tunnels: inv.tunnels.length,
+        monitored: hosts.filter(h => h.monitored).length
+      },
+      /* Die Einstellungen-Ansicht zeigt damit den tatsächlichen Stand statt
+         einer abgeschriebenen Liste. Schwellwerte, die hier nicht stehen,
+         gibt es nicht — sie können also auch nicht behauptet werden. */
+      settings: { ...inv.settings },
+      runtime: {
+        started: STARTED,
+        node: process.version,
+        icmp: icmpState(inv, engine),
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+        /* Welcher Stand hier läuft. Die Oberfläche vergleicht das bei jedem
+           Zustand mit dem, was sie beim Laden bekommen hat — wird nach einem
+           Redeploy neu ausgeliefert, merkt sie es und bietet Neuladen an. */
+        build: buildInfo()
+      },
       generated: new Date().toISOString()
     },
     sites: inv.sites.map(s => siteView(s, hosts, inv, engine)),
@@ -32,6 +51,20 @@ export function buildState(engine, secrets) {
     /* Stufe 1 kennt diese Bereiche noch nicht — leer statt erfunden. */
     peers: [], haproxy: [], backups: [], mails: [], mailrules: [], routes: []
   };
+}
+
+/* ICMP ist die Prüfung, die am ehesten still ausfällt: im Container fehlt
+   `ping` oder die Fähigkeit NET_RAW. Dann wird übersprungen statt gemeldet —
+   und genau das gehört sichtbar gemacht, sonst hält man TCP-Grün für
+   vollständige Erreichbarkeit. */
+function icmpState(inv, engine) {
+  if (!inv.settings.icmp) return { configured: false, working: null, note: "in den Schwellwerten abgeschaltet" };
+  const alle = [...engine.hosts.values()].flatMap(st => st.checks || []).filter(c => c.kind === "icmp");
+  if (!alle.length) return { configured: true, working: null, note: "noch keine ICMP-Prüfung gelaufen" };
+  const skipped = alle.filter(c => c.skipped);
+  if (skipped.length === alle.length)
+    return { configured: true, working: false, note: skipped[0].detail || "wird übersprungen" };
+  return { configured: true, working: true, note: `${alle.length - skipped.length} von ${alle.length} Prüfungen laufen` };
 }
 
 function hostView(h, st = {}) {

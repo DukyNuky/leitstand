@@ -2,6 +2,7 @@
 
    Endpunkte
      GET    /api/state            aktueller Zustand für die Oberfläche
+     GET    /api/version          welche Fassung hier läuft (Commit, Zeitpunkt)
      GET    /api/stream           dasselbe als Server-Sent-Events
      POST   /api/incidents/:id/ack        { on: true|false }
      POST   /api/hosts/:id/silence        { minutes: 120 }
@@ -27,15 +28,17 @@ import { Engine } from "./engine.js";
 import { buildState } from "./api.js";
 import { makeCollectors, TESTERS } from "./collectors/proxmox.js";
 import { runCheck } from "./probe.js";
+import { buildInfo } from "./version.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const startedAt = new Date().toISOString();
 const ROOT = path.resolve(here, "..");
 /* Die Oberfläche liegt im Abbild neben dem Programm, im Arbeitsbaum eine
    Ebene darüber. LEITSTAND_UI schlägt beides. */
 const UI = path.resolve(
   process.env.LEITSTAND_UI ||
-  [path.join(ROOT, "mockup"), path.resolve(ROOT, "..", "mockup")].find(p => fs.existsSync(p)) ||
-  path.resolve(ROOT, "..", "mockup")
+  [path.join(ROOT, "ui"), path.resolve(ROOT, "..", "ui")].find(p => fs.existsSync(p)) ||
+  path.resolve(ROOT, "..", "ui")
 );
 
 const MIME = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -100,6 +103,11 @@ export function createServer(opts = {}) {
     const m = req.method;
 
     if (p === "/api/state" && m === "GET") return json(res, 200, buildState(engine, secrets));
+
+    /* Klein und ohne Messwerte — zum Nachsehen per curl und für den
+       Abgleich nach einem Redeploy, ohne den ganzen Zustand zu holen. */
+    if (p === "/api/version" && m === "GET")
+      return json(res, 200, { ...buildInfo(), started: startedAt, uptimeSeconds: Math.round(process.uptime()) });
 
     if (p === "/api/stream" && m === "GET") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });

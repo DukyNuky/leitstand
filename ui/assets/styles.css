@@ -413,6 +413,53 @@ pre.raw {
   font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
   color: var(--warn); background: var(--warn-bg); padding: 2px 7px; border-radius: 999px;
 }
+
+/* ---------- Was noch nicht angebunden ist ----------
+   Ein Bereich ohne Messwerte muss sich vom Rest unterscheiden, ohne wie ein
+   Fehler auszusehen: gedämpfte Beispieldaten, quergestreifter Rand, und
+   darunter ein Satz, der sagt, was fehlt. */
+.panel--example { border-style: dashed; }
+.panel--example .panel-body, .panel--example .tablewrap { opacity: .62; }
+.panel--example .panel-head { opacity: 1; }
+.panel-note {
+  padding: 10px 14px; border-top: 1px solid var(--line);
+  font-size: 12px; line-height: 1.65; color: var(--faint);
+}
+.panel--hello { border-color: var(--accent); }
+.panel--offline { border-color: var(--crit); }
+
+/* Der Zustandsstrom hängt: die Werte stehen noch da, sind aber alt. */
+.stalebar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 18px; font-size: 12.5px;
+  color: var(--warn); background: var(--warn-bg);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---------- Welche Fassung läuft ----------
+   Unten in der Leiste, dauerhaft sichtbar: bei automatischem Redeploy ist das
+   die Angabe, nach der man am häufigsten sucht. Ist im Dienst inzwischen ein
+   neuerer Stand, wechselt sie die Farbe — und oben kommt ein Streifen dazu. */
+.buildline {
+  display: block; width: 100%; text-align: left;
+  font-family: var(--f-mono); font-size: 10.5px; line-height: 1.4;
+  color: var(--faint); background: none; border: 0; padding: 2px 0 0;
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.buildline:hover { color: var(--dim); }
+.buildline[data-state="arbeitsbaum"]::before { content: "◆ "; color: var(--accent); }
+.buildline[data-state="abbild"]::before { content: "● "; }
+.buildline[data-state="dateistand"]::before { content: "◇ "; }
+.buildline[data-state="unbekannt"]::before { content: "○ "; }
+.buildline[data-state="veraltet"] { color: var(--info); }
+.buildline[data-state="veraltet"]::before { content: "▲ "; }
+
+.buildbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 18px; font-size: 12.5px;
+  color: var(--info); background: var(--info-bg);
+  border-bottom: 1px solid var(--line);
+}
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }

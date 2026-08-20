@@ -1,16 +1,28 @@
 # ============================================================
 #  Leitstand — Bestand
 #
-#  Diese Datei ist die einzige, die du pflegst. Alles andere
-#  leitet sich daraus ab: Ampeln, Startseite, Störungen.
+#  Diese Datei ist die einzige, die gepflegt wird. Alles andere leitet
+#  sich daraus ab: Ampeln, Startseite, Störungen. Pflegen geht in der
+#  Oberfläche unter „Verwaltung" oder von Hand — nach einer Änderung von
+#  Hand: Verwaltung → Bestand neu einlesen.
 #
-#  ACHTUNG: Die Werte unten sind aus der Beschreibung geraten.
-#  Hostnamen, IPs und Netze anpassen, bevor es losgeht.
+#  ────────────────────────────────────────────────────────────
+#  DIES IST EIN BEISPIELBESTAND.
+#
+#  Er enthält je EIN Beispiel pro Systemtyp und pro Funktion, damit man
+#  sieht, wie ein Eintrag aussieht. Die Adressen zeigen ins Leere
+#  (Dokumentationsnetz 10.x) — bis sie durch echte ersetzt sind, stehen
+#  diese Systeme auf Rot. Das ist gewollt: eine Überwachung, die für ein
+#  nicht vorhandenes Gerät Grün zeigt, wäre wertlos.
+#
+#  Erster Schritt: Beispiele löschen oder auf die eigenen Adressen
+#  ziehen. Einzig `leitstand` unten trifft zu — das ist dieser Dienst.
+#  ────────────────────────────────────────────────────────────
 #
 #  Prüfungen werden automatisch aus `url` und `ip` abgeleitet:
 #    url: https://host:8006  ->  TCP 8006 + TLS-Restlaufzeit
 #    ip:  10.10.1.11         ->  ICMP (sofern ping vorhanden)
-#  Wer das nicht will, setzt `checks:` ausdrücklich.
+#  Wer das nicht will, setzt `checks:` ausdrücklich — siehe adguard-hq-01.
 # ============================================================
 
 settings:
@@ -25,119 +37,125 @@ settings:
   listen: 8080
   bind: 0.0.0.0
 
+# ============================================================
+#  Standorte — mindestens einer muss angelegt sein.
+#  `primary: true` markiert den Hauptstandort; er steht in der
+#  Topologie in der Mitte.
+# ============================================================
 sites:
-  - { id: hq,  name: HQ Zuhause,       place: Köln,              primary: true, isp: "Vodafone Kabel 1000/50" }
-  - { id: rz,  name: RZ Falkenstein,   place: "Hetzner AX41",                   isp: "Hetzner Online" }
-  - { id: elt, name: Standort Eltern,  place: Bergisch Gladbach,                isp: "Telekom VDSL 250/40" }
-  - { id: bue, name: Büro Aachen,      place: Aachen,                           isp: "NetAachen Glas 500/500" }
-  - { id: fh,  name: Ferienhaus Eifel, place: Monschau,                         isp: "Telekom DSL 50/10" }
+  - { id: hq, name: Hauptstandort, short: HQ, place: "", primary: true, isp: "" }
+  - { id: rz, name: Zweitstandort,  short: RZ, place: "", isp: "" }
 
+# ============================================================
+#  Systeme — je ein Beispiel pro Typ.
+#
+#  Typen mit Sammler (Kennzahlen über die API, Zugangsdaten in der
+#  Verwaltung hinterlegen):  pve · pbs · pmg
+#  Alle übrigen werden vorerst nur auf Erreichbarkeit geprüft.
+# ============================================================
 hosts:
+  # ---- Der Leitstand selbst -----------------------------------------------
+  # Das einzige Beispiel, das wirklich antwortet: die Selbstprüfung. Zeigt,
+  # wie eine grüne Ampel aussieht, und bleibt auch sinnvoll, wenn alle
+  # anderen Beispiele gelöscht sind.
+  - { id: leitstand, type: other, site: hq, ip: 127.0.0.1, url: "http://127.0.0.1:8080",
+      role: "Leitstand — dieser Dienst" }
+
   # ---- Virtualisierung ----------------------------------------------------
-  - { id: pve-hq-01,  type: pve, site: hq,  ip: 10.10.1.11, url: "https://10.10.1.11:8006",  role: "Cluster-Node · Ryzen 9 5950X" }
-  - { id: pve-hq-02,  type: pve, site: hq,  ip: 10.10.1.12, url: "https://10.10.1.12:8006",  role: "Cluster-Node · Dell R730" }
-  - { id: pve-hq-03,  type: pve, site: hq,  ip: 10.10.1.13, url: "https://10.10.1.13:8006",  role: "Cluster-Node · Intel NUC 13" }
-  - { id: pve-rz-01,  type: pve, site: rz,  ip: 10.30.1.10, url: "https://10.30.1.10:8006",  role: "Standalone · Hetzner AX41-NVMe" }
-  - { id: pve-elt-01, type: pve, site: elt, ip: 10.40.1.10, url: "https://10.40.1.10:8006",  role: "Standalone · HP EliteDesk 800" }
-  - { id: pve-bue-01, type: pve, site: bue, ip: 10.50.1.10, url: "https://10.50.1.10:8006",  role: "Standalone · Fujitsu TX1330" }
+  # Proxmox VE liefert mit hinterlegtem Token CPU, RAM, Speicher, VMs/LXC,
+  # Cluster-Quorum und Version. Die Kennung muss dem Knotennamen im Cluster
+  # entsprechen. Token anlegen: Datacenter → Permissions → API Tokens,
+  # Rolle PVEAuditor auf / mit Vererbung. Nur lesend.
+  - { id: pve-01, type: pve, site: hq, ip: 10.10.1.11, url: "https://10.10.1.11:8006",
+      role: "Proxmox VE · Cluster-Node" }
 
-  # ---- Firewalls ----------------------------------------------------------
-  - { id: fw-hq-01,  type: opnsense, site: hq,  ip: 10.10.0.1, url: "https://10.10.0.1", role: "OPNsense · CARP MASTER · HAProxy" }
-  - { id: fw-hq-02,  type: opnsense, site: hq,  ip: 10.10.0.2, url: "https://10.10.0.2", role: "OPNsense · CARP BACKUP" }
-  - { id: fw-rz-01,  type: opnsense, site: rz,  ip: 10.30.0.1, url: "https://10.30.0.1", role: "OPNsense · Standalone · HAProxy" }
-  - { id: fw-elt-01, type: opnsense, site: elt, ip: 10.40.0.1, url: "https://10.40.0.1", role: "OPNsense · Standalone" }
-  - { id: pf-bue-01, type: pfsense,  site: bue, ip: 10.50.0.1, url: "https://10.50.0.1", role: "pfSense CE · Standalone" }
-  - { id: pf-fh-01,  type: pfsense,  site: fh,  ip: 10.60.0.1, url: "https://10.60.0.1", role: "pfSense CE · Standalone" }
-  - { id: pf-lab-01, type: pfsense,  site: hq,  ip: 10.10.9.1, url: "https://10.10.9.1", role: "pfSense CE · Labor (nested)", monitor: false }
-
-  # ---- Speicher & Sicherung ----------------------------------------------
-  - { id: nas-hq-01, type: truenas, site: hq, ip: 10.10.2.20, url: "https://10.10.2.20",      role: "TrueNAS SCALE · 8× 12 TB Z2" }
-  - { id: pbs-hq-01, type: pbs,     site: hq, ip: 10.10.2.30, url: "https://10.10.2.30:8007", role: "Proxmox Backup Server · lokal" }
-  - { id: pbs-rz-01, type: pbs,     site: rz, ip: 10.30.2.30, url: "https://10.30.2.30:8007", role: "Proxmox Backup Server · Offsite-Sync" }
+  # ---- Sicherung ----------------------------------------------------------
+  # Proxmox Backup Server: Datastore-Belegung und fehlgeschlagene Aufträge.
+  - { id: pbs-01, type: pbs, site: hq, ip: 10.10.2.30, url: "https://10.10.2.30:8007",
+      role: "Proxmox Backup Server" }
 
   # ---- Mail ---------------------------------------------------------------
-  - { id: pmg-rz-01,     type: pmg,     site: rz, ip: 10.30.2.40, url: "https://10.30.2.40:8006", role: "Proxmox Mail Gateway" }
-  - { id: mailcow-rz-01, type: mailcow, site: rz, ip: 10.30.2.50, url: "https://10.30.2.50", role: "Mailcow dockerized",
-      checks: [ { kind: icmp }, { kind: tcp, port: 443 }, { kind: tcp, port: 25 }, { kind: tcp, port: 993 }, { kind: tls, port: 443, servername: "mail.example.de" } ] }
+  # Proxmox Mail Gateway: Ein-/Ausgang, Spam- und Virenzahlen.
+  - { id: pmg-01, type: pmg, site: rz, ip: 10.30.2.40, url: "https://10.30.2.40:8006",
+      role: "Proxmox Mail Gateway" }
+
+  # Mailcow: eigene Prüfliste statt der abgeleiteten — so wird neben der
+  # Weboberfläche auch SMTP und IMAP geprüft. `servername` gehört dazu,
+  # wenn das Zertifikat auf einen Namen und nicht auf die IP lautet.
+  - { id: mailcow-01, type: mailcow, site: rz, ip: 10.30.2.50, url: "https://10.30.2.50",
+      role: "Mailcow dockerized",
+      checks: [ { kind: icmp },
+                { kind: tcp, port: 443 },
+                { kind: tcp, port: 25 },
+                { kind: tcp, port: 993 },
+                { kind: tls, port: 443, servername: "mail.example.org" } ] }
+
+  # ---- Netz ---------------------------------------------------------------
+  - { id: fw-01, type: opnsense, site: hq, ip: 10.10.0.1, url: "https://10.10.0.1",
+      role: "OPNsense · Firewall & VPN" }
+  - { id: fw-02, type: pfsense,  site: rz, ip: 10.30.0.1, url: "https://10.30.0.1",
+      role: "pfSense · Firewall" }
+
+  # ---- Speicher -----------------------------------------------------------
+  - { id: nas-01, type: truenas, site: hq, ip: 10.10.2.20, url: "https://10.10.2.20",
+      role: "TrueNAS SCALE" }
 
   # ---- Dienste ------------------------------------------------------------
-  - { id: adguard-hq-01, type: adguard, site: hq, ip: 10.10.3.10, url: "https://10.10.3.10", role: "AdGuard Home · primär",
-      checks: [ { kind: icmp }, { kind: tcp, port: 443 }, { kind: dns, port: 53, query: "example.com" } ] }
-  - { id: adguard-hq-02, type: adguard, site: hq, ip: 10.10.3.11, url: "https://10.10.3.11", role: "AdGuard Home · sekundär",
-      checks: [ { kind: icmp }, { kind: tcp, port: 443 }, { kind: dns, port: 53, query: "example.com" } ] }
-  - { id: adguard-rz-01, type: adguard, site: rz, ip: 10.30.3.10, url: "https://10.30.3.10", role: "AdGuard Home · Remote/DoH",
-      checks: [ { kind: icmp }, { kind: tcp, port: 443 }, { kind: dns, port: 53, query: "example.com" } ] }
-  - { id: ha-hq-01, type: hass, site: hq, ip: 10.10.4.10, url: "https://10.10.4.10:8123", role: "Home Assistant OS" }
+  # AdGuard mit ausdrücklicher DNS-Prüfung: es wird wirklich aufgelöst,
+  # nicht nur der Port geöffnet. Ein DNS-Dienst, der annimmt aber nicht
+  # antwortet, fiele sonst nicht auf.
+  - { id: adguard-01, type: adguard, site: hq, ip: 10.10.3.10, url: "https://10.10.3.10",
+      role: "AdGuard Home · DNS-Filter",
+      checks: [ { kind: icmp },
+                { kind: tcp, port: 443 },
+                { kind: dns, port: 53, query: "example.org" } ] }
 
-  # ---- Container ----------------------------------------------------------
-  - { id: portainer-hq,  type: portainer, site: hq,  ip: 10.10.5.10, url: "https://10.10.5.10:9443", role: "Portainer CE · Docker Standalone" }
-  - { id: portainer-nas, type: portainer, site: hq,  ip: 10.10.2.21, url: "https://10.10.2.21:9443", role: "Portainer Agent · TrueNAS Apps" }
-  - { id: portainer-rz,  type: portainer, site: rz,  ip: 10.30.5.10, url: "https://10.30.5.10:9443", role: "Portainer CE · Docker Standalone" }
-  - { id: portainer-bue, type: portainer, site: bue, ip: 10.50.5.10, url: "https://10.50.5.10:9443", role: "Portainer CE · Docker Standalone" }
+  - { id: portainer-01, type: portainer, site: hq, ip: 10.10.5.10, url: "https://10.10.5.10:9443",
+      role: "Portainer CE" }
+  - { id: ha-01, type: hass, site: hq, ip: 10.10.4.10, url: "https://10.10.4.10:8123",
+      role: "Home Assistant" }
+
+  # ---- Absichtlich unüberwacht --------------------------------------------
+  # `monitor: false` heißt: taucht überall auf, bleibt grau, alarmiert nie.
+  # Für Labor- und Bastelsysteme, die nachts aus sein dürfen.
+  - { id: lab-01, type: other, site: hq, ip: 10.10.9.1, url: "https://10.10.9.1",
+      role: "Laborsystem — nicht überwacht", monitor: false }
 
 # ============================================================
 #  Tunnel
 #
 #  Stufe 1 liest den WireGuard-Status noch nicht aus der Firewall.
 #  Stattdessen wird DURCH den Tunnel geprüft: `probe` zeigt auf die
-#  Gegenstelle im Transfernetz. Das misst, was zählt — ob der Tunnel
-#  gerade trägt — und braucht keinerlei Zugangsdaten.
+#  Gegenstelle im Transfernetz. Das misst, was zählt — trägt die Strecke
+#  gerade? — und braucht keinerlei Zugangsdaten.
+#  Ohne `probe.port` wird nur ICMP geprüft.
 # ============================================================
 tunnels:
-  - { id: wg-hq-rz,  a: hq, b: rz,  iface: wg0, net: 10.99.0.0/30,  probe: { ip: 10.99.0.2,  port: 22 } }
-  - { id: wg-hq-elt, a: hq, b: elt, iface: wg1, net: 10.99.0.4/30,  probe: { ip: 10.99.0.6,  port: 22 } }
-  - { id: wg-hq-bue, a: hq, b: bue, iface: wg2, net: 10.99.0.8/30,  probe: { ip: 10.99.0.10, port: 22 } }
-  - { id: wg-hq-fh,  a: hq, b: fh,  iface: wg3, net: 10.99.0.12/30, probe: { ip: 10.99.0.14, port: 22 } }
-  - { id: wg-rz-elt, a: rz, b: elt, iface: wg1, net: 10.99.0.16/30, probe: { ip: 10.99.0.18, port: 22 } }
-  - { id: wg-rz-bue, a: rz, b: bue, iface: wg2, net: 10.99.0.20/30, probe: { ip: 10.99.0.22, port: 22 } }
+  - { id: wg-hq-rz, a: hq, b: rz, iface: wg0, net: 10.99.0.0/30,
+      probe: { ip: 10.99.0.2, port: 22 } }
 
 # ============================================================
 #  Startseite
-#  `host:` verknüpft eine Kachel mit einem überwachten System —
-#  dann trägt die Kachel dessen Ampel. Ohne `host:` bleibt sie grau.
+#
+#  `host:` verknüpft eine Kachel mit einem überwachten System — dann trägt
+#  die Kachel dessen Ampel und übernimmt dessen Adresse. Ohne `host:` ist
+#  es ein reiner Lesezeichen-Eintrag und bleibt grau. `url:` überschreibt
+#  die Adresse des Systems, etwa für einen Unterpfad.
 # ============================================================
 links:
-  - group: Virtualisierung
+  - group: Infrastruktur
     items:
-      - { name: pve-hq-01,  host: pve-hq-01 }
-      - { name: pve-hq-02,  host: pve-hq-02 }
-      - { name: pve-hq-03,  host: pve-hq-03 }
-      - { name: pve-rz-01,  host: pve-rz-01 }
-      - { name: pve-elt-01, host: pve-elt-01 }
-      - { name: pve-bue-01, host: pve-bue-01 }
-  - group: Firewalls & VPN
+      - { name: Leitstand,      host: leitstand }
+      - { name: Proxmox VE,     host: pve-01 }
+      - { name: Backup Server,  host: pbs-01 }
+      - { name: Firewall HQ,    host: fw-01 }
+  - group: Dienste
     items:
-      - { name: "fw-hq-01 (MASTER)", host: fw-hq-01 }
-      - { name: "fw-hq-02 (BACKUP)", host: fw-hq-02 }
-      - { name: fw-rz-01,  host: fw-rz-01 }
-      - { name: fw-elt-01, host: fw-elt-01 }
-      - { name: pf-bue-01, host: pf-bue-01 }
-      - { name: pf-fh-01,  host: pf-fh-01 }
-      - { name: pf-lab-01, host: pf-lab-01 }
-  - group: Container
-    items:
-      - { name: Portainer HQ,   host: portainer-hq }
-      - { name: Portainer NAS,  host: portainer-nas }
-      - { name: Portainer RZ,   host: portainer-rz }
-      - { name: Portainer Büro, host: portainer-bue }
-  - group: Speicher & Sicherung
-    items:
-      - { name: TrueNAS SCALE, host: nas-hq-01 }
-      - { name: PBS lokal,     host: pbs-hq-01 }
-      - { name: PBS Offsite,   host: pbs-rz-01 }
-  - group: Mail
-    items:
-      - { name: Mailcow Admin, host: mailcow-rz-01, url: "https://10.30.2.50/admin" }
-      - { name: Webmail,       host: mailcow-rz-01, url: "https://10.30.2.50/SOGo" }
-      - { name: Mail Gateway,  host: pmg-rz-01 }
-  - group: DNS & Smart Home
-    items:
-      - { name: AdGuard primär,   host: adguard-hq-01 }
-      - { name: AdGuard sekundär, host: adguard-hq-02 }
-      - { name: AdGuard RZ,       host: adguard-rz-01 }
-      - { name: Home Assistant,   host: ha-hq-01 }
+      - { name: TrueNAS,        host: nas-01 }
+      - { name: AdGuard Home,   host: adguard-01 }
+      - { name: Portainer,      host: portainer-01 }
+      - { name: Home Assistant, host: ha-01 }
+      - { name: Mailcow Admin,  host: mailcow-01, url: "https://10.30.2.50/admin" }
   - group: Extern
     items:
-      - { name: Hetzner Robot,  url: "https://robot.hetzner.com" }
-      - { name: Cloudflare DNS, url: "https://dash.cloudflare.com" }
-      - { name: MXToolbox,      url: "https://mxtoolbox.com/blacklists.aspx" }
+      - { name: "Beispiel-Lesezeichen ohne System", url: "https://example.org" }

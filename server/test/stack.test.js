@@ -92,3 +92,49 @@ test("In der .env stehen keine Zugangsdaten", () => {
     /secret|token|pass|key/i.test(k) || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(v));
   assert.deepEqual(verdaechtig, [], "Geheimnisse gehören nach secrets.json im Volume, nicht in eine versionierte Datei");
 });
+
+/* ---------- Dockerfile ---------- */
+const dockerText = fs.readFileSync(wurzel + "Dockerfile", "utf8");
+
+/* Eine fortgesetzte Zeile (\ am Ende) verträgt keinen Kommentar dazwischen —
+   je nach Bauwerkzeug bricht der Bau ab oder die Anweisung wird verstümmelt.
+   Beim Bearbeiten passiert genau das leicht, und auffallen würde es erst im
+   Arbeitsablauf. */
+test("Kein Kommentar mitten in einer fortgesetzten Dockerfile-Zeile", () => {
+  const zeilen = dockerText.split("\n");
+  for (let i = 0; i < zeilen.length - 1; i++) {
+    if (!zeilen[i].trimEnd().endsWith("\\")) continue;
+    const naechste = zeilen[i + 1].trim();
+    assert.ok(!naechste.startsWith("#"),
+      `Zeile ${i + 2} ist ein Kommentar innerhalb der Fortsetzung von Zeile ${i + 1}`);
+  }
+});
+
+/* Die Fassungsanzeige lebt davon, dass die Bauparameter auch in der Umgebung
+   landen — ein ARG allein ist zur Laufzeit nicht sichtbar. */
+test("Jeder Bauparameter für die Fassung wird in die Umgebung übernommen", () => {
+  const args = [...dockerText.matchAll(/^ARG\s+(LEITSTAND_[A-Z_]+)/gm)].map(m => m[1]);
+  assert.ok(args.includes("LEITSTAND_COMMIT"), "der Commit gehört dazu");
+  assert.ok(args.includes("LEITSTAND_BUILT"), "der Bauzeitpunkt gehört dazu");
+  for (const a of args)
+    assert.match(dockerText, new RegExp(`${a}=\\$${a}`), `${a} wird nicht als ENV weitergereicht`);
+});
+
+/* Was der Arbeitsablauf mitgibt, muss das Abbild auch entgegennehmen. */
+test("Arbeitsablauf und Dockerfile kennen dieselben Bauparameter", () => {
+  const workflow = fs.readFileSync(wurzel + ".github/workflows/image.yml", "utf8");
+  const imWorkflow = [...workflow.matchAll(/^\s+(LEITSTAND_[A-Z_]+)=/gm)].map(m => m[1]);
+  assert.ok(imWorkflow.length >= 4, "der Arbeitsablauf gibt die Herkunft mit");
+  for (const name of imWorkflow)
+    assert.match(dockerText, new RegExp(`^ARG\\s+${name}`, "m"), `${name} fehlt als ARG im Dockerfile`);
+});
+
+/* Der Healthcheck darf nicht am Zustand hängen: ein Fehler beim Zusammenbauen
+   der Anzeige würde den Behälter sonst dauerhaft neu starten. */
+test("Der Healthcheck fragt die Fassung ab, nicht den Zustand", () => {
+  for (const [was, text] of [["Dockerfile", dockerText], ["docker-compose.yml", composeText]]) {
+    const zeile = text.split("\n").find(z => z.includes("process.exit(r.ok"));
+    assert.ok(zeile, `${was}: kein Healthcheck gefunden`);
+    assert.match(zeile, /\/api\/version/, `${was}: der Healthcheck hängt am Zustand`);
+  }
+});

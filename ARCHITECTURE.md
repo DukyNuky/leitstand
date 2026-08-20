@@ -21,6 +21,12 @@ Dieses Dokument beschreibt den Aufbau. **Stufe 1 ist gebaut und läuft**
 5. **Kein erfundener Wert.** Was eine Stufe noch nicht wissen kann, steht auf
    `null` und wird als Strich angezeigt. Ein Platzhalterwert in einer
    Überwachung ist schlimmer als eine Lücke, weil man ihm glaubt.
+   *(Gebaut: die Oberfläche hat keinen Beispielbestand mehr, auf den sie
+   zurückfallen könnte. Antwortet der Dienst nicht, zeigt sie das statt
+   irgendetwas; reißt der Zustandsstrom ab, werden die stehengebliebenen
+   Werte als veraltet gekennzeichnet. Die wenigen Bereiche ohne Anbindung
+   zeigen je ein Muster aus `ui/assets/examples.js`, sichtbar als
+   **Beispiel** markiert und von einem Satz begleitet, was dort fehlt.)*
 
 ## Bausteine
 
@@ -124,13 +130,13 @@ ist der Auffangkanal für alles, was keine Schnittstelle hat.
 | Stufe | Inhalt | Stand |
 |---|---|---|
 | 1 | Bestand als YAML, ICMP/TCP/TLS-Prober, Startseite mit Ampeln | **gebaut** |
-| 1b | Verwaltung in der Oberfläche: Systeme, Standorte, Tunnel, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
+| 1b | Verwaltung in der Oberfläche: Standorte, Systeme, Tunnel, Startseite, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
 | 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
 | 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** |
 | 3 | OPNsense/pfSense inkl. WireGuard-Handshake | offen — ersetzt die Ersatzmessung durch den Tunnel |
-| 4 | Alarm-Postfach mit Regelwerk | offen — Oberfläche steht im Entwurf |
+| 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
 | 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | offen — bislang nur Erreichbarkeit |
-| 6 | Wartungsfenster, Zeitreihen-Detailseiten, Push-Kanäle | offen |
+| 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
 
 ### Was in Stufe 1 bewusst anders gelöst ist
 

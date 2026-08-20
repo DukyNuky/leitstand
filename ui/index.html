@@ -16,7 +16,7 @@
   <nav class="rail" aria-label="Hauptnavigation">
     <div class="brand">
       <span class="brand-mark"><i></i></span>
-      <span><span class="brand-name">Leitstand</span><br><span class="brand-sub">Heimnetz · 5 Standorte</span></span>
+      <span><span class="brand-name">Leitstand</span><br><span class="brand-sub" id="brand-sub">verbinde …</span></span>
     </div>
     <div id="rail-nav"></div>
     <div class="rail-foot">
@@ -24,7 +24,8 @@
         <span class="kbd">⌘K</span><span>Sprung</span>
         <span class="kbd">1–9</span><span>Ansicht</span>
       </div>
-      <div class="row" style="gap:7px" id="datasource"><span class="demo-tag">Mockup</span><span class="faint" style="font-size:11px">Beispieldaten</span></div>
+      <div class="row" style="gap:7px" id="datasource"><span class="dot dot--idle"></span><span class="faint" style="font-size:11px">verbinde …</span></div>
+      <button class="buildline" id="buildline" data-action="view" data-view="cfg" title="Welche Fassung gerade läuft">–</button>
     </div>
   </nav>
   <main class="main" id="scroll">
@@ -35,7 +36,7 @@
 <div id="overlays"></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <script src="assets/live.js"></script>
-<script src="assets/data.js"></script>
+<script src="assets/examples.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>

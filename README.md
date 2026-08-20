@@ -3,16 +3,18 @@
 Zentrale Schaltstelle für ein verteiltes Heimnetz: Startseite, Ampelwand und
 Störungsübersicht in einem Werkzeug.
 
-Das Repository enthält zwei Dinge:
+Der Leitstand ist ein laufender Dienst (`server/`) mit eigener Oberfläche
+(`ui/`): er prüft Erreichbarkeit, Antwortzeiten, Zertifikate und VPN-Tunnel,
+liest Proxmox über die API aus und wird vollständig in der Oberfläche gepflegt —
+Standorte, Systeme, Tunnel, Startseite, Schwellwerte. Kein Build, eine einzige
+Abhängigkeit.
 
-1. **Ein laufendes Werkzeug** (`server/`) — prüft Erreichbarkeit, Antwortzeiten,
-   Zertifikate und VPN-Tunnel, liest Proxmox über die API aus und wird über eine
-   **Admin-Oberfläche** gepflegt. Kein Build, eine einzige Abhängigkeit.
-2. **Den klickbaren Entwurf** (`mockup/`) — zeigt mit Beispieldaten, wohin es
-   geht, und läuft auch ohne Server per Doppelklick.
-
-Dieselbe Oberfläche bedient beides: läuft der Dienst, zeigt sie echte Werte;
-läuft er nicht, fällt sie auf den Beispielbestand zurück.
+**Alles, was angezeigt wird, ist gemessen.** Es gibt keinen Beispielbestand mehr,
+auf den die Oberfläche zurückfällt: antwortet der Dienst nicht, sagt sie das und
+zeigt nichts. Nur die Bereiche, die noch gar nicht angebunden sind
+(Alarm-Postfach, HAProxy, Road-Warrior, Sicherungsaufträge, Push-Kanäle), zeigen
+je *ein* ausdrücklich als **Beispiel** gekennzeichnetes Muster — damit sichtbar
+bleibt, was dort einmal stehen wird.
 
 ## Loslegen
 
@@ -22,9 +24,15 @@ npm install
 npm start                     # http://localhost:8080
 ```
 
-Ohne weitere Einstellungen wird `server/inventory.yaml` geprüft — **darin stehen
-geratene Hostnamen und Netze aus der ersten Beschreibung.** Entweder direkt
-anpassen oder gleich in der Oberfläche unter **Verwaltung** zurechtziehen.
+Mitgeliefert wird ein **Beispielbestand**: je ein System pro Typ, ein Tunnel,
+zwei Standorte, eine Startseite. Die Adressen zeigen ins Leere — bis sie ersetzt
+sind, stehen diese Systeme auf Rot. Das ist gewollt: eine Überwachung, die für
+ein nicht vorhandenes Gerät Grün zeigt, wäre wertlos. Einzig `leitstand`
+(127.0.0.1:8080) trifft zu — das ist der Dienst selbst und damit die einzige
+grüne Ampel beim ersten Start.
+
+Erster Schritt: unter **Verwaltung** die Beispiele löschen oder auf die eigenen
+Adressen ziehen.
 
 Eigener Bestand an anderer Stelle:
 
@@ -66,8 +74,10 @@ Abfrageintervall, Zeitlimits und Schwellwerte stehen bewusst **nicht** in der
 Weg in Verwirrung — eine Änderung in der Oberfläche sähe folgenlos aus.
 
 Beim ersten Start ist das Volume leer. Der Leitstand legt dann selbst einen
-Bestand an (aus der im Abbild mitgelieferten Vorlage) und läuft sofort; alles
-Weitere wird unter *Verwaltung* gepflegt. Im Volume liegen danach:
+Bestand an — die im Abbild mitgelieferte **Beispielvorlage** — und läuft sofort.
+Erwartungsgemäß steht dann fast alles auf Rot: die Beispieladressen gibt es im
+eigenen Netz nicht. Unter *Verwaltung* werden sie gelöscht oder auf die echten
+Geräte gezogen. Im Volume liegen danach:
 
 ```
 /data/inventory.yaml       Bestand   (Sicherung als inventory.yaml.bak)
@@ -115,18 +125,94 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
-| **Verwaltung** | Systeme, Standorte, Tunnel und Schwellwerte in der Oberfläche pflegen |
+| **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
 Alles andere (OPNsense, pfSense, TrueNAS, AdGuard, Portainer, Mailcow, Home
 Assistant) wird bisher nur auf Erreichbarkeit geprüft. Die Oberfläche zeigt für
 noch unbekannte Kennzahlen einen Strich — **nie einen erfundenen Wert.**
 
+**Was ausdrücklich noch fehlt: die Alarmierung.** Push-Kanäle und Totmannschalter
+stehen aus (Stufe 6). Bis dahin ist der Leitstand ein Bildschirm, kein Wecker —
+wer nicht hinsieht, erfährt nichts. Das ist der wichtigste offene Punkt und steht
+deshalb auch in der Oberfläche unter *Einstellungen → Ausbaustand*.
+
+## Welche Fassung läuft gerade?
+
+Bei automatischem Redeploy ist das die Frage, die man am häufigsten hat: Portainer
+hat neu ausgerollt — sehe ich schon den neuen Stand oder noch den alten?
+
+**Unten links in der Leiste** steht dauerhaft die laufende Fassung, etwa
+`● 9f3c1d2 · 20.08. 07:44`. Überfahren zeigt die Langfassung mit Zweig,
+Commit-Zeitpunkt und Bauzeitpunkt; ein Klick führt zu *Einstellungen → Dieser Dienst*.
+Das Zeichen davor nennt die Herkunft:
+
+| | |
+|---|---|
+| `●` | aus dem Abbild — Commit und Bauzeitpunkt sind eingebrannt |
+| `◆` | aus dem Arbeitsbaum — `npm start` beim Entwickeln, gelesen aus `.git` |
+| `◇` | Dateistand — selbst gebaut ohne Bauparameter, nur der Zeitpunkt ist bekannt |
+| `○` | unbekannt — es wird nichts behauptet |
+| `▲` | **der Dienst ist inzwischen ein anderer als diese Seite** |
+
+Genau dafür ist das gedacht: Die Oberfläche merkt sich beim Laden, welcher Stand
+antwortet, und vergleicht das mit jeder Antwort. Rollt Portainer neu aus, läuft im
+Browser weiterhin das alte JavaScript — dann erscheint oben ein Streifen
+*„Neue Fassung ausgerollt … Neu laden"*. Nicht automatisch, damit niemand ein
+offenes Formular unter den Händen verliert.
+
+Nennt das Abbild keine Fassung, greift der Startzeitpunkt des Prozesses: nach
+einem Redeploy ist er in jedem Fall ein anderer, und die Meldung lautet dann
+ehrlich *„Der Dienst wurde neu gestartet"*.
+
+Zum Nachsehen ohne Oberfläche:
+
+```bash
+curl -s http://leitstand:8080/api/version
+{"version":"0.1.0","commit":"9f3c1d2…","shortCommit":"9f3c1d2","branch":"main",
+ "committed":"2026-08-20T05:40:00Z","built":"2026-08-20T05:44:12Z",
+ "source":"abbild","started":"2026-08-20T05:47:29Z","uptimeSeconds":312}
+```
+
+Die Angaben kommen aus Bauparametern, die
+[`.github/workflows/image.yml`](.github/workflows/image.yml) beim Bauen setzt.
+Wer das Abbild **selbst** baut, kann sie mitgeben:
+
+```bash
+docker build \
+  --build-arg LEITSTAND_COMMIT=$(git rev-parse HEAD) \
+  --build-arg LEITSTAND_BRANCH=$(git rev-parse --abbrev-ref HEAD) \
+  --build-arg LEITSTAND_COMMITTED=$(git show -s --format=%cI HEAD) \
+  --build-arg LEITSTAND_BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -t leitstand .
+```
+
+Ohne diese Angaben läuft alles genauso, die Zeile sagt dann nur `◇ Dateistand`.
+Ein **nicht ersetzter** Bauparameter wird verworfen statt angezeigt — eine falsche
+Fassungsangabe wäre beim Ausrollen schlimmer als gar keine, weil man ihr glaubt.
+
+## Vollständig verwaltbar
+
+Unter **Verwaltung** wird der gesamte Bestand gepflegt — nichts davon braucht
+einen Texteditor:
+
+| Reiter | Was dort geht |
+|---|---|
+| **Systeme** | anlegen, ändern, löschen · Typ, Adresse, Beschreibung · Überwachung abschalten · API-Zugangsdaten hinterlegen · **Verbindung testen** mit Einzelschritten |
+| **Standorte** | anlegen, ändern, löschen · Kürzel, Ort, Anschluss, WAN · **Hauptstandort** festlegen (Mitte der Topologie) |
+| **Tunnel** | anlegen, ändern, löschen · Strecke, Interface, Transfernetz, Gegenstelle im Tunnel |
+| **Startseite** | Gruppen anlegen, umbenennen, sortieren · Verknüpfungen hinzufügen, mit System verbinden, sortieren, löschen |
+| **Schwellwerte** | Intervall, Zeitlimit, Fehlschläge bis Rot, „langsam“, Zertifikatsfristen, Verlaufslänge, ICMP |
+
+Alles landet in derselben `inventory.yaml`, die sich auch von Hand bearbeiten
+lässt; vor jedem Schreiben wird eine Sicherung als `.bak` daneben abgelegt.
+Nach einer Änderung von Hand: *Bestand neu einlesen*.
+
 ## Proxmox hinzufügen
 
 In der Oberfläche: **Verwaltung → + System**
 
-1. Kennung (`pve-hq-01` — muss dem Knotennamen im Cluster entsprechen), Typ
-   *Proxmox VE*, Standort, IP-Adresse
+1. Kennung (muss dem **Knotennamen im Cluster** entsprechen, z. B. `pve-hq-01`),
+   Typ *Proxmox VE*, Standort, IP-Adresse
 2. Zugangsdaten: Benutzer `leitstand@pve`, Token-ID `ro`, Geheimnis
 3. **Verbindung testen** — zeigt jeden Schritt einzeln: ICMP, Port, TLS und den
    API-Aufruf samt Version. Schlägt etwas fehl, steht dabei, woran es liegt.
@@ -159,22 +245,21 @@ docker-compose.yml        Stack für Portainer
 .github/workflows/        baut das Abbild bei jedem Push auf main
 
 server/
-  inventory.yaml          Bestand — Vorlage für den ersten Start
+  inventory.yaml          Beispielbestand — Vorlage für den ersten Start
   src/probe.js            ICMP, TCP, TLS-Restlaufzeit, DNS, HTTP
   src/inventory.js        Laden, Prüfen, Zurückschreiben (mit Sicherung)
   src/engine.js           Ampeln, Verlauf, Störungen, Standort-Bündelung
   src/collectors/proxmox.js   VE, Backup Server, Mail Gateway
   src/secrets.js          Zugangsdaten, 0600, nach außen nur maskiert
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
+  src/version.js          welche Fassung läuft: Abbild, Arbeitsbaum oder Dateistand
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   70 Tests, u. a. gegen einen nachgebauten Proxmox
-  Dockerfile, docker-compose.yml
+  test/                   91 Tests, u. a. gegen einen nachgebauten Proxmox
 
-mockup/                   Die Oberfläche (auch vom Server ausgeliefert)
-  assets/live.js          Brücke zum Server, mit Rückfall auf Beispieldaten
-  assets/data.js          Beispielbestand
+ui/                       Die Oberfläche, vom Dienst ausgeliefert
+  assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
   assets/app.js           Zustand, Ansichten, Inspector, Verwaltung
-build.mjs                 baut dist/leitstand.html (eine Datei, offline lauffähig)
+  assets/examples.js      je ein Muster für das, was noch nicht angebunden ist
 
 ARCHITECTURE.md           Zielarchitektur und Ausbaustufen
 docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
@@ -183,13 +268,19 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 70 Tests
+cd server && npm test     # 91 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
 nachgebauten Proxmox-Endpunkt (`test/fake-proxmox.js`), der auch 401 und 403
 richtig beantwortet. Dadurch lässt sich der Proxmox-Weg vollständig prüfen,
 ohne einen echten Cluster anzufassen.
+
+`test/ui.test.js` zeichnet die Oberfläche ohne Browser: die Ansichten sind reine
+Funktionen von Zustand nach HTML, also lassen sie sich mit einer echten
+Serverantwort füttern und einzeln prüfen. Damit fällt auf, was sonst erst im
+Betrieb auffiele — ein `NaN` in einer Summe über unbekannte Werte, eine Division
+durch null bei leerem Bestand, ein Beispiel in einer Ansicht, die messen kann.
 
 ## Gestaltung
 
@@ -202,9 +293,19 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
 
 ## Nächste Schritte
 
-1. `inventory.yaml` auf den echten Bestand ziehen (Hostnamen, IPs, Tunnelnetze)
-2. Proxmox-Token für die sechs Knoten hinterlegen — dann sind Compute-Ansicht
-   und Backup-Status echt
-3. OPNsense-Sammler: Version, Zustandstabelle, CARP und **WireGuard-Handshake**
-   (ersetzt die Ersatzmessung durch den Tunnel)
-4. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk), danach Push-Kanäle
+**Beim Einrichten:**
+
+1. Unter *Verwaltung → Standorte* die eigenen Standorte anlegen und den
+   Hauptstandort setzen
+2. Unter *Verwaltung → Systeme* die Beispiele durch die echten Geräte ersetzen —
+   Kennung, Typ, IP genügen, die Prüfungen leiten sich daraus ab
+3. Für Proxmox die Token hinterlegen und *Verbindung testen* — danach sind
+   Compute-Ansicht und Speicherbelegung echt
+4. Tunnel eintragen (Gegenstelle im Transfernetz) und die Startseite befüllen
+
+**Am Werkzeug:**
+
+5. OPNsense-Sammler: Version, Zustandstabelle, CARP, HAProxy und
+   **WireGuard-Handshake** (ergänzt die Messung durch den Tunnel, ersetzt sie nicht)
+6. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
+7. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen
