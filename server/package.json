@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test --test-timeout=20000 'test/*.test.js'",
+    "test": "node --test --test-timeout=60000 'test/*.test.js'",
     "probe": "node src/cli.js"
   },
   "dependencies": {

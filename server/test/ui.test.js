@@ -87,7 +87,10 @@ sites:
   - { id: rz, name: Zweitstandort, short: RZ }
 hosts:
   - { id: web, type: pve, site: hq, url: "http://127.0.0.1:1/" }
-  - { id: fw,  type: opnsense, site: rz, ip: 10.255.255.1 }
+  # Nur eine Prüfung statt der abgeleiteten drei: jede läuft gegen eine
+  # absichtlich unerreichbare Adresse in ihr Zeitlimit, und das zahlt die
+  # ganze Datei. Unerreichbar ist sie mit einer Prüfung genauso.
+  - { id: fw,  type: opnsense, site: rz, ip: 10.255.255.1, checks: [{ kind: tcp, port: 443 }] }
   - { id: lab, type: other, site: hq, ip: 10.255.255.2, monitor: false }
 tunnels:
   - { id: wg-hq-rz, a: hq, b: rz, iface: wg0, net: 10.99.0.0/30, probe: { ip: 10.255.255.3, port: 22 } }
@@ -96,7 +99,29 @@ links:
     items: [ { name: Firewall, host: fw }, { name: Extern, url: "https://example.org" } ]
 `;
 
+/* Ein Durchlauf gegen absichtlich unerreichbare Adressen kostet gut zwei
+   Sekunden — die Prüfungen laufen bis in ihr Zeitlimit. Für einen Test ist
+   das gut angelegt, für zwanzig kippt die Datei ins Zeitlimit des
+   Testläufers, und zwar erst auf einem langsamen Bauknecht: hier lief sie
+   noch, dort nicht mehr.
+
+   Der Zustand wird deshalb je Bestand einmal erzeugt und für jeden Test
+   kopiert. Er bleibt echt — er kommt weiter aus einem laufenden Dienst mit
+   einem echten Durchlauf. Gemessen wird hier ohnehin die Oberfläche und
+   nicht der Prober, und die ist eine reine Funktion ihres Zustands.
+
+   Kopiert wird, weil die Tests ihren Zustand verändern (Peers ergänzen,
+   Ampeln umsetzen). Ohne Kopie schleppte ein Test seine Änderungen in den
+   nächsten — der übelste Fehler in einer Testreihe, weil er von der
+   Reihenfolge abhängt. */
+const zustaende = new Map();
+
 async function echterZustand(text = BESTAND) {
+  if (!zustaende.has(text)) zustaende.set(text, await baueZustand(text));
+  return structuredClone(zustaende.get(text));
+}
+
+async function baueZustand(text) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-ui-"));
   const datei = path.join(dir, "inventory.yaml");
   fs.writeFileSync(datei, text);
