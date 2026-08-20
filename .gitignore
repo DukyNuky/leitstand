@@ -9,3 +9,6 @@ incidents.json
 inventory.yaml.tmp
 _shots.mjs
 _dbg.mjs
+
+# Persönliche Abweichungen — .env selbst ist versioniert und enthält keine Geheimnisse
+.env.local

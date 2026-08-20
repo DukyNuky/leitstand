@@ -39,6 +39,32 @@ LEITSTAND_INVENTORY=/pfad/zu/inventory.yaml PORT=8080 node src/server.js
 Fertig — es wird nichts gebaut, das Abbild kommt aus der GitHub Container
 Registry und enthält Dienst und Oberfläche.
 
+### Einstellen
+
+Alle Stellschrauben des Stacks stehen in [`.env`](.env) neben der Compose-Datei:
+
+| Wert | Vorgabe | wofür |
+|---|---|---|
+| `LEITSTAND_IMAGE` | `ghcr.io/dukynuky/leitstand:main` | für einen festen Stand einen `sha-`Tag eintragen |
+| `LEITSTAND_PORT` | `8080` | Port auf dem Docker-Wirt |
+| `LEITSTAND_BIND` | leer (alle Adressen) | z. B. `127.0.0.1`, wenn ein Reverse Proxy davor liegt |
+| `LEITSTAND_DATA` | `leitstand-data` | benanntes Volume — oder ein Pfad wie `/srv/leitstand/data` |
+| `TZ` | `Europe/Berlin` | Zeitzone für Zeitstempel |
+| `LEITSTAND_RESTART` | `unless-stopped` | Neustartverhalten |
+
+Ohne `.env` greifen dieselben Vorgaben; in Portainer lassen sich die Werte auch
+im Formular unter *Environment variables* setzen, das gewinnt gegenüber der Datei.
+
+**Zugangsdaten gehören nicht in die `.env`.** API-Token werden in der Oberfläche
+unter *Verwaltung* hinterlegt und landen in `secrets.json` im Volume, mit
+Rechten `0600`. Ein Test wacht darüber, dass in der `.env` nichts steht, was
+nach einem Geheimnis aussieht.
+
+Abfrageintervall, Zeitlimits und Schwellwerte stehen bewusst **nicht** in der
+`.env`, sondern in `inventory.yaml` und damit in der Oberfläche unter
+*Verwaltung → Schwellwerte*. Zwei Quellen für denselben Wert wären der sichere
+Weg in Verwirrung — eine Änderung in der Oberfläche sähe folgenlos aus.
+
 Beim ersten Start ist das Volume leer. Der Leitstand legt dann selbst einen
 Bestand an (aus der im Abbild mitgelieferten Vorlage) und läuft sofort; alles
 Weitere wird unter *Verwaltung* gepflegt. Im Volume liegen danach:
@@ -129,6 +155,7 @@ schreibt nichts.
 ```
 Dockerfile                Abbild mit Dienst und Oberfläche
 docker-compose.yml        Stack für Portainer
+.env                      Port, Zeitzone, Ablageort, Abbild-Tag
 .github/workflows/        baut das Abbild bei jedem Push auf main
 
 server/
@@ -140,7 +167,7 @@ server/
   src/secrets.js          Zugangsdaten, 0600, nach außen nur maskiert
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   58 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   70 Tests, u. a. gegen einen nachgebauten Proxmox
   Dockerfile, docker-compose.yml
 
 mockup/                   Die Oberfläche (auch vom Server ausgeliefert)
@@ -156,7 +183,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 58 Tests
+cd server && npm test     # 70 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
