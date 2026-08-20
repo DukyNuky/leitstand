@@ -228,7 +228,7 @@ test("Ein neuer Standort steht sofort im Zustandsstrom", async () => {
   try {
     await naechsterZustand();                       /* der Erstzustand beim Verbinden */
     const t0 = Date.now();
-    const r = await call("POST", "/api/admin/sites", { id: "sofort", name: "Sofort da" });
+    const r = await call("POST", "/api/admin/sites", { id: "sofort", name: "Sofort da", short: "DEBN" });
     assert.equal(r.status, 201);
 
     const st = await naechsterZustand();
@@ -250,4 +250,32 @@ test("Ein Prüfaufruf während eines Durchlaufs wartet ihn ab, statt zu verpuffe
   assert.equal(a, b, "beide Aufrufe teilen sich denselben Durchlauf");
   assert.notEqual(e.lastRun, vorher, "und er ist wirklich gelaufen");
   assert.equal(e.laufend, null, "danach ist nichts mehr offen");
+});
+
+test("Ein Standort ohne vierstelliges Kürzel wird abgelehnt", async () => {
+  const r = await call("POST", "/api/admin/sites", { id: "neu1", name: "Ohne Kürzel" });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /vier/i);
+
+  const r2 = await call("POST", "/api/admin/sites", { id: "neu2", name: "Zu kurz", short: "XY" });
+  assert.equal(r2.status, 400);
+  assert.match(r2.body.error, /2 Stellen/);
+});
+
+test("Ein vierstelliges Kürzel wird angenommen und großgeschrieben", async () => {
+  const r = await call("POST", "/api/admin/sites", { id: "koeln", name: "Köln", short: "deko" });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.item.short, "DEKO");
+  await call("DELETE", "/api/admin/sites/koeln");
+});
+
+/* Ein Standort mit altem Kürzel muss änderbar bleiben, ohne dass man ihn
+   zugleich umbenennen muss — sonst ist er eingefroren. */
+test("Ändern ohne Kürzel im Rumpf lässt das alte in Ruhe", async () => {
+  const r = await call("PUT", "/api/admin/sites/hq", { place: "Bonn" });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.item.place, "Bonn");
+
+  const schlecht = await call("PUT", "/api/admin/sites/hq", { short: "XY" });
+  assert.equal(schlecht.status, 400, "wird es aber mitgeschickt, gilt die Regel");
 });

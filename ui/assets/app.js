@@ -30,6 +30,11 @@ const byId = (arr, id) => arr.find(x => x.id === id);
 const siteName = id => (SITES.find(s => s.id === id) || {}).name || "—";
 const siteShort = id => (SITES.find(s => s.id === id) || {}).short || "—";
 
+/* Standortkürzel: vier Stellen, Land + Stadt (DEKO = Deutschland/Köln).
+   Feste Breite, weil es in Filterleiste, Topologie und jeder Tabellenzeile
+   steht — unterschiedlich lange Kürzel ließen diese Spalten springen. */
+const KUERZEL = /^[A-Z][A-Z0-9]{3}$/;
+
 const SEV_ORDER = { crit:0, warn:1, info:2, ok:3, idle:4, unparsed:1 };
 const SEV_LABEL = { crit:"Kritisch", warn:"Warnung", info:"Info", ok:"OK", idle:"Ruhend", unparsed:"Unverarbeitet" };
 
@@ -2024,6 +2029,16 @@ async function formSave() {
   collectForm();
   const f = state.form;
   if (!f.data.id) { f.error = "Kennung fehlt."; render(); return; }
+  if (f.kind === "sites") {
+    /* Vier Stellen, Land + Stadt. Gleich hier prüfen: eine Fehlermeldung
+       am Feld ist hilfreicher als eine abgelehnte Antwort vom Server. */
+    const k = String(f.data.short || "").trim().toUpperCase();
+    if (!KUERZEL.test(k)) {
+      f.error = "Das Kürzel muss vier Stellen haben: Land + Stadt, z. B. DEKO für Deutschland/Köln.";
+      render(); return;
+    }
+    f.data.short = k;
+  }
   if (!LIVE()) { f.error = "Kein Dienst erreichbar — nichts gespeichert."; render(); return; }
   f.busy = true; f.error = null; render();
   try {
@@ -2266,7 +2281,9 @@ function adminSites() {
         return `<tr>
         <td class="sev">${s.primary ? chip("info", "Haupt") : ""}</td>
         <td class="mono">${esc(s.id)}</td><td>${esc(s.name)}</td>
-        <td class="mono faint">${esc(s.short || "—")}</td>
+        <td class="mono">${KUERZEL.test(s.short || "")
+          ? esc(s.short)
+          : `<span class="faint">${esc(s.short || "—")}</span> <span class="chip chip--warn" title="Vier Stellen: Land + Stadt, z. B. DEKO">anpassen</span>`}</td>
         <td class="faint">${esc(s.place || "—")}</td>
         <td class="faint">${esc(s.isp || "—")}</td>
         <td class="mono">${hosts}</td><td class="mono">${tuns}</td>
@@ -2415,7 +2432,9 @@ function renderAdminForm() {
 
   const inp = (key, label, hint, opts = {}) => `<label class="admin-field">
     <span class="admin-label">${esc(label)}${opts.req ? ' <span style="color:var(--crit)">*</span>' : ""}</span>
-    <input class="admin-input" data-field="${key}" value="${esc(d[key] ?? "")}" ${opts.ro ? "readonly" : ""} placeholder="${esc(opts.ph || "")}">
+    <input class="admin-input${opts.gross ? " admin-input--gross" : ""}" data-field="${key}"
+      value="${esc(d[key] ?? "")}" ${opts.ro ? "readonly" : ""} placeholder="${esc(opts.ph || "")}"
+      ${opts.maxlength ? `maxlength="${opts.maxlength}"` : ""}>
     ${hint ? `<span class="admin-hint">${esc(hint)}</span>` : ""}</label>`;
 
   const sel = (key, label, options, hint) => `<label class="admin-field">
@@ -2458,7 +2477,7 @@ function renderAdminForm() {
     body = `<div class="admin-grid">
       ${inp("id", "Kennung", "kurz und bleibend — Systeme hängen daran", { req: true, ro: f.mode === "edit", ph: "hq" })}
       ${inp("name", "Name", "erscheint in Listen und Meldungen", { req: true, ph: "Hauptstandort" })}
-      ${inp("short", "Kürzel", "für die Filterleiste, sonst aus der Kennung abgeleitet", { ph: "HQ" })}
+      ${inp("short", "Kürzel", "vier Stellen: Land + Stadt", { req: true, ph: "DEKO", maxlength: 4, gross: true })}
       ${inp("place", "Ort", "rein informativ", { ph: "Köln" })}
       ${inp("isp", "Anschluss", "rein informativ", { ph: "Kabel 1000/50" })}
       ${inp("wan", "WAN IPv4", "rein informativ — wird nicht geprüft", { ph: "203.0.113.17" })}

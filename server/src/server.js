@@ -156,6 +156,11 @@ export function createServer(opts = {}) {
         if (!body.id) return json(res, 400, { error: "id fehlt" });
         if (inv[key].some(x => String(x.id) === String(body.id)))
           return json(res, 409, { error: `„${body.id}“ gibt es bereits.` });
+        if (key === "sites") {
+          const grund = Inv.pruefeKuerzel(body.short);
+          if (grund) return json(res, 400, { error: grund });
+          body.short = Inv.normalizeKuerzel(body.short);
+        }
         const item = key === "hosts" ? Inv.normalizeHost(body) : body;
         commit({ ...inv, [key]: [...inv[key], item] });
         return json(res, 201, { ok: true, item: inv[key].at(-1) });
@@ -168,6 +173,14 @@ export function createServer(opts = {}) {
         if (m === "PUT") {
           const body = await readJson(req);
           const merged = { ...inv[key][i], ...body, id };
+          /* Nur prüfen, wenn das Kürzel überhaupt Teil der Änderung ist —
+             sonst könnte man einen Standort mit altem Kürzel nicht mehr
+             anfassen, ohne ihn zugleich umbenennen zu müssen. */
+          if (key === "sites" && "short" in body) {
+            const grund = Inv.pruefeKuerzel(body.short);
+            if (grund) return json(res, 400, { error: grund });
+            merged.short = Inv.normalizeKuerzel(body.short);
+          }
           const item = key === "hosts" ? Inv.normalizeHost(stripEmptyChecks(merged)) : merged;
           const list = inv[key].map((x, n) => (n === i ? item : x));
           commit({ ...inv, [key]: list });

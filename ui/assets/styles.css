@@ -483,3 +483,8 @@ pre.raw {
 select.admin-input { font-family: var(--f-sans); cursor: pointer; }
 .admin-hint { font-size: 11.5px; color: var(--faint); }
 .inspector-body .admin-grid + .admin-grid { margin-top: 4px; }
+
+/* Standortkürzel: vier Stellen, Land + Stadt. Großbuchstaben schon beim
+   Tippen, damit das Feld zeigt, was gespeichert wird. */
+.admin-input--gross { text-transform: uppercase; letter-spacing: .14em; font-family: var(--f-mono); }
+.admin-input--gross::placeholder { letter-spacing: .14em; }

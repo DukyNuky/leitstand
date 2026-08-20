@@ -121,8 +121,11 @@ function siteView(s, hosts, inv, engine) {
   };
 }
 
+/* Nur Notbehelf für Bestände aus der Zeit vor der Vierstelligkeit: aus der
+   Kennung wird etwas Anzeigbares gemacht, damit Filterleiste und Topologie
+   nicht leer bleiben. Gepflegt wird das Kürzel in der Verwaltung. */
 function shortOf(s) {
-  return String(s.id || "").slice(0, 3).toUpperCase();
+  return String(s.id || "—").slice(0, 4).toUpperCase();
 }
 
 function tunnelView(t, st = {}) {

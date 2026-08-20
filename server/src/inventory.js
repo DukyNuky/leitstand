@@ -34,6 +34,30 @@ export const TYPES = {
 
 export class InventoryError extends Error {}
 
+/* ---------- Standortkürzel ----------
+   Vier Stellen, Land und Stadt: DEKO für Deutschland/Köln, ATWI für
+   Österreich/Wien. Feste Breite, weil das Kürzel in der Filterleiste, in
+   der Topologie und in jeder Tabellenzeile steht — unterschiedlich lange
+   Kürzel lassen diese Spalten springen.
+
+   Geprüft wird beim Schreiben, nicht beim Lesen: ein bestehender Bestand
+   mit älteren Kürzeln muss weiter starten. Sonst nähme eine Formalie die
+   ganze Überwachung mit. */
+export const KUERZEL_MUSTER = /^[A-Z][A-Z0-9]{3}$/;
+
+export function normalizeKuerzel(s) {
+  return String(s ?? "").trim().toUpperCase();
+}
+
+/* Gibt den Grund zurück, warum es nicht taugt — oder null, wenn es passt. */
+export function pruefeKuerzel(short) {
+  const k = normalizeKuerzel(short);
+  if (!k) return "Kürzel fehlt — vier Stellen, Land und Stadt (z. B. DEKO für Deutschland/Köln).";
+  if (k.length !== 4) return `„${k}" hat ${k.length} Stellen — es müssen genau vier sein (Land + Stadt, z. B. DEKO).`;
+  if (!KUERZEL_MUSTER.test(k)) return `„${k}" enthält Unerlaubtes — nur Buchstaben und Ziffern, die erste Stelle ein Buchstabe.`;
+  return null;
+}
+
 /* ---------- Lesen ---------- */
 export function load(file) {
   let raw;
@@ -50,7 +74,10 @@ export function load(file) {
 
 export function normalize(doc) {
   const settings = { ...DEFAULTS, ...(doc.settings || {}) };
-  const sites = (doc.sites || []).map(s => ({ ...s, id: String(s.id) }));
+  const sites = (doc.sites || []).map(s => ({
+    ...s, id: String(s.id),
+    ...(s.short ? { short: normalizeKuerzel(s.short) } : {})
+  }));
   const hosts = (doc.hosts || []).map(h => normalizeHost(h));
   const tunnels = (doc.tunnels || []).map(t => ({ ...t, id: String(t.id) }));
   const links = (doc.links || []).map(g => ({

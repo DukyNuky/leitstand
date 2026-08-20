@@ -43,8 +43,11 @@ settings:
 #  Topologie in der Mitte.
 # ============================================================
 sites:
-  - { id: hq, name: Hauptstandort, short: HQ, place: "", primary: true, isp: "" }
-  - { id: rz, name: Zweitstandort,  short: RZ, place: "", isp: "" }
+  # Das Kürzel hat vier Stellen: Land + Stadt. DEKO = Deutschland/Köln,
+  # ATWI = Österreich/Wien. Feste Breite, weil es in der Filterleiste, in
+  # der Topologie und in jeder Tabellenzeile steht.
+  - { id: hq, name: Hauptstandort, short: DEKO, place: Köln,      primary: true, isp: "" }
+  - { id: rz, name: Zweitstandort, short: DEFR, place: Frankfurt, isp: "" }
 
 # ============================================================
 #  Systeme — je ein Beispiel pro Typ.

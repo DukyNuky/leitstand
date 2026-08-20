@@ -167,3 +167,44 @@ test("Unbrauchbare Vorlage kippt den Start nicht", () => {
   assert.equal(r.seeded, false, "auf das Gerüst zurückgefallen");
   assert.doesNotThrow(() => Inv.load(file));
 });
+
+/* ---------- Standortkürzel ----------
+   Vier Stellen, Land + Stadt. Feste Breite, weil das Kürzel in der
+   Filterleiste, in der Topologie und in jeder Tabellenzeile steht. */
+test("Das Kürzel wird auf vier Stellen geprüft", () => {
+  for (const gut of ["DEKO", "ATWI", "CHZH", "DEK2"])
+    assert.equal(Inv.pruefeKuerzel(gut), null, `${gut} sollte durchgehen`);
+
+  assert.match(Inv.pruefeKuerzel("HQ"), /zwei|2 Stellen/i);
+  assert.match(Inv.pruefeKuerzel("DEKOL"), /5 Stellen/);
+  assert.match(Inv.pruefeKuerzel("DE-K"), /Unerlaubtes/);
+  assert.match(Inv.pruefeKuerzel("1DEK"), /erste Stelle/);
+  assert.match(Inv.pruefeKuerzel(""), /fehlt/);
+  assert.match(Inv.pruefeKuerzel(null), /fehlt/);
+});
+
+test("Kleinschreibung wird angenommen und großgeschrieben", () => {
+  assert.equal(Inv.pruefeKuerzel("deko"), null);
+  assert.equal(Inv.normalizeKuerzel(" deko "), "DEKO");
+});
+
+/* Ein bestehender Bestand mit älteren Kürzeln muss weiter starten —
+   sonst nähme eine Formalie die ganze Überwachung mit. */
+test("Ein alter Bestand mit kurzem Kürzel lädt weiterhin", () => {
+  const file = tmp();
+  fs.writeFileSync(file, `
+settings: { icmp: false }
+sites: [ { id: hq, name: Alt, short: HQ } ]
+hosts: []
+tunnels: []
+links: []
+`);
+  assert.doesNotThrow(() => Inv.load(file));
+  assert.equal(Inv.load(file).sites[0].short, "HQ", "unverändert übernommen");
+});
+
+test("Der mitgelieferte Beispielbestand hält sich an die Vierstelligkeit", () => {
+  const inv = Inv.load(new URL("../inventory.yaml", import.meta.url).pathname);
+  for (const s of inv.sites)
+    assert.equal(Inv.pruefeKuerzel(s.short), null, `Standort ${s.id}: ${s.short}`);
+});

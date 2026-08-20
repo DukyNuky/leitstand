@@ -198,7 +198,7 @@ einen Texteditor:
 | Reiter | Was dort geht |
 |---|---|
 | **Systeme** | anlegen, ändern, löschen · Typ, Adresse, Beschreibung · Überwachung abschalten · API-Zugangsdaten hinterlegen · **Verbindung testen** mit Einzelschritten |
-| **Standorte** | anlegen, ändern, löschen · Kürzel, Ort, Anschluss, WAN · **Hauptstandort** festlegen (Mitte der Topologie) |
+| **Standorte** | anlegen, ändern, löschen · **vierstelliges Kürzel** (Land + Stadt, z. B. `DEKO`), Ort, Anschluss, WAN · **Hauptstandort** festlegen (Mitte der Topologie) |
 | **Tunnel** | anlegen, ändern, löschen · Strecke, Interface, Transfernetz, Gegenstelle im Tunnel |
 | **Startseite** | Gruppen anlegen, umbenennen, sortieren · Verknüpfungen hinzufügen, mit System verbinden, sortieren, löschen |
 | **Schwellwerte** | Intervall, Zeitlimit, Fehlschläge bis Rot, „langsam“, Zertifikatsfristen, Verlaufslänge, ICMP |
@@ -306,7 +306,7 @@ server/
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   114 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   121 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -320,7 +320,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 114 Tests
+cd server && npm test     # 121 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
