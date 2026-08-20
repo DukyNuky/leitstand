@@ -45,11 +45,36 @@ export async function testConnection(host, cred, type = host.type) {
   const r = await api(host, type, cred, "/version", 6000);
   if (!r.ok) return { ok: false, detail: r.error, hint: hintFor(r) };
   const v = r.data?.data || {};
-  return {
+  const out = {
     ok: true,
     detail: `Verbunden — ${TYPE_NAME[type] || type} ${v.version || "?"}${v.release ? " (" + v.release + ")" : ""}`,
     version: v.version, ms: r.ms
   };
+
+  /* `/version` darf jeder angemeldete Benutzer lesen — der Test wäre also
+     grün, während der Token die Kennzahlen gar nicht sehen darf. Genau so
+     landet man bei einem Knoten, der erreichbar aussieht und nichts anzeigt.
+     Deshalb wird auch das geprüft, was der Sammler später wirklich braucht. */
+  if (type === "pve") {
+    const res = await api(host, "pve", cred, "/cluster/resources", 6000);
+    const liste = res.ok ? (res.data?.data || []) : null;
+    const RECHTE = "Dem Token fehlen Leserechte: Rolle PVEAuditor auf / mit Vererbung setzen. "
+      + "Bei „Privilege Separation“ gilt die Rolle dem Token selbst, nicht nur dem Benutzer.";
+    if (!res.ok) {
+      out.ok = false;
+      out.detail += ` — aber die Bestandsliste ist nicht lesbar: ${res.error}`;
+      out.hint = RECHTE;
+    } else if (!liste.length) {
+      out.ok = false;
+      out.detail += " — aber die Bestandsliste kommt leer zurück";
+      out.hint = RECHTE + " Proxmox filtert diese Liste nach Rechten, statt sie abzulehnen.";
+    } else {
+      const gaeste = liste.filter(x => x.type === "qemu" || x.type === "lxc").length;
+      const speicher = liste.filter(x => x.type === "storage").length;
+      out.detail += ` · ${gaeste} Gäste und ${speicher} Speicher sichtbar`;
+    }
+  }
+  return out;
 }
 
 function hintFor(r) {
@@ -84,28 +109,58 @@ export async function collectPve(host, cred) {
     online: me.status === "online"
   };
 
-  const resources = resRes.ok ? (resRes.data?.data || []) : [];
-  const mine = resources.filter(r => r.node === me.node);
-  const guests = mine.filter(r => r.type === "qemu" || r.type === "lxc");
-  out.vms = mine.filter(r => r.type === "qemu").length;
-  out.lxc = mine.filter(r => r.type === "lxc").length;
-  out.running = guests.filter(r => r.status === "running").length;
-  out.stopped = guests.filter(r => r.status !== "running" && r.template !== 1).length;
+  /* Gäste und Speicher stehen in der Bestandsliste. Sie kann fehlschlagen
+     oder — was häufiger vorkommt — mit 200 und leerem Inhalt antworten:
+     Proxmox filtert sie nach Rechten. In beiden Fällen ist die Antwort
+     „unbekannt" und nicht „null Stück". Ein gemeldetes 0 wäre hier
+     besonders tückisch, weil es wie ein gemessener Wert aussieht und die
+     Ampel grün lässt. */
+  let fullest = null;
+  if (!resRes.ok) {
+    unbekannt(out);
+    out.error = resRes.error;
+    out.status = "warn";
+    out.note = `Bestandsliste nicht abrufbar: ${resRes.error}`;
+  } else {
+    const mine = (resRes.data?.data || []).filter(r => r.node === me.node);
+    if (!mine.length) {
+      /* Jeder Knoten führt mindestens seinen eigenen Speicher. Kommt gar
+         nichts zurück, darf der Token die Liste nicht lesen. */
+      unbekannt(out);
+      out.status = "warn";
+      out.note = "Bestandsliste ist leer — dem Token fehlen vermutlich Rechte: "
+        + "Rolle PVEAuditor auf / mit Vererbung setzen";
+    } else {
+      const guests = mine.filter(r => r.type === "qemu" || r.type === "lxc");
+      out.vms = mine.filter(r => r.type === "qemu").length;
+      out.lxc = mine.filter(r => r.type === "lxc").length;
+      out.running = guests.filter(r => r.status === "running").length;
+      out.stopped = guests.filter(r => r.status !== "running" && r.template !== 1).length;
 
-  const storages = mine.filter(r => r.type === "storage" && r.maxdisk);
-  out.storages = storages.map(s => ({ name: s.storage, used: pct(s.disk / s.maxdisk) }));
-  const fullest = out.storages.slice().sort((a, b) => (b.used ?? 0) - (a.used ?? 0))[0];
+      const storages = mine.filter(r => r.type === "storage" && r.maxdisk);
+      out.storages = storages.map(s => ({ name: s.storage, used: pct(s.disk / s.maxdisk) }));
+      fullest = out.storages.slice().sort((a, b) => (b.used ?? 0) - (a.used ?? 0))[0] || null;
+    }
+  }
 
   if (clusterRes.ok) {
     const cl = (clusterRes.data?.data || []).find(x => x.type === "cluster");
     if (cl) { out.cluster = cl.name; out.quorum = cl.quorate === 1; }
   }
 
+  /* Ein echter Befund sticht den Hinweis auf fehlende Rechte — kein Quorum
+     oder ein volles Laufwerk ist das dringendere Problem. */
   if (out.cluster && out.quorum === false) { out.status = "crit"; out.note = "Knoten hat kein Quorum"; }
   else if (fullest && fullest.used >= 90) { out.status = "crit"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
   else if (out.ram != null && out.ram >= 85) { out.status = "warn"; out.note = `RAM-Auslastung ${out.ram} %`; }
   else if (fullest && fullest.used >= 80) { out.status = "warn"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
   return out;
+}
+
+/* Was nicht gelesen werden konnte, bleibt unbekannt — und wird als Strich
+   angezeigt statt als Zahl, der man glaubt. */
+function unbekannt(out) {
+  out.vms = null; out.lxc = null; out.running = null; out.stopped = null; out.storages = null;
 }
 
 function pickNode(nodes, host) {

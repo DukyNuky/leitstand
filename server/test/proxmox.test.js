@@ -96,3 +96,97 @@ test("PMG-Sammler liest die Tagesstatistik", async () => {
   assert.equal(r.spam, 1216);
   assert.equal(r.status, "warn", "Virenfunde sind eine Warnung");
 });
+
+/* ---------- Was nicht gelesen werden kann, ist nicht null Stück ----------
+   Proxmox filtert /cluster/resources nach Rechten: ein zu schwacher Token
+   bekommt 200 mit leerer Liste statt einer Ablehnung. Gezählt wurden daraus
+   früher 0 VMs und 0 Container — bei grüner Ampel. Ein erfundener Messwert
+   an genau der Stelle, an der man ihn für bare Münze nimmt. */
+import http from "node:http";
+
+function pveMit(resources, { status = 200 } = {}) {
+  return http.createServer((req, res) => {
+    const send = (code, data) => {
+      const b = JSON.stringify({ data });
+      res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(b) });
+      res.end(b);
+    };
+    const p = new URL(req.url, "http://x").pathname;
+    if (p === "/api2/json/version") return send(200, { version: "8.3.2" });
+    if (p === "/api2/json/nodes") return send(200, [
+      { node: "n1", status: "online", cpu: 0.2, mem: 20e9, maxmem: 64e9, disk: 100e9, maxdisk: 500e9, uptime: 864000 }
+    ]);
+    if (p === "/api2/json/cluster/resources") return send(status, status === 200 ? resources : null);
+    if (p === "/api2/json/cluster/status") return send(200, []);
+    return send(404, null);
+  });
+}
+const anMit = async (resources, opt) => {
+  const srv = pveMit(resources, opt);
+  const u = await new Promise(r => srv.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${srv.address().port}`)));
+  return { srv, host: { id: "n1", url: u } };
+};
+const irgendeinToken = { user: "leitstand@pve", tokenId: "ro", secret: "x" };
+
+test("Leere Bestandsliste zählt nicht als null Gäste", async () => {
+  const { srv, host: h } = await anMit([]);
+  try {
+    const r = await collectPve(h, irgendeinToken);
+    assert.equal(r.vms, null, "unbekannt, nicht null Stück");
+    assert.equal(r.lxc, null);
+    assert.equal(r.storages, null);
+    assert.equal(r.status, "warn", "und die Ampel bleibt nicht grün");
+    assert.match(r.note, /PVEAuditor/, "mit dem Hinweis, woran es liegt");
+    assert.equal(r.cpu, 20, "was gelesen werden konnte, bleibt erhalten");
+  } finally { srv.close(); }
+});
+
+test("Abgelehnte Bestandsliste zählt nicht als null Gäste", async () => {
+  const { srv, host: h } = await anMit(null, { status: 403 });
+  try {
+    const r = await collectPve(h, irgendeinToken);
+    assert.equal(r.vms, null);
+    assert.equal(r.status, "warn");
+    assert.match(r.note, /nicht abrufbar/);
+    assert.match(r.error, /403/);
+  } finally { srv.close(); }
+});
+
+test("Ein Knoten ohne Gäste, aber mit Speicher, meldet ehrlich null", async () => {
+  const { srv, host: h } = await anMit([
+    { type: "storage", node: "n1", storage: "local", disk: 10e9, maxdisk: 100e9 }
+  ]);
+  try {
+    const r = await collectPve(h, irgendeinToken);
+    assert.equal(r.vms, 0, "hier ist 0 ein Messwert, kein Platzhalter");
+    assert.equal(r.lxc, 0);
+    assert.equal(r.storages.length, 1);
+    assert.notEqual(r.status, "warn");
+  } finally { srv.close(); }
+});
+
+/* /version darf jeder angemeldete Benutzer lesen. Der Test war deshalb grün,
+   während der Token die Kennzahlen gar nicht sehen durfte — und der Knoten
+   danach leer blieb, ohne dass jemand wusste warum. */
+test("Verbindungstest deckt auf, wenn nur die Version lesbar ist", async () => {
+  const { srv, host: h } = await anMit([]);
+  try {
+    const r = await testConnection(h, irgendeinToken, "pve");
+    assert.equal(r.ok, false, "das ist kein brauchbarer Zugang");
+    assert.match(r.detail, /8\.3\.2/, "die Version steht trotzdem dabei");
+    assert.match(r.detail, /leer/);
+    assert.match(r.hint, /PVEAuditor/);
+  } finally { srv.close(); }
+});
+
+test("Verbindungstest nennt bei Erfolg, was der Token sehen darf", async () => {
+  const { srv, host: h } = await anMit([
+    { type: "qemu", node: "n1", vmid: 100, status: "running" },
+    { type: "storage", node: "n1", storage: "local", disk: 10e9, maxdisk: 100e9 }
+  ]);
+  try {
+    const r = await testConnection(h, irgendeinToken, "pve");
+    assert.equal(r.ok, true);
+    assert.match(r.detail, /1 Gäste und 1 Speicher sichtbar/);
+  } finally { srv.close(); }
+});
