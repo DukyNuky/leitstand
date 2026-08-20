@@ -225,6 +225,22 @@ Das Token vorher in Proxmox anlegen unter
 `PVEAuditor` auf `/` mit Vererbung geben. **Nur lesend** — der Leitstand
 schreibt nichts.
 
+### Backup Server: eigener Port, eigene Rolle
+
+Der Backup Server hört auf **8007** statt 8006 und hat eine eigene
+Rechteverwaltung — `PVEAuditor` gibt es dort nicht. Token anlegen unter
+`Configuration → Access Control → API Token`, danach unter *Permissions* die
+Rolle **`Audit`** auf Pfad `/` mit *Propagate* eintragen, und zwar **auf die
+Token-ID** (`leitstand@pbs!ro`), nicht nur auf den Benutzer: PBS schneidet die
+Rechte des Tokens mit denen seines Benutzers, ein Token ohne eigenen Eintrag
+darf nichts.
+
+`Audit` deshalb, weil der Leitstand zwei Dinge liest: die Datastore-Belegung
+(`Datastore.Audit`) und die Aufgabenliste (`Sys.Audit` auf `/system/tasks`).
+Mit `DatastoreAudit` allein kommt die Belegung an, die fehlgeschlagenen
+Verify- und GC-Aufträge aber nicht — und die Ampel bliebe still grün, weil PBS
+die Liste nach Rechten filtert, statt den Aufruf abzulehnen.
+
 ## Wenn ein System nichts liefert
 
 Erreichbar, Token hinterlegt, Rechte gesetzt — und trotzdem keine Kennzahlen.

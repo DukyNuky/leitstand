@@ -12,8 +12,30 @@ const host = id => ({ id, name: id, type: "pve", url });
 
 test("Token-Kopfzeile wird nach Proxmox-Schema gebaut", () => {
   assert.equal(authHeader("pve", cred).Authorization, GOOD);
-  assert.equal(authHeader("pbs", { tokenId: "leitstand@pbs!ro", secret: "x" }).Authorization, "PBSAPIToken=leitstand@pbs!ro=x");
+  assert.equal(authHeader("pmg", { tokenId: "leitstand@pmg!ro", secret: "x" }).Authorization,
+    "PMGAPIToken=leitstand@pmg!ro=x");
   assert.equal(authHeader("pve", null), null, "ohne Zugangsdaten keine Kopfzeile");
+});
+
+/* Der Backup Server trennt Token-ID und Geheimnis mit „:“, VE und Mail
+   Gateway mit „=“. Das stand lange gleich für alle drei da — mit dem
+   Ergebnis, dass gegen einen echten PBS jede Anmeldung scheiterte, während
+   der Testserver das Zeichen gar nicht ansah und Grün meldete. */
+test("Backup Server bekommt den Doppelpunkt, nicht das Gleichheitszeichen", () => {
+  assert.equal(authHeader("pbs", { tokenId: "leitstand@pbs!ro", secret: "x" }).Authorization,
+    "PBSAPIToken=leitstand@pbs!ro:x");
+});
+
+test("Ein PBS-Token in VE-Schreibweise wird abgelehnt", async () => {
+  const falsch = await fetch(`${url}/api2/json/version`, {
+    headers: { Authorization: `PBSAPIToken=${GOOD.replace(/^PVEAPIToken=/, "")}` }
+  });
+  assert.equal(falsch.status, 401, "mit „=“ statt „:“ gibt es keine Auskunft");
+
+  const richtig = await fetch(`${url}/api2/json/version`, {
+    headers: { Authorization: `PBSAPIToken=${GOOD.replace(/^PVEAPIToken=/, "").replace(/=(?=[^=]*$)/, ":")}` }
+  });
+  assert.equal(richtig.status, 200);
 });
 
 test("Standardport je Bauart, wenn die url keinen nennt", () => {

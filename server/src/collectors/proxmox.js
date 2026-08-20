@@ -12,6 +12,12 @@ import { requestJson } from "../http.js";
 const PREFIX = { pve: "PVEAPIToken", pbs: "PBSAPIToken", pmg: "PMGAPIToken" };
 const DEFAULT_PORT = { pve: 8006, pbs: 8007, pmg: 8006 };
 
+/* Und hier hört die Gemeinsamkeit auf: VE und Mail Gateway hängen das
+   Geheimnis mit „=“ an die Token-ID, der Backup Server mit „:“. Ein falsches
+   Zeichen sieht aus wie ein falsches Geheimnis — die Antwort ist 401, ohne
+   ein Wort darüber, dass nur der Doppelpunkt fehlt. */
+export const TRENNER = { pve: "=", pbs: ":", pmg: "=" };
+
 /* Der häufigste Grund für „erreichbar, aber keine Kennzahlen": die Rolle
    wurde dem Benutzer gegeben, nicht dem Token. Bei aktivierter Privilege
    Separation — der Vorgabe beim Anlegen — gilt sie dann nicht. Proxmox
@@ -25,7 +31,8 @@ export function authHeader(type, cred) {
   if (!cred) return null;
   if (cred.tokenId && cred.secret) {
     const id = cred.tokenId.includes("!") ? cred.tokenId : `${cred.user || "root@pam"}!${cred.tokenId}`;
-    return { Authorization: `${PREFIX[type] || "PVEAPIToken"}=${id}=${cred.secret}` };
+    const trenner = TRENNER[type] || "=";
+    return { Authorization: `${PREFIX[type] || "PVEAPIToken"}=${id}${trenner}${cred.secret}` };
   }
   return null;
 }

@@ -7,6 +7,18 @@ import http from "node:http";
 export const GOOD = "PVEAPIToken=leitstand@pve!ro=1a2b3c4d-0000-1111-2222-333344445555";
 export const WEAK = "PVEAPIToken=leitstand@pve!schwach=aaaa";
 
+const TRENNER = { PVE: "=", PBS: ":", PMG: "=" };
+
+/* Zerlegt die Kopfzeile so, wie das jeweilige Produkt sie erwartet — und
+   gibt nichts zurück, wenn das Trennzeichen nicht dazu passt. */
+export function zerlegen(auth) {
+  const m = /^(PVE|PBS|PMG)APIToken=(.+)$/.exec(auth || "");
+  if (!m) return null;
+  const i = m[2].lastIndexOf(TRENNER[m[1]]);
+  if (i < 1) return null;
+  return { produkt: m[1], id: m[2].slice(0, i), secret: m[2].slice(i + 1) };
+}
+
 export function fakeProxmox() {
   const server = http.createServer((req, res) => {
     const auth = req.headers.authorization || "";
@@ -15,12 +27,15 @@ export function fakeProxmox() {
       res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(b) });
       res.end(b);
     };
-    /* Echte Geräte akzeptieren je nach Produkt PVE-, PBS- oder PMG-Präfix.
-       Für den Test zählt nur der Teil dahinter. */
-    const token = auth.replace(/^(PVE|PBS|PMG)APIToken=/, "");
+    /* Wie ein echtes Gerät: das Präfix verrät das Produkt, und das Produkt
+       bestimmt das Trennzeichen vor dem Geheimnis. Wer PBS mit „=“ anspricht,
+       bekommt hier dieselbe wortlose 401 wie draußen. */
+    const t = zerlegen(auth);
+    if (!auth) return send(401, null);
+    if (!t) return send(401, null);
+    const token = `${t.id}=${t.secret}`;
     const good = GOOD.replace(/^PVEAPIToken=/, "");
     const weak = WEAK.replace(/^PVEAPIToken=/, "");
-    if (!auth) return send(401, null);
     if (token !== good && token !== weak) return send(401, null);
     /* Ein Token ohne PVEAuditor darf die privilegierten Pfade nicht lesen. */
     if (token === weak && /^\/api2\/json\/(nodes|cluster)/.test(req.url)) return send(403, null);

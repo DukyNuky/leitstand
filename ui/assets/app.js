@@ -2368,16 +2368,26 @@ function zugangsFelder(type, cred, getippt) {
     heruntergeladen wird eine Datei mit beiden Werten. Zum Ablesen genügt ein Benutzer in einer Gruppe
     mit Leserechten; Schreibrechte braucht der Leitstand nirgends.</p>`;
 
+  /* Der Backup Server hat eine eigene Rechteverwaltung: PVEAuditor gibt es
+     dort nicht, und die Rolle muss auf der Token-ID stehen — PBS schneidet
+     die Rechte des Tokens mit denen des Benutzers. */
+  const hinweis = type === "pbs" ? `Nur lesend: im Backup Server unter
+    <span class="mono">Configuration → Access Control → Permissions</span> eintragen —
+    Pfad <span class="mono">/</span>, Rolle <span class="mono">Audit</span>, Propagate an,
+    und zwar auf die <b>Token-ID</b>, nicht nur auf den Benutzer.
+    <span class="mono">DatastoreAudit</span> allein reicht nicht: die Belegung käme an,
+    die fehlgeschlagenen Aufträge blieben unsichtbar.` : `Nur lesend: in Proxmox unter
+    <span class="mono">Datacenter → Permissions → Add → API Token Permission</span> eintragen —
+    Pfad <span class="mono">/</span>, Rolle <span class="mono">PVEAuditor</span>, Propagate an.
+    Eine Berechtigung, die nur dem Benutzer gilt, greift bei „Privilege Separation“ nicht für seine Token.`;
+
   return `
     <div class="admin-grid">
-      ${inpc("user", "Benutzer@Realm", cred, "leitstand@pve", getippt)}
+      ${inpc("user", "Benutzer@Realm", cred, type === "pbs" ? "leitstand@pbs" : "leitstand@pve", getippt)}
       ${inpc("tokenId", "Token-ID", cred, "ro", getippt)}
       ${inpc("secret", "Geheimnis", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "aus der Anlage-Maske kopieren", getippt)}
     </div>
-    <p class="admin-hint" style="margin:8px 0 0">Nur lesend: in Proxmox unter
-    <span class="mono">Datacenter → Permissions → Add → API Token Permission</span> eintragen —
-    Pfad <span class="mono">/</span>, Rolle <span class="mono">PVEAuditor</span>, Propagate an.
-    Eine Berechtigung, die nur dem Benutzer gilt, greift bei „Privilege Separation“ nicht für seine Token.</p>`;
+    <p class="admin-hint" style="margin:8px 0 0">${hinweis}</p>`;
 }
 
 function viewVerwaltung() {

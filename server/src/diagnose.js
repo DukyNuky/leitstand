@@ -15,7 +15,7 @@
      Schritt, der nicht durchkam, nicht auf den letzten. */
 
 import { runCheck } from "./probe.js";
-import { authHeader, baseUrl, RECHTEHINWEIS } from "./collectors/proxmox.js";
+import { authHeader, baseUrl, RECHTEHINWEIS, TRENNER } from "./collectors/proxmox.js";
 import { requestJson } from "./http.js";
 import * as Opn from "./collectors/opnsense.js";
 
@@ -213,8 +213,11 @@ function zugangsForm(type, cred, kopf) {
     hinweis: cred.secret ? "Token-ID fehlt" : "Geheimnis fehlt",
     benutzer: cred.user || null, tokenId: cred.tokenId || null
   };
+  /* Abgeschnitten wird am Trennzeichen des jeweiligen Produkts — beim
+     Backup Server am Doppelpunkt. Am „=" zu schneiden hieße dort, die
+     Token-ID mit zu verdecken; gerade sie soll man hier prüfen können. */
   const wert = kopf.Authorization;
-  const bis = wert.lastIndexOf("=");
+  const bis = wert.lastIndexOf(TRENNER[type] || "=");
   return {
     vorhanden: true,
     form: wert.slice(0, bis + 1) + "••••••••",
@@ -293,8 +296,11 @@ function fazit(host, b) {
       return { problem: true, text: `Die Anmeldung wird abgelehnt: ${wo}. Token-ID und Geheimnis prüfen — `
         + `die Token-ID lautet vollständig Benutzer@Realm!Name, das Geheimnis gibt es nur beim Anlegen zu sehen.` };
     if (gescheitert.status === 403)
-      return { problem: true, text: `Angemeldet, aber ohne Leserechte: ${wo}. Rolle PVEAuditor auf / mit Vererbung setzen — `
-        + `bei „Privilege Separation“ dem Token selbst, nicht nur dem Benutzer.` };
+      return { problem: true, text: host.type === "pbs"
+        ? `Angemeldet, aber ohne Leserechte: ${wo}. Rolle Audit auf / mit Propagate setzen — `
+          + `auf die Token-ID, nicht nur auf den Benutzer. DatastoreAudit allein deckt die Aufgabenliste nicht ab.`
+        : `Angemeldet, aber ohne Leserechte: ${wo}. Rolle PVEAuditor auf / mit Vererbung setzen — `
+          + `bei „Privilege Separation“ dem Token selbst, nicht nur dem Benutzer.` };
     if (gescheitert.status === 404)
       return { problem: true, text: `Erreicht, aber der Endpunkt fehlt: ${wo}. Meist der falsche Port — `
         + `Proxmox VE 8006, Backup Server 8007, Mail Gateway 8006.` };

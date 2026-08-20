@@ -27,7 +27,8 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 
 | | |
 |---|---|
-| Zugang | API-Token `PBSAPIToken=…`, Rolle `DatastoreAudit`, Port 8007 |
+| Zugang | API-Token, Rolle `Audit` auf `/` mit Propagate, Port 8007, `Authorization: PBSAPIToken=leitstand@pbs!ro:<uuid>` — **Doppelpunkt** vor dem Geheimnis, nicht `=` wie bei VE und PMG |
+| Rechte | `Audit` deckt beides ab: `Datastore.Audit` für die Belegung *und* `Sys.Audit` auf `/system/tasks` für die Aufgabenliste. `DatastoreAudit` allein reicht **nicht** — die Belegung käme an, die fehlgeschlagenen Aufträge blieben unsichtbar. Die Berechtigung gehört auf die **Token-ID**: PBS schneidet die Rechte des Tokens mit denen des Benutzers, eigene ACL-Einträge für das Token sind Pflicht |
 | Endpunkte | `/api2/json/status/datastore-usage`, `/api2/json/nodes/localhost/tasks?running=0`, `/api2/json/admin/datastore/{store}/snapshots` |
 | Kennzahlen | Belegung je Datastore, letzter erfolgreicher Lauf, fehlgeschlagene Verify-/GC-/Sync-Aufträge, Alter der jüngsten Sicherung |
 | Ampel | kein Erfolg in 26 h → rot · fehlgeschlagener Verify → rot · Belegung > 85 % → gelb |
@@ -154,7 +155,8 @@ Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
 ## Zugänge anlegen — Kurzfassung
 
 ```
-Proxmox VE/PBS/PMG   Benutzer leitstand@pve, Rolle PVEAuditor/DatastoreAudit, Token ohne Ablauf
+Proxmox VE/PMG       Benutzer leitstand@pve, Rolle PVEAuditor auf / mit Vererbung, Token ohne Ablauf
+Proxmox Backup       Benutzer leitstand@pbs, Rolle Audit auf / mit Propagate — auch für die Token-ID selbst
 OPNsense             System → Access → Users → leitstand, Gruppe mit Lesezugriff, API-Key erzeugen
 pfSense              eigener SSH-Schlüssel, Benutzer ohne Shell-Rechte darüber hinaus
 AdGuard              zusätzlicher Benutzer in der YAML-Konfiguration
