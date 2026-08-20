@@ -182,18 +182,33 @@ test("Eine volle Platte dreht die Ampel auf Rot", async () => {
 });
 
 /* ---------- Durchsatz ---------- */
+/* Die Rate hängt an der verstrichenen Zeit, und die ist auf einem
+   ausgelasteten Bauknecht eine andere als hier. Deshalb wird nicht gegen
+   einen festen Erwartungswert geprüft, sondern gegen die Spanne, die die
+   Uhr zulässt: der Sammler misst irgendwo zwischen dem Ende des ersten
+   und dem Ende des zweiten Abrufs. Was dazwischen passt, ist richtig —
+   ein Fehler in der Einheit (Bytes statt Bits, kbit statt Mbit) fiele
+   trotzdem sofort auf, weil er um Zehnerpotenzen danebenläge. */
 test("Durchsatz gibt es erst ab dem zweiten Durchlauf", async () => {
   const { srv, host } = await an();
   try {
+    const a0 = Date.now();
     const erst = await collectOpnsense(host, CRED);
+    const a1 = Date.now();
     assert.equal(erst.thrIn, null, "ein einzelner Zählerstand ergibt keine Rate");
     assert.equal(erst.thrOut, null);
 
     await new Promise(r => setTimeout(r, 1100));
+    const b0 = Date.now();
     const dann = await collectOpnsense(host, CRED);
+    const b1 = Date.now();
+
     assert.ok(dann.thrIn > 0, "jetzt liegt eine Differenz vor");
-    /* 1,5 MB in gut einer Sekunde sind rund 12 Mbit/s. */
-    assert.ok(dann.thrIn > 8 && dann.thrIn < 13, `unerwartete Rate: ${dann.thrIn}`);
+    /* 1,5 MB je Durchlauf sind 12 Mbit, geteilt durch die verstrichene Zeit. */
+    const hoechstens = 12 / ((b0 - a1) / 1000);
+    const mindestens = 12 / ((b1 - a0) / 1000);
+    assert.ok(dann.thrIn <= hoechstens && dann.thrIn >= mindestens,
+      `Rate ${dann.thrIn} liegt außerhalb von ${mindestens.toFixed(3)}…${hoechstens.toFixed(3)} Mbit/s`);
     assert.equal(dann.thrQuelle, "WAN", "die als WAN beschriebene Schnittstelle zählt");
   } finally { srv.close(); }
 });

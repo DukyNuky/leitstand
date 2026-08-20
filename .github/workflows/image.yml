@@ -24,6 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Dieselbe Fassung, die auch im Abbild läuft (node:22-alpine). Ohne
+      # diese Angabe nimmt der Bauknecht, was in seinem Abbild gerade
+      # mitgeliefert wird — das ändert sich wöchentlich, und dann scheitert
+      # ein Bau ohne jede Änderung am Programm.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
       - name: Tests
         run: |
           cd server
