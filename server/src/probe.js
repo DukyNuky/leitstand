@@ -146,18 +146,63 @@ function errText(e) {
 export function targetHost(check, target = {}) {
   if (check.ip || check.host) return check.ip || check.host;
   if (target.ip || target.host) return target.ip || target.host;
-  if (target.url) { try { return new URL(target.url).hostname; } catch {} }
+  if (target.url) { const n = urlHost(target.url); if (n) return n; }
   return null;
+}
+
+/* Für Port- und TLS-Prüfungen gibt es bis zu zwei Ziele: die IP des Systems
+   und den Namen aus seiner Oberflächen-Adresse. Meistens ist das dasselbe.
+   Nicht dasselbe ist es, wenn die Oberfläche hinter einem Reverse Proxy
+   liegt — dann steht auf dem System selbst kein Port 443 offen, obwohl die
+   Seite im Browser einwandfrei kommt, und der Leitstand meldete dafür einen
+   Teilausfall. Umgekehrt löst ein interner Name nicht überall auf, deshalb
+   wird nicht einfach der Name genommen.
+
+   Also beides, und es genügt, wenn eines trägt. Die IP kommt zuerst: an
+   allem, was heute schon trägt, ändert sich damit nichts, der Name ist der
+   zweite Versuch. Nennt die Prüfung selbst ein Ziel, gilt nur dieses. */
+export function targetHosts(check, target = {}) {
+  const liste = [];
+  const nimm = v => { if (v && !liste.includes(v)) liste.push(v); };
+  nimm(targetHost(check, target));
+  if (!check.ip && !check.host && target.url) nimm(urlHost(target.url));
+  return liste;
+}
+
+function urlHost(url) {
+  try { return new URL(url).hostname.replace(/^\[|\]$/g, ""); } catch { return null; }
+}
+
+/* Der Reihe nach versuchen, bis eines antwortet. Wer geantwortet hat, steht
+   im Ergebnis — sonst stünde da „Port 443 offen“, ohne zu sagen, wo. */
+async function ersterTreffer(ziele, pruefe) {
+  let erst = null;
+  for (const [i, host] of ziele.entries()) {
+    const r = await pruefe(host);
+    if (r.ok) return i === 0 ? r : { ...r, ziel: host, detail: `${r.detail} (über ${host})` };
+    if (i === 0) erst = r;
+  }
+  const weitere = ziele.slice(1);
+  return weitere.length
+    ? { ...erst, detail: `${erst.detail} — auch ${weitere.join(", ")} antwortet nicht` }
+    : erst;
 }
 
 export async function runCheck(check, target, settings = {}) {
   const timeout = (settings.timeout ?? 4) * 1000;
-  const host = targetHost(check, target);
+  const ziele = targetHosts(check, target);
+  const host = ziele[0] || null;
   if (!host && check.kind !== "http") return fail("kein Prüfziel — weder ip noch url am System");
   switch (check.kind) {
-    case "tcp":  return tcpCheck({ host, port: check.port, timeout });
-    case "tls":  return tlsCheck({ host, port: check.port || 443, servername: check.servername, timeout });   /* SNI folgt aus host, wenn kein Name gesetzt ist */
+    case "tcp":  return ersterTreffer(ziele, h => tcpCheck({ host: h, port: check.port, timeout }));
+    /* SNI folgt aus dem Ziel, wenn kein Name gesetzt ist — hinter einem
+       Reverse Proxy ist genau das nötig, damit er das richtige Zertifikat
+       zeigt statt irgendeines. */
+    case "tls":  return ersterTreffer(ziele, h => tlsCheck({ host: h, port: check.port || 443, servername: check.servername, timeout }));
     case "http": return httpCheck({ url: check.url, timeout, expect: check.expect });
+    /* DNS und ICMP fragen das System selbst, nicht seine Oberflächen-Adresse:
+       ein Resolver antwortet auf seiner IP, nicht auf dem Namen, unter dem
+       ein Proxy seine Weboberfläche ausliefert. */
     case "dns":  return dnsCheck({ host, port: check.port || 53, query: check.query, timeout });
     case "icmp": return settings.icmp === false
       ? { ok: null, ms: null, detail: "ICMP abgeschaltet", skipped: true }

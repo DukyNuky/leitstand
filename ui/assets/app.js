@@ -526,6 +526,16 @@ function siteCard(s) {
 /* ============================================================
    Ansicht: Standorte
    ============================================================ */
+
+/* Die Karte sieht meist wie ein Stern aus, ist aber keiner: in der Mitte
+   steht der Hauptstandort, ringsum die übrigen — und ein Tunnel zwischen
+   zwei Nebenstandorten wird genauso gezeichnet. Wer eine solche Strecke
+   legt, tut das gerade, damit der Verkehr nicht über die Mitte läuft; eine
+   Karte, die sie verschweigt, zeigt ein Netz, das es so nicht gibt.
+
+   Diese Direktstrecken werden nach außen gebogen. Gerade gezogen liefen
+   sie quer durch die Nabe und sähen aus wie zwei Sternstrecken — also
+   genau wie das, was sie nicht sind. */
 function topoSvg() {
   /* Mitte ist der als primär markierte Standort; ist keiner markiert, der
      erste. Ohne Standort gibt es nichts zu zeichnen. */
@@ -534,18 +544,66 @@ function topoSvg() {
 
   const W = 760, H = 260, cx = W / 2, cy = H / 2;
   const spokes = SITES.filter(s => s.id !== hub.id);
-  const pts = spokes.map((s, i) => {
+  const pos = new Map([[hub.id, { x: cx, y: cy }]]);
+  spokes.forEach((s, i) => {
     const a = (-90 + (360 / spokes.length) * i) * Math.PI / 180;
-    return { s, x: cx + Math.cos(a) * 250, y: cy + Math.sin(a) * 95 };
+    pos.set(s.id, { x: cx + Math.cos(a) * 250, y: cy + Math.sin(a) * 95 });
   });
-  const lines = pts.map(p => {
-    const t = state.tunnels.find(t => (t.a === hub.id && t.b === p.s.id) || (t.b === hub.id && t.a === p.s.id));
-    const col = !t ? "var(--idle)" : t.status === "ok" ? "var(--ok)" : t.status === "warn" ? "var(--warn)" : "var(--crit)";
-    const dash = t && t.status === "crit" ? '6 5' : t && t.status === "warn" ? '3 3' : '0';
-    const beschriftung = !t ? "" : t.status === "crit" ? "keine Antwort" : t.rtt != null ? t.rtt + " ms" : "";
-    return `<line x1="${cx}" y1="${cy}" x2="${p.x}" y2="${p.y}" stroke="${col}" stroke-width="1.8" stroke-dasharray="${dash}" opacity=".85"/>
-      <text x="${(cx + p.x) / 2}" y="${(cy + p.y) / 2 - 6}" fill="var(--faint)" font-size="10" font-family="IBM Plex Mono, monospace" text-anchor="middle">${esc(beschriftung)}</text>`;
+
+  /* Eine Linie je Standortpaar, Richtung egal. Liegen mehrere Tunnel
+     zwischen denselben Standorten, trägt die Linie den schlechtesten
+     Zustand: eine tote zweite Strecke darf nicht hinter einer lebenden
+     verschwinden. Wie viele es sind, steht am Zeiger. */
+  const paar = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const strecken = new Map();
+  for (const t of state.tunnels) {
+    if (t.a === t.b || !pos.has(t.a) || !pos.has(t.b)) continue;
+    const k = paar(t.a, t.b);
+    const bisher = strecken.get(k);
+    if (!bisher) strecken.set(k, { a: t.a, b: t.b, t, anzahl: 1 });
+    else {
+      bisher.anzahl++;
+      if (SEV_ORDER[t.status] < SEV_ORDER[bisher.t.status]) bisher.t = t;
+    }
+  }
+  /* Ein Nebenstandort ohne Tunnel zur Mitte behält seine Linie, grau:
+     dass dort nichts liegt, ist die Aussage. */
+  for (const s of spokes)
+    if (!strecken.has(paar(hub.id, s.id)))
+      strecken.set(paar(hub.id, s.id), { a: hub.id, b: s.id, t: null, anzahl: 0 });
+
+  const farbe = t => !t || t.status === "idle" ? "var(--idle)"
+    : t.status === "ok" ? "var(--ok)" : t.status === "warn" ? "var(--warn)" : "var(--crit)";
+  const strich = t => t && t.status === "crit" ? "6 5" : t && t.status === "warn" ? "3 3" : "0";
+  const text = t => !t ? "" : t.status === "crit" ? "keine Antwort" : t.rtt != null ? t.rtt + " ms" : "";
+
+  const lines = [...strecken.values()].map(({ a, b, t, anzahl }) => {
+    const p = pos.get(a), q = pos.get(b);
+    const direkt = a !== hub.id && b !== hub.id;   /* Nebenstandort ↔ Nebenstandort */
+    let d, lx, ly;
+    if (!direkt) {
+      d = `M${p.x.toFixed(1)} ${p.y.toFixed(1)} L${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
+      lx = (p.x + q.x) / 2; ly = (p.y + q.y) / 2 - 6;
+    } else {
+      /* Senkrecht zur Sehne nach außen ausholen, und zwar um so weiter,
+         je näher die Sehne an der Nabe vorbeiliefe. */
+      const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+      const laenge = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      let nx = -(q.y - p.y) / laenge, ny = (q.x - p.x) / laenge;
+      if ((mx - cx) * nx + (my - cy) * ny < 0) { nx = -nx; ny = -ny; }
+      const bauch = 2 * Math.max(30, 86 - Math.hypot(mx - cx, my - cy));
+      const kx = mx + nx * bauch, ky = my + ny * bauch;
+      d = `M${p.x.toFixed(1)} ${p.y.toFixed(1)} Q${kx.toFixed(1)} ${ky.toFixed(1)} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
+      lx = (mx + kx) / 2; ly = (my + ky) / 2 - 6;
+    }
+    const titel = `${siteName(a)} ↔ ${siteName(b)}`
+      + (t ? ` · ${t.iface || t.id}` : " · kein Tunnel angelegt")
+      + (anzahl > 1 ? ` · ${anzahl} Strecken` : "")
+      + (t && t.rtt != null ? ` · ${t.rtt} ms` : "");
+    return `<path d="${d}" fill="none" stroke="${farbe(t)}" stroke-width="1.8" stroke-dasharray="${strich(t)}" opacity=".85"><title>${esc(titel)}</title></path>
+      <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="var(--faint)" font-size="10" font-family="IBM Plex Mono, monospace" text-anchor="middle">${esc(text(t))}</text>`;
   }).join("");
+
   const node = (x, y, s, big) => {
     const bad = s.down ? "crit" : state.hosts.filter(h => h.site === s.id && isProblem(h.status)).length ? "warn" : "ok";
     const col = `var(--${bad})`;
@@ -556,8 +614,9 @@ function topoSvg() {
       <text x="${x}" y="${y + 11}" text-anchor="middle" fill="var(--faint)" font-size="9" font-family="IBM Plex Mono, monospace">${state.hosts.filter(h => h.site === s.id).length} Sys.</text>
     </g>`;
   };
-  return `<svg class="topo" viewBox="0 0 ${W} ${H}" role="img" aria-label="Netztopologie: ${esc(hub.name)} als Zentrum, weitere Standorte per Tunnel verbunden">
-    ${lines}${pts.map(p => node(p.x, p.y, p.s)).join("")}${node(cx, cy, hub, true)}
+  const direkte = [...strecken.values()].filter(x => x.t && x.a !== hub.id && x.b !== hub.id).length;
+  return `<svg class="topo" viewBox="0 0 ${W} ${H}" role="img" aria-label="Netztopologie: ${esc(hub.name)} als Zentrum, weitere Standorte per Tunnel verbunden${direkte ? `, dazu ${direkte} Direktstrecke${direkte > 1 ? "n" : ""} zwischen Nebenstandorten` : ""}">
+    ${lines}${spokes.map(s => node(pos.get(s.id).x, pos.get(s.id).y, s)).join("")}${node(cx, cy, hub, true)}
   </svg>`;
 }
 

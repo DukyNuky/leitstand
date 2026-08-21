@@ -116,10 +116,10 @@ docker compose up -d          # aus der Wurzel des Repositorys
 
 | | |
 |---|---|
-| **Erreichbarkeit** | ICMP, TCP-Port, HTTP-Status — alle 15 s, drei Fehlschläge bis Rot |
+| **Erreichbarkeit** | ICMP, TCP-Port, HTTP-Status — alle 15 s, drei Fehlschläge bis Rot; Port- und TLS-Prüfung fragen die IP **und** den Namen aus der Oberflächen-Adresse, damit ein System hinter einem Reverse Proxy nicht als Teilausfall gilt |
 | **Antwortzeiten** | Verlauf je System, sichtbar als Sparkline |
 | **Zertifikate** | Restlaufzeit aller TLS-Ziele, Warnung ab 30 Tagen, Rot ab 14 |
-| **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake des verknüpften Peers |
+| **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake des verknüpften Peers. Die Karte zeigt auch Strecken **zwischen Nebenstandorten**, nicht nur die zum Hauptstandort |
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version |
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
@@ -334,7 +334,7 @@ server/
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   145 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   191 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -348,7 +348,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 145 Tests
+cd server && npm test     # 191 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen

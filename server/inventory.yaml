@@ -22,7 +22,13 @@
 #  Prüfungen werden automatisch aus `url` und `ip` abgeleitet:
 #    url: https://host:8006  ->  TCP 8006 + TLS-Restlaufzeit
 #    ip:  10.10.1.11         ->  ICMP (sofern ping vorhanden)
-#  Wer das nicht will, setzt `checks:` ausdrücklich — siehe adguard-hq-01.
+#
+#  Wer das nicht will, setzt `checks:` ausdrücklich — siehe adguard-01.
+#
+#  Port und TLS werden an der IP versucht und, wenn dort nichts antwortet,
+#  am Namen aus der url. Das ist der Fall „Oberfläche hinter einem Reverse
+#  Proxy": auf dem System selbst steht kein 443 offen, unter seinem Namen
+#  kommt die Seite trotzdem. ICMP und DNS fragen weiter nur die IP.
 # ============================================================
 
 settings:

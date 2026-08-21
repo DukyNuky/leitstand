@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
 import * as Inv from "../src/inventory.js";
 
 const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-")), "inventory.yaml");
@@ -162,6 +163,39 @@ test("Prüfziel wird notfalls aus der Oberflächen-URL gezogen", async () => {
   assert.equal(targetHost({ kind: "tcp", port: 443 }, { ip: "10.0.0.1", url: "https://name.example.de" }), "10.0.0.1", "die IP hat Vorrang");
   assert.equal(targetHost({ kind: "tcp", port: 25, ip: "10.0.0.9" }, { ip: "10.0.0.1" }), "10.0.0.9", "die Prüfung selbst hat den Vorrang");
   assert.equal(targetHost({ kind: "icmp" }, {}), null);
+});
+
+/* Die Oberfläche liegt hinter einem Reverse Proxy: auf dem System selbst
+   steht kein Port 443 offen, unter seinem Namen kommt die Seite trotzdem.
+   Wer nur die IP prüft, meldet dafür einen Teilausfall — für etwas, das im
+   Browser einwandfrei läuft. Also beides versuchen. */
+test("Port- und TLS-Prüfung versuchen IP und Namen aus der Adresse", async () => {
+  const { targetHosts, runCheck } = await import("../src/probe.js");
+
+  assert.deepEqual(
+    targetHosts({ kind: "tcp", port: 443 }, { ip: "10.0.0.1", url: "https://name.example.de" }),
+    ["10.0.0.1", "name.example.de"], "die IP zuerst, der Name als zweiter Versuch");
+  assert.deepEqual(
+    targetHosts({ kind: "tcp", port: 8006 }, { ip: "10.0.0.1", url: "https://10.0.0.1:8006" }),
+    ["10.0.0.1"], "sind beide dasselbe, bleibt es bei einem Versuch");
+  assert.deepEqual(
+    targetHosts({ kind: "tcp", port: 25, ip: "10.0.0.9" }, { ip: "10.0.0.1", url: "https://name.example.de" }),
+    ["10.0.0.9"], "nennt die Prüfung selbst ein Ziel, gilt nur dieses");
+
+  const srv = net.createServer(c => c.end());
+  const port = await new Promise(r => srv.listen(0, "127.0.0.1", () => r(srv.address().port)));
+  try {
+    const ueberNamen = await runCheck({ kind: "tcp", port },
+      { ip: "127.0.0.2", url: `http://127.0.0.1:${port}` }, { timeout: 2 });
+    assert.equal(ueberNamen.ok, true, "die Adresse trägt, auch wenn die IP den Port nicht anbietet");
+    assert.match(ueberNamen.detail, /127\.0\.0\.1/, "im Ergebnis steht, wer geantwortet hat");
+
+    /* Antwortet keines von beiden, wird auch keines verschwiegen. */
+    const gar = await runCheck({ kind: "tcp", port },
+      { ip: "127.0.0.2", url: `http://127.0.0.3:${port}` }, { timeout: 2 });
+    assert.equal(gar.ok, false);
+    assert.match(gar.detail, /auch 127\.0\.0\.3/);
+  } finally { await new Promise(x => srv.close(x)); }
 });
 
 test("Fehlender Bestand wird beim ersten Start angelegt", () => {

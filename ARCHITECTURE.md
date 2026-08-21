@@ -140,6 +140,14 @@ ist der Auffangkanal für alles, was keine Schnittstelle hat.
 
 ### Was in Stufe 1 bewusst anders gelöst ist
 
+**Die Karte ist kein Stern.** In der Mitte steht der Hauptstandort, ringsum die
+übrigen — aber ein Tunnel zwischen zwei Nebenstandorten wird genauso gezeichnet,
+nach außen gebogen, damit er nicht durch die Nabe läuft. Wer eine solche Strecke
+legt, tut das gerade, damit der Verkehr nicht über die Mitte geht; eine Karte,
+die sie verschweigt, zeigt ein Netz, das es so nicht gibt. Liegen mehrere Tunnel
+zwischen denselben Standorten, trägt die Linie den schlechtesten Zustand: eine
+tote zweite Strecke darf nicht hinter einer lebenden verschwinden.
+
 **Tunnel: zwei Zeugen, nicht einer.** Der Leitstand misst *durch* den Tunnel —
 jeder Tunnel bekommt in `inventory.yaml` eine `probe`-Adresse im Transfernetz.
 Das braucht keinerlei Zugangsdaten und beantwortet die Frage, die zählt: trägt
@@ -158,6 +166,18 @@ Schlüssel übersteht eine Umbenennung auf der Firewall. Ein Name greift nur als
 Rückfall und nur, wenn er eindeutig ist — lieber kein Treffer als der falsche,
 denn ein falscher meldete den Handshake eines fremden Geräts als den dieser
 Strecke.
+
+**Zwei Prüfziele, nicht eines.** Port- und TLS-Prüfung fragen zuerst die IP des
+Systems und, wenn dort nichts antwortet, den Namen aus seiner
+Oberflächen-Adresse. Meistens ist das dasselbe. Nicht dasselbe ist es, wenn die
+Oberfläche hinter einem Reverse Proxy liegt: dann steht auf dem System selbst
+kein Port 443 offen, obwohl die Seite im Browser einwandfrei kommt — und eine
+Überwachung, die nur die IP kennt, meldet dafür einen Teilausfall. Umgekehrt
+löst ein interner Name nicht überall auf, deshalb bleibt die IP der erste
+Versuch. Es genügt, wenn eines von beiden trägt; im Ergebnis steht, welches es
+war. ICMP und DNS fragen weiterhin nur das System selbst — ein Resolver
+antwortet auf seiner Adresse, nicht unter dem Namen, unter dem ein Proxy seine
+Weboberfläche ausliefert.
 
 **Erreichbar, aber Abruf scheitert.** Ein System, das antwortet, dessen API-Zugang
 aber abgelehnt wird, geht auf Gelb statt still ohne Kennzahlen dazustehen. Ein

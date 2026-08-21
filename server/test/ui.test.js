@@ -369,6 +369,70 @@ links: []
 });
 
 /* ============================================================
+   Topologie
+
+   Die Karte ist kein Stern: zwischen zwei Nebenstandorten darf eine eigene
+   Strecke liegen, und die läuft dann gerade nicht über die Mitte. Der
+   Zustand wird hier von Hand um einen dritten Standort ergänzt — geprüft
+   wird die Zeichnung, und die ist eine reine Funktion des Zustands.
+   ============================================================ */
+
+async function mitDrittemStandort(zusatz = []) {
+  const zustand = await echterZustand();
+  zustand.sites.push({ id: "ch", name: "Drittstandort", short: "CHZH", place: "Zürich",
+    isp: "—", wan: "—", wan6: "—", primary: false, down: false, hosts: 0, problems: 0,
+    tunnelsOk: 1, tunnels: 1 });
+  zustand.tunnels.push({ id: "wg-rz-ch", a: "rz", b: "ch", iface: "wg1", net: "10.99.1.0/30",
+    status: "ok", rtt: 24, quelle: "probe", handshake: null, rx: null, tx: null, peer: null,
+    hist: [], lastSeen: null, note: null }, ...zusatz);
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "sites";
+  ui.render();
+  return { html: ziele.get("#wrap").innerHTML, sandbox, ziele };
+}
+
+/* Der Scheitel einer quadratischen Kurve liegt auf halbem Weg zwischen
+   Sehnenmitte und Steuerpunkt — das ist die Stelle, an der sie der Nabe am
+   nächsten kommt. */
+function scheitel(d) {
+  const z = d.match(/-?[\d.]+/g).map(Number);
+  const [px, py, kx, ky, qx, qy] = z;
+  return { x: 0.25 * px + 0.5 * kx + 0.25 * qx, y: 0.25 * py + 0.5 * ky + 0.25 * qy };
+}
+
+test("Ein Tunnel zwischen zwei Nebenstandorten steht in der Karte", async () => {
+  const { html } = await mitDrittemStandort();
+
+  const direkt = html.match(/<path d="([^"]+)"[^>]*>\s*<title>Zweitstandort ↔ Drittstandort[^<]*<\/title>/);
+  assert.ok(direkt, "die Direktstrecke fehlt in der Zeichnung");
+  assert.match(direkt[1], /Q/, "sie wird gebogen gezeichnet, sonst liefe sie durch die Nabe");
+  assert.match(html, /24 ms/, "ihre Latenz steht an der Linie");
+
+  /* Sie darf die Mitte nicht berühren: dort steht der Hauptstandort, 68
+     breit und 40 hoch. Ginge sie hindurch, sähe sie aus wie zwei
+     Sternstrecken — also wie das Gegenteil dessen, was sie ist. */
+  const s = scheitel(direkt[1]);
+  assert.ok(Math.hypot(s.x - 380, s.y - 130) > 40,
+    `die Kurve läuft durch die Nabe (Scheitel ${s.x.toFixed(0)}/${s.y.toFixed(0)})`);
+
+  /* Und die Sternstrecken bleiben, wie sie waren. */
+  assert.ok(/<title>Hauptstandort ↔ Zweitstandort/.test(html), "der Tunnel zur Mitte fehlt");
+});
+
+test("Mehrere Tunnel auf derselben Strecke zeigen den schlechtesten Zustand", async () => {
+  const { html } = await mitDrittemStandort([{ id: "wg-rz-ch-2", a: "ch", b: "rz", iface: "wg2",
+    net: "10.99.2.0/30", status: "crit", rtt: null, quelle: "probe", handshake: null,
+    rx: null, tx: null, peer: null, hist: [], lastSeen: null, note: null }]);
+
+  const direkt = html.match(/<path d="[^"]+" fill="none" stroke="([^"]+)"[^>]*>\s*<title>Zweitstandort ↔ Drittstandort([^<]*)<\/title>/);
+  assert.ok(direkt, "die Direktstrecke fehlt");
+  assert.equal(direkt[1], "var(--crit)", "eine tote zweite Strecke darf nicht hinter einer lebenden verschwinden");
+  assert.match(direkt[2], /2 Strecken/, "dass es zwei sind, steht am Zeiger");
+});
+
+/* ============================================================
    Tunnel ↔ WireGuard-Peer
 
    Der Zustand wird hier von Hand ergänzt, wo der Testserver ihn nicht
