@@ -80,7 +80,12 @@ export async function httpCheck({ url, timeout = 4000, expect = null }) {
       ? pass(ms, `HTTP ${res.status}`, { status: res.status })
       : fail(`HTTP ${res.status}`, ms);
   } catch (e) {
-    return fail(e.name === "AbortError" ? `Zeitüberschreitung nach ${timeout} ms` : errText(e), Date.now() - t0);
+    /* `fetch` verpackt den eigentlichen Fehler: oben steht „fetch failed",
+       der Grund (ECONNREFUSED, ENOTFOUND …) hängt in `cause`. Ohne diesen
+       Griff stünde an einer Kachel „fetch failed" — eine Meldung, aus der
+       niemand ableiten kann, ob der Dienst aus ist oder der Name nicht
+       auflöst. */
+    return fail(e.name === "AbortError" ? `Zeitüberschreitung nach ${timeout} ms` : errText(e.cause || e), Date.now() - t0);
   } finally { clearTimeout(timer); }
 }
 

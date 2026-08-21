@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
+import http from "node:http";
 import * as Inv from "../src/inventory.js";
 import { Engine, findePeer } from "../src/engine.js";
 
@@ -420,4 +421,92 @@ test("Widersprechen sich Messung und Handshake, gibt es eine Notiz statt einer S
   assert.match(st.note, /richtigen Peer/);
   assert.equal([...e.incidents.values()].filter(i => i.kind === "tunnel").length, 0);
   await p.close();
+});
+
+/* ---------- Kacheln der Startseite ----------
+   Ein Lesezeichen ohne verknüpftes System kann trotzdem sagen, ob die
+   Seite antwortet. Was es nicht darf: eine Störung erzeugen. Hinter diesen
+   Kacheln stehen fremde Dienste, für die niemand nachts geweckt wird. */
+
+function webserver(status = 200) {
+  return new Promise(r => {
+    const s = http.createServer((req, res) => { res.writeHead(status); res.end("ok"); });
+    s.listen(0, "127.0.0.1", () => r({ url: `http://127.0.0.1:${s.address().port}/`, close: () => new Promise(x => { s.closeAllConnections(); s.close(x); }) }));
+  });
+}
+
+function mitLink(item, port) {
+  return Inv.normalize({
+    settings: { interval: 60, timeout: 2, fail_threshold: 2, icmp: false, link_takt: 60 },
+    sites: [{ id: "hq", name: "HQ" }],
+    hosts: [{ id: "ziel", type: "other", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port }] }],
+    tunnels: [], links: [{ group: "Werkzeuge", items: [item] }]
+  });
+}
+
+test("Eine Kachel mit „prüfen“ bekommt ihre Ampel aus dem Abruf", async () => {
+  const p = await openPort();
+  const web = await webserver(200);
+  const e = new Engine(mitLink({ name: "Extern", url: web.url, pruefen: true }, p.port));
+  await e.runOnce();
+
+  const st = e.linkChecks.get(web.url);
+  assert.equal(st.status, "ok");
+  assert.ok(st.ms >= 0);
+  assert.equal(e.incidents.size, 0, "eine Kachel erzeugt keine Störung");
+  await web.close(); await p.close();
+});
+
+test("Antwortet die Seite nicht, wird die Kachel erst gelb, dann rot", async () => {
+  const p = await openPort();
+  const web = await webserver(200);
+  const url = web.url;
+  await web.close();                                   /* niemand hört mehr */
+
+  const e = new Engine(mitLink({ name: "Weg", url, pruefen: true }, p.port));
+  await e.runOnce();
+  assert.equal(e.linkChecks.get(url).status, "warn", "ein einzelner Fehlschlag ist noch keine Aussage");
+  e.linkChecks.get(url).stand = 0;                     /* den Takt vorspulen, statt eine Minute zu warten */
+  await e.runOnce();
+  assert.equal(e.linkChecks.get(url).status, "crit");
+  assert.equal(e.incidents.size, 0, "auch rot bleibt eine Ampel, keine Störung");
+  await p.close();
+});
+
+/* Ein Statuscode ist etwas anderes als keine Antwort: der Dienst steht,
+   er mag den Aufruf nur nicht. Das gehört auf Gelb, nicht auf Rot. */
+test("Ein Fehlercode ist gelb, kein Ausfall", async () => {
+  const p = await openPort();
+  const web = await webserver(503);
+  const e = new Engine(mitLink({ name: "Krank", url: web.url, pruefen: true }, p.port));
+  await e.runOnce();
+  e.linkChecks.get(web.url).stand = 0;
+  await e.runOnce();
+  assert.equal(e.linkChecks.get(web.url).status, "warn");
+  assert.match(e.linkChecks.get(web.url).detail, /503/);
+  await web.close(); await p.close();
+});
+
+test("Ohne Häkchen wird nichts abgerufen — und ein verknüpftes System hat Vorrang", async () => {
+  const p = await openPort();
+  const web = await webserver(200);
+  const e = new Engine(mitLink({ name: "Nur Lesezeichen", url: web.url }, p.port));
+  await e.runOnce();
+  assert.equal(e.linkChecks.size, 0);
+
+  const mitSystem = new Engine(mitLink({ name: "System", host: "ziel", url: web.url, pruefen: true }, p.port));
+  await mitSystem.runOnce();
+  assert.equal(mitSystem.linkChecks.size, 0, "die Ampel kommt vom System, nicht aus einem zweiten Abruf");
+  await web.close(); await p.close();
+});
+
+test("Der eigene Takt bremst den Abruf, ohne den Durchlauf zu bremsen", async () => {
+  const p = await openPort();
+  const web = await webserver(200);
+  const e = new Engine(mitLink({ name: "Extern", url: web.url, pruefen: true }, p.port));
+  await e.runOnce();
+  const erst = e.linkChecks.get(web.url).stand;
+  await e.runOnce();
+  assert.equal(e.linkChecks.get(web.url).stand, erst, "innerhalb des Taktes wird nicht erneut abgerufen");
+  await web.close(); await p.close();
 });

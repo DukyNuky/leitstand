@@ -12,7 +12,13 @@ import YAML from "yaml";
 export const DEFAULTS = {
   interval: 15, timeout: 4, history: 120, fail_threshold: 3,
   slow_ms: 800, tls_warn_days: 30, tls_crit_days: 14,
-  icmp: true, listen: 8080, bind: "0.0.0.0"
+  icmp: true, listen: 8080, bind: "0.0.0.0",
+  /* Zeitreihen: ein Punkt je Takt (Sekunden), aufbewahrt über so viele
+     Tage. Beides kostet Platz auf dem Volume — siehe verlauf.js. */
+  verlauf_takt: 60, verlauf_tage: 30,
+  /* Wie oft eine Kachel der Startseite ihre Adresse abruft, wenn dort
+     „prüfen" gesetzt ist. Fremde Seiten alle 15 s abzurufen wäre unhöflich. */
+  link_takt: 60
 };
 
 /* Welche Prüfungen ein Systemtyp von Haus aus bekommt, wenn nichts
@@ -82,7 +88,7 @@ export function normalize(doc) {
   const tunnels = (doc.tunnels || []).map(t => normalizeTunnel(t));
   const links = (doc.links || []).map(g => ({
     group: g.group,
-    items: (g.items || []).map(i => ({ ...i }))
+    items: (g.items || []).map(i => normalizeLink(i))
   }));
   validate({ settings, sites, hosts, tunnels, links });
   return { settings, sites, hosts, tunnels, links };
@@ -148,6 +154,17 @@ export function defaultChecks(host) {
   return checks;
 }
 
+/* ---------- Verknüpfungen der Startseite ----------
+   Eine Kachel trägt entweder die Ampel eines verknüpften Systems oder,
+   mit `pruefen: true`, die eigene Erreichbarkeit ihrer Adresse. Das
+   Häkchen wird nur geschrieben, wenn es gesetzt ist — ein `pruefen: false`
+   an jedem Lesezeichen wäre Lärm in der Datei. */
+export function normalizeLink(i) {
+  const item = { ...i };
+  if (item.pruefen) item.pruefen = true; else delete item.pruefen;
+  return item;
+}
+
 /* ---------- Prüfen ---------- */
 export function validate(inv) {
   const errs = [];
@@ -187,6 +204,10 @@ export function validate(inv) {
   for (const g of inv.links) for (const i of g.items) {
     if (i.host && !hostIds.has(i.host)) errs.push(`Verknüpfung „${i.name}“: System „${i.host}“ ist nicht angelegt.`);
     if (!i.host && !i.url) errs.push(`Verknüpfung „${i.name}“: weder host noch url.`);
+    /* Geprüft werden kann nur eine Adresse, die auch abrufbar ist —
+       sonst stünde an der Kachel für immer Rot, und schuld wäre ein
+       Tippfehler, nicht die Seite. */
+    if (i.pruefen && i.url) { try { new URL(i.url); } catch { errs.push(`Verknüpfung „${i.name}“: url „${i.url}“ lässt sich nicht abrufen — für „prüfen" braucht es eine vollständige Adresse mit http:// oder https://.`); } }
   }
   if (errs.length) throw new InventoryError(errs.join("\n"));
   return true;

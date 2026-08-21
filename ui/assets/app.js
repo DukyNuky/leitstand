@@ -168,6 +168,7 @@ const state = {
   paletteQ: "",
   paletteIdx: 0,
   inspector: null,
+  detail: null,               /* offene Detailseite: { id, tage, daten, busy, error } */
   adminTab: "hosts",
   form: null,
   credentials: {},
@@ -338,7 +339,12 @@ function buildBar() {
 }
 
 function renderTopbar() {
-  const v = VIEWS.find(x => x.id === state.view);
+  /* Die Detailseite steht in keiner Leiste — ihr Titel ist der Gegenstand
+     selbst. Ohne diesen Ausweg fiele die Kopfzeile über ein `undefined`. */
+  const detail = state.view === "system" && state.detail
+    ? { group: "System", label: (byId(state.hosts, state.detail.id) || {}).name || state.detail.id }
+    : null;
+  const v = detail || VIEWS.find(x => x.id === state.view) || VIEWS[0];
   return `<div class="topbar">
     ${buildBar()}${staleBar()}
     <div class="topbar-row">
@@ -1342,7 +1348,7 @@ function viewLinks() {
     links: g.links.filter(l => {
       const h = l.h ? byId(state.hosts, l.h) : null;
       if (state.site !== "all" && (!h || h.site !== state.site)) return false;
-      if (state.onlyProblems && !(h && isProblem(h.status))) return false;
+      if (state.onlyProblems && !isProblem(kachelAmpel(l, h))) return false;
       if (q && !(l.n + l.u).toLowerCase().includes(q)) return false;
       return true;
     })
@@ -1361,15 +1367,387 @@ function viewLinks() {
     <div class="panel-body"><div class="linkgrid">
       ${g.links.map(l => {
         const h = l.h ? byId(state.hosts, l.h) : null;
-        const st = h ? h.status : "idle";
-        return `<a class="link" href="${esc(l.u)}" target="_blank" rel="noopener" title="${esc(l.u)}">
-          <span class="link-mark" style="${h && isProblem(st) ? `border-color:var(--${st});color:var(--${st})` : ""}">${esc(l.n.slice(0, 2).toUpperCase())}</span>
+        const st = kachelAmpel(l, h);
+        return `<a class="link" href="${esc(l.u)}" target="_blank" rel="noopener" title="${esc(kachelTitel(l, h))}">
+          <span class="link-mark" style="${isProblem(st) ? `border-color:var(--${st});color:var(--${st})` : ""}">${esc(l.n.slice(0, 2).toUpperCase())}</span>
           <span class="link-body"><span class="link-name">${esc(l.n)}</span><span class="link-url">${esc(l.u.replace(/^https?:\/\//, ""))}</span></span>
           <span style="margin-left:auto">${dot(st)}</span>
         </a>`;
       }).join("")}
     </div></div>
   </div>`).join("")}`;
+}
+
+/* Woher die Ampel einer Kachel kommt — in dieser Reihenfolge:
+
+   1. das verknüpfte System. Es wird vollständig überwacht, seine Ampel ist
+      die belastbarere Aussage.
+   2. der eigene Abruf der Adresse, wenn in der Verwaltung „prüfen" gesetzt
+      ist. Ein GET, ein Statuscode, mehr nicht.
+   3. gar nichts: ein Lesezeichen bleibt grau. Grün wäre hier eine
+      Behauptung über etwas, das nie jemand geprüft hat.
+
+   Solange die erste Prüfung noch aussteht (`st` ist null), bleibt es
+   ebenfalls grau — „noch nicht geprüft" ist nicht „in Ordnung". */
+function kachelAmpel(l, h) {
+  if (h) return h.status;
+  if (l.p && l.st) return l.st;
+  return "idle";
+}
+
+function kachelTitel(l, h) {
+  if (h) return `${l.u}\n${h.name}: ${SEV_LABEL[h.status] || h.status}${h.note ? " — " + h.note : ""}`;
+  if (!l.p) return `${l.u}\nLesezeichen — nicht geprüft`;
+  if (!l.st) return `${l.u}\nwird geprüft, noch kein Ergebnis`;
+  return `${l.u}\n${l.detail || SEV_LABEL[l.st] || l.st}${l.ms != null ? ` · ${l.ms} ms` : ""}${l.stand ? ` · geprüft ${fmtWhen(l.stand)}` : ""}`;
+}
+
+/* ============================================================
+   Ansicht: ein System im Einzelnen
+
+   Die Sparkline in der Tabelle zeigt die letzte halbe Stunde. Die Frage,
+   die nach einer Störung kommt, lautet aber „war das gestern Nacht auch
+   schon so?" — und dafür gibt es diese Seite: derselbe Gegenstand, aber
+   über Tage, aus der Ablage auf der Platte (server/src/verlauf.js).
+
+   Gezeichnet wird nur, was gemessen wurde. Eine Lücke im Verlauf — Dienst
+   war aus, System noch nicht angelegt — bleibt eine Lücke; die Linie wird
+   unterbrochen, statt über sie hinwegzulaufen. Eine durchgezogene Linie
+   über eine Nacht ohne Messwerte wäre genau die Sorte Behauptung, die eine
+   Überwachung nicht machen darf.
+   ============================================================ */
+
+const ZEITRAEUME = [
+  { tage: 1, label: "24 h" },
+  { tage: 7, label: "7 Tage" },
+  { tage: 30, label: "30 Tage" }
+];
+
+const REIHENFARBE = { ms: "var(--accent)", cpu: "var(--accent)", ram: "var(--warn)", disk: "var(--ok)", in: "var(--accent)", out: "var(--warn)" };
+
+/* Eine runde Obergrenze, damit die Achse nicht bei 1237 ms endet. */
+function obergrenze(max) {
+  if (!(max > 0)) return 1;
+  const stufe = Math.pow(10, Math.floor(Math.log10(max)));
+  for (const f of [1, 1.5, 2, 2.5, 5, 10]) if (max <= stufe * f) return stufe * f;
+  return stufe * 10;
+}
+
+function achsenBeschriftung(ts, spanne) {
+  const d = new Date(ts * 1000);
+  if (spanne <= 3 * 86400) return d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
+}
+
+/* Aus Punkten werden Streckenzüge — unterbrochen, wo länger nichts
+   gemessen wurde. Als „länger" gilt das Dreifache des üblichen Abstands:
+   ein ausgelassener Takt ist noch dieselbe Linie, eine ausgefallene Nacht
+   nicht mehr. */
+function abschnitte(punkte, key, luecke) {
+  const out = [];
+  let lauf = [];
+  let vorher = null;
+  for (const p of punkte) {
+    const v = p[key];
+    if (!Number.isFinite(v)) { if (lauf.length) out.push(lauf); lauf = []; vorher = null; continue; }
+    if (vorher != null && p.t - vorher > luecke) { if (lauf.length) out.push(lauf); lauf = []; }
+    lauf.push(p);
+    vorher = p.t;
+  }
+  if (lauf.length) out.push(lauf);
+  return out;
+}
+
+/* Ein Diagramm über die Zeit: Fläche zwischen Kleinst- und Größtwert,
+   darüber die Linie der Mittelwerte, links die Achse, unten die Zeit. */
+function zeitDiagramm(punkte, reihe, opts = {}) {
+  const key = reihe.key;
+  const werte = punkte.map(p => p[key]).filter(Number.isFinite);
+  if (!werte.length) return "";
+
+  const w = 900, hoehe = opts.h || 150, links = 46, rechts = 12, oben = 12, unten = 24;
+  const t0 = punkte[0].t, t1 = punkte[punkte.length - 1].t;
+  const spanne = Math.max(1, t1 - t0);
+  const prozent = reihe.einheit === "%";
+  const hoch = prozent ? 100 : obergrenze(Math.max(...punkte.map(p => (Number.isFinite(p.max) ? p.max : p[key])).filter(Number.isFinite)));
+
+  const x = t => links + ((t - t0) / spanne) * (w - links - rechts);
+  const y = v => hoehe - unten - (Math.max(0, Math.min(hoch, v)) / hoch) * (hoehe - oben - unten);
+  const farbe = opts.color || REIHENFARBE[key] || "var(--accent)";
+  const id = "vd" + Math.random().toString(36).slice(2, 8);
+
+  /* Üblicher Abstand: der kleinste, der tatsächlich vorkommt — der Takt
+     kann sich über die Zeit geändert haben. */
+  let abstand = Infinity;
+  for (let i = 1; i < punkte.length; i++) abstand = Math.min(abstand, punkte[i].t - punkte[i - 1].t);
+  const luecke = Math.max(60, (Number.isFinite(abstand) ? abstand : 60) * 3);
+
+  const teile = abschnitte(punkte, key, luecke);
+  const linien = teile.map(seg => {
+    const pts = seg.map(p => `${x(p.t).toFixed(1)},${y(p[key]).toFixed(1)}`).join(" ");
+    /* Ein einzelner Punkt zwischen zwei Lücken bekommt einen Tupfer,
+       sonst wäre er unsichtbar. */
+    return seg.length === 1
+      ? `<circle cx="${x(seg[0].t).toFixed(1)}" cy="${y(seg[0][key]).toFixed(1)}" r="1.6" fill="${farbe}"/>`
+      : `<polyline points="${pts}" fill="none" stroke="${farbe}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join("");
+
+  /* Spannweite innerhalb eines Taktes — nur bei der Antwortzeit, dort ist
+     sie der eigentliche Befund: ein Mittelwert von 40 ms aus 8 und 300 ms
+     sieht harmlos aus und ist es nicht. */
+  const band = key === "ms" && punkte.some(p => Number.isFinite(p.min) && Number.isFinite(p.max))
+    ? teile.map(seg => {
+        const oben2 = seg.map(p => `${x(p.t).toFixed(1)},${y(Number.isFinite(p.max) ? p.max : p[key]).toFixed(1)}`);
+        const unten2 = [...seg].reverse().map(p => `${x(p.t).toFixed(1)},${y(Number.isFinite(p.min) ? p.min : p[key]).toFixed(1)}`);
+        return seg.length > 1 ? `<polygon points="${[...oben2, ...unten2].join(" ")}" fill="${farbe}" fill-opacity=".16"/>` : "";
+      }).join("")
+    : "";
+
+  const gitter = [0, 0.5, 1].map(f => {
+    const v = hoch * f, yy = y(v);
+    return `<line x1="${links}" x2="${w - rechts}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${links - 6}" y="${(yy + 3.5).toFixed(1)}" text-anchor="end" class="vd-tick">${esc(String(Math.round(v * 10) / 10))}</text>`;
+  }).join("");
+
+  const marken = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const ts = t0 + spanne * f;
+    return `<text x="${x(ts).toFixed(1)}" y="${hoehe - 7}" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}" class="vd-tick">${esc(achsenBeschriftung(ts, spanne))}</text>`;
+  }).join("");
+
+  const letzte = [...punkte].reverse().find(p => Number.isFinite(p[key]));
+  return `<svg class="vd" viewBox="0 0 ${w} ${hoehe}" role="img" aria-label="${esc(reihe.label)}">
+    <defs><clipPath id="${id}"><rect x="${links}" y="${oben}" width="${w - links - rechts}" height="${hoehe - oben - unten}"/></clipPath></defs>
+    ${gitter}
+    <g clip-path="url(#${id})">${band}${linien}</g>
+    ${letzte ? `<circle cx="${x(letzte.t).toFixed(1)}" cy="${y(letzte[key]).toFixed(1)}" r="2.4" fill="${farbe}"/>` : ""}
+    ${marken}
+  </svg>`;
+}
+
+/* Das Ampelband unter den Diagrammen: was der Leitstand zu jedem Zeitpunkt
+   von diesem System hielt. Gleiche Zustände werden zu einem Balken
+   zusammengefasst — 900 Rechtecke wären dieselbe Aussage in teuer. */
+function ampelBand(punkte) {
+  const mit = punkte.filter(p => p.st);
+  if (!mit.length) return "";
+  const w = 900, h = 10;
+  const t0 = punkte[0].t, t1 = punkte[punkte.length - 1].t;
+  const spanne = Math.max(1, t1 - t0);
+  const x = t => ((t - t0) / spanne) * w;
+
+  const stuecke = [];
+  for (const p of punkte) {
+    const letzter = stuecke[stuecke.length - 1];
+    if (letzter && letzter.st === (p.st || null)) { letzter.bis = p.t; continue; }
+    stuecke.push({ st: p.st || null, von: p.t, bis: p.t });
+  }
+  return `<svg class="vd-band" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    ${stuecke.map(s => {
+      const breite = Math.max(1, x(s.bis) - x(s.von));
+      const farbe = s.st === "crit" ? "var(--crit)" : s.st === "warn" ? "var(--warn)" : s.st === "ok" ? "var(--ok)" : "var(--line)";
+      return `<rect x="${x(s.von).toFixed(1)}" y="0" width="${breite.toFixed(1)}" height="${h}" fill="${farbe}" fill-opacity="${s.st === "ok" ? ".55" : ".9"}"/>`;
+    }).join("")}
+  </svg>`;
+}
+
+/* Kennzahlen einer Reihe, damit unter dem Bild auch Zahlen stehen. */
+function reiheKennzahlen(punkte, reihe) {
+  const werte = punkte.map(p => p[reihe.key]).filter(Number.isFinite);
+  if (!werte.length) return "";
+  const min = Math.min(...punkte.map(p => (Number.isFinite(p.min) && reihe.key === "ms" ? p.min : p[reihe.key])).filter(Number.isFinite));
+  const max = Math.max(...punkte.map(p => (Number.isFinite(p.max) && reihe.key === "ms" ? p.max : p[reihe.key])).filter(Number.isFinite));
+  const schnitt = werte.reduce((a, b) => a + b, 0) / werte.length;
+  const rund = v => (reihe.einheit === "ms" ? Math.round(v) : Math.round(v * 10) / 10);
+  return `<span class="mono faint" style="font-size:11.5px">Ø ${rund(schnitt)} · min ${rund(min)} · max ${rund(max)} ${esc(reihe.einheit)}</span>`;
+}
+
+function viewSystem() {
+  const d = state.detail;
+  if (!d) return `<div class="panel"><div class="empty">Kein System gewählt.</div></div>`;
+  const h = byId(state.hosts, d.id);
+  const t = h ? null : byId(state.tunnels, d.id);
+  const g = h || t;
+
+  if (!g) return `<div class="panel"><div class="panel-body">
+    <div class="sec-title">Nicht im Bestand</div>
+    <p class="muted" style="margin:0 0 12px;font-size:13.5px">„<span class="mono">${esc(d.id)}</span>" steht nicht (mehr) im Bestand.
+      Aufgezeichnete Messwerte bleiben auf der Platte, angezeigt werden sie hier aber nur zu einem angelegten Gegenstand.</p>
+    <button class="btn btn--primary" data-action="view" data-view="compute">Zu den Systemen</button></div></div>`;
+
+  const titel = h ? h.name : `${siteName(t.a)} ↔ ${siteName(t.b)}`;
+  const kicker = h ? (TYPE_LABEL[h.type] || h.type) : "Tunnel";
+  const inc = state.incidents.filter(x => x.host === g.id);
+
+  return `
+  <div class="panel">
+    <div class="panel-head">
+      <button class="btn btn--ghost btn--sm" data-action="zurueck" title="Zurück">←</button>
+      ${dot(g.status)}
+      <h3>${esc(titel)}</h3>
+      <span class="hint">${esc(kicker)} · ${esc(siteName(g.site || g.a))}</span>
+      <div class="spacer"></div>
+      ${h && h.url ? `<a class="btn btn--sm" href="${esc(h.url)}" target="_blank" rel="noopener">${ICON.ext} Oberfläche</a>` : ""}
+      ${h ? `<button class="btn btn--sm" data-action="diagnose" data-id="${esc(h.id)}">Diagnose</button>` : ""}
+      <button class="btn btn--sm" data-action="check-now">Jetzt prüfen</button>
+      ${inc.length ? `<button class="btn btn--sm" data-action="silence" data-id="${esc(g.id)}" data-minutes="120">2 h stumm</button>` : ""}
+      <button class="btn btn--sm" data-action="admin-edit" data-kind="${h ? "hosts" : "tunnels"}" data-id="${esc(g.id)}">Bearbeiten</button>
+    </div>
+    ${g.note ? `<div class="panel-body" style="padding-bottom:0"><div class="row" style="gap:8px;align-items:flex-start">
+      ${dot(g.status)}<span style="color:var(--${g.status});font-size:13px">${esc(g.note)}</span></div></div>` : ""}
+  </div>
+
+  ${verlaufPanel(d, g)}
+
+  <div class="grid g2">
+    <div class="panel">
+      <div class="panel-head"><h3>Stammdaten</h3></div>
+      <div class="panel-body">${h ? hostStammdaten(h) : tunnelStammdaten(t)}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Letzter Durchlauf</h3><span class="hint">${esc(fmtWhen(g.lastSeen) ? "zuletzt erreicht " + fmtWhen(g.lastSeen) : "nie erreicht")}</span></div>
+      <div class="panel-body col" style="gap:12px">
+        ${pruefungenBlock(g)}
+        ${h && h.tls ? zertifikatBlock(h) : ""}
+        ${h && h.collectorError ? `<div class="row" style="gap:8px;align-items:flex-start;color:var(--warn)">${dot("warn")}
+          <span style="font-size:12.5px">Abruf über die API: ${esc(h.collectorError)}</span></div>` : ""}
+        ${t ? tunnelPeerBlock(t) : ""}
+      </div>
+    </div>
+  </div>
+
+  ${h && (hasMetrics(h) || (h.storages || h.stores || []).length) ? `<div class="panel">
+    <div class="panel-head"><h3>Auslastung jetzt</h3><span class="hint">Momentaufnahme aus dem letzten Abruf</span></div>
+    <div class="panel-body col" style="gap:10px">
+      ${auslastungBlock(h)}${speicherBlock(h)}
+    </div></div>` : ""}
+
+  ${inc.length ? `<div class="panel">
+    <div class="panel-head"><h3>Offene Meldungen</h3><span class="hint">${inc.length}</span></div>
+    <div class="panel-body col" style="gap:0">${inc.map(i => `
+      <div class="row" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer" data-action="inspect" data-kind="incident" data-id="${esc(i.id)}">
+        ${dot(i.sev)}<span style="font-size:13px">${esc(i.title)}</span>
+        <span class="spacer"></span><span class="mono faint" style="font-size:11.5px">${esc(i.id)} · ${esc(ago(i.ageMin))}</span></div>`).join("")}
+    </div></div>` : ""}
+
+  ${h ? `<div class="panel"><div class="panel-body">${diagnoseAnsicht(h) || `<div class="empty">Für den Fall „erreichbar, Zugang gesetzt, trotzdem keine Werte“ zeigt die
+    <b>Diagnose</b> oben jeden einzelnen Aufruf mit Antwort.</div>`}</div></div>` : ""}`;
+}
+
+/* Der Verlauf selbst — samt allem, was schiefgehen kann: noch nichts
+   aufgezeichnet, Abruf gescheitert, Ablage abgeschaltet. Jeder dieser
+   Fälle sagt, was er bedeutet; ein leeres Feld täte das nicht. */
+function verlaufPanel(d, g) {
+  const kopf = `<div class="panel-head">
+    <h3>Verlauf</h3>
+    <span class="hint">${d.daten ? `${d.daten.gemessen} Messpunkte${d.daten.gezeigt < d.daten.gemessen ? ` · verdichtet auf ${d.daten.gezeigt}` : ""}` : ""}</span>
+    <div class="spacer"></div>
+    ${ZEITRAEUME.map(z => `<button class="btn btn--sm" data-action="verlauf-tage" data-tage="${z.tage}"
+      aria-current="${d.tage === z.tage}">${esc(z.label)}</button>`).join("")}
+    <button class="btn btn--sm" data-action="verlauf-neu" title="Neu laden">↻</button>
+  </div>`;
+
+  if (d.busy && !d.daten) return `<div class="panel">${kopf}<div class="panel-body"><div class="empty">Verlauf wird geholt …</div></div></div>`;
+  if (d.error) return `<div class="panel">${kopf}<div class="panel-body">
+    <div class="row" style="gap:8px;align-items:flex-start">${dot("crit")}
+      <span style="font-size:13px">Verlauf nicht abrufbar: <span class="mono">${esc(d.error)}</span></span></div></div></div>`;
+
+  const daten = d.daten;
+  const punkte = daten?.punkte || [];
+  if (!punkte.length) return `<div class="panel">${kopf}<div class="panel-body">
+    <div class="empty">Für diesen Zeitraum liegt noch nichts auf der Platte.</div>
+    <p class="muted" style="margin:10px 0 0;font-size:12.5px;max-width:70ch">Aufgezeichnet wird ab dem ersten Durchlauf,
+      ein Punkt je ${esc(String(daten?.takt || state.settings?.verlauf_takt || 60))} Sekunden. Der erste Punkt steht also frühestens
+      nach Ablauf dieses Taktes in der Ablage — davor ist hier nichts, und das ist kein Fehler.</p>
+    ${(g.hist || []).length ? `<div style="margin-top:14px">
+      <div class="sec-title">Solange: die letzten Durchläufe aus dem Arbeitsspeicher</div>
+      ${spark(g.hist, { w: 620, h: 80, color: `var(--${g.status === "ok" ? "accent" : g.status})` })}
+      <div class="faint" style="font-size:11.5px">Antwortzeit in ms — diese Reihe ist nach einem Neustart weg.</div>
+    </div>` : ""}</div></div>`;
+
+  const reihen = (daten.reihen || []).filter(r => punkte.some(p => Number.isFinite(p[r.key])));
+  return `<div class="panel">${kopf}
+    <div class="panel-body col" style="gap:18px">
+      ${reihen.map(r => `<div>
+        <div class="row" style="gap:8px;margin-bottom:2px">
+          <span class="sec-title" style="margin:0">${esc(r.label)}</span>
+          <span class="faint" style="font-size:11.5px">${esc(r.einheit)}</span>
+          <div class="spacer"></div>${reiheKennzahlen(punkte, r)}
+        </div>
+        ${zeitDiagramm(punkte, r)}
+      </div>`).join("")}
+      <div>
+        <div class="row" style="gap:8px;margin-bottom:4px">
+          <span class="sec-title" style="margin:0">Ampel</span>
+          <div class="spacer"></div>
+          <span class="legend">${dot("ok")} in Ordnung ${dot("warn")} auffällig ${dot("crit")} gestört ${dot("idle")} ruhend</span>
+        </div>
+        ${ampelBand(punkte)}
+      </div>
+    </div>
+    <div class="panel-note">Von ${esc(fmtWhen(daten.von) || "—")} bis ${esc(fmtWhen(daten.bis) || "—")}.
+      Innerhalb eines Taktes werden Mittel-, Kleinst- und Größtwert festgehalten; die getönte Fläche bei der Antwortzeit
+      ist diese Spannweite. Wo nichts gemessen wurde, ist die Linie unterbrochen — dort lief der Dienst nicht.</div>
+  </div>`;
+}
+
+/* ---- Bausteine, die Detailseite und Inspector gemeinsam nutzen ---- */
+function hostStammdaten(h) {
+  const rows = [
+    ["Typ", esc(TYPE_LABEL[h.type] || h.type)],
+    h.role ? ["Rolle", esc(h.role)] : null,
+    ["Standort", esc(siteName(h.site))],
+    ["Adresse", `<span class="mono">${esc(nz(h.ip))}</span>`],
+    h.url ? ["Oberfläche", `<a class="mono" href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.url)}</a>`] : null,
+    ["Version", `<span class="mono">${esc(nz(h.version))}</span>`],
+    ["Laufzeit", esc(nz(h.uptime))],
+    /* Ohne die Zahl der Kerne sagt eine Last nichts über „viel" oder
+       „wenig" — sie steht deshalb da, ohne bewertet zu werden. */
+    h.load ? ["Last (1 / 5 / 15 min)", `<span class="mono">${esc(h.load)}</span>`] : null,
+    ["Zuletzt erreicht", esc(fmtWhen(h.lastSeen) || "nie")],
+    ["Überwacht", h.monitored === false ? "nein — absichtlich unüberwacht" : "ja"]
+  ].filter(Boolean);
+  return `<dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+}
+
+function tunnelStammdaten(t) {
+  return `<dl class="kv">
+    <dt>Interface</dt><dd class="mono">${esc(nz(t.iface))}</dd>
+    <dt>Transfernetz</dt><dd class="mono">${esc(nz(t.net))}</dd>
+    <dt>Gemessen auf</dt><dd class="mono">${t.probe ? esc(t.probe) : '<span class="faint">— keine Gegenstelle eingetragen</span>'}</dd>
+    <dt>Latenz</dt><dd class="mono">${esc(nz(t.rtt, " ms"))}</dd>
+    <dt>Zuletzt erreicht</dt><dd>${esc(fmtWhen(t.lastSeen) || "nie")}</dd>
+  </dl>`;
+}
+
+function pruefungenBlock(g) {
+  const checks = g.checks || [];
+  return `<div><div class="sec-title">Prüfungen im letzten Durchlauf</div>
+    ${checks.length ? checks.map(c => `<div class="row" style="gap:8px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
+      ${dot(c.skipped ? "idle" : c.ok ? "ok" : "crit")}
+      <span class="mono">${esc(c.kind)}${c.port ? "/" + c.port : ""}</span>
+      <span class="faint" style="min-width:0">${esc(c.detail || "")}</span>
+      <span class="spacer"></span><span class="mono faint">${c.ms != null ? c.ms + " ms" : ""}</span>
+    </div>`).join("") : '<div class="empty">Noch kein Durchlauf.</div>'}</div>`;
+}
+
+function zertifikatBlock(h) {
+  return `<div><div class="sec-title">Zertifikat</div><dl class="kv">
+    <dt>Common Name</dt><dd class="mono">${esc(h.tls.cn || "—")}</dd>
+    <dt>Aussteller</dt><dd>${esc(h.tls.issuer || "—")}${h.tls.selfSigned ? " (eigensigniert)" : ""}</dd>
+    <dt>Restlaufzeit</dt><dd class="mono">${h.tls.days != null ? h.tls.days + " Tage" : "—"}</dd>
+  </dl></div>`;
+}
+
+function auslastungBlock(h) {
+  if (!hasMetrics(h)) return "";
+  return `${h.cpu != null ? meter("CPU", h.cpu) : ""}${h.ram != null ? meter("RAM", h.ram) : ""}${h.disk != null ? meter("Speicher", h.disk) : ""}`;
+}
+
+function speicherBlock(h) {
+  const liste = h.storages || h.stores || [];
+  if (!liste.length) return "";
+  return `<div class="sec-title" style="margin-top:6px">${h.type === "pbs" ? "Datastores" : "Speicher"}</div>
+    ${liste.map(s => meter(s.name, s.used, { text: s.used != null ? s.used + " %" : "—" })).join("")}`;
 }
 
 /* ============================================================
@@ -1442,7 +1820,11 @@ function viewCfg() {
         ["Langsame Antwort", s.slow_ms != null ? `über ${mono(s.slow_ms + " ms")} → Warnung` : "—"],
         ["Zertifikat", s.tls_warn_days != null
           ? `unter ${mono(s.tls_warn_days + " Tagen")} Warnung · unter ${mono(s.tls_crit_days + " Tagen")} kritisch` : "—"],
-        ["Verlauf", s.history != null ? `${mono(s.history)} Messpunkte je System${s.interval ? ` (${Math.round(s.history * s.interval / 60)} min)` : ""}` : "—"],
+        ["Verlauf im Speicher", s.history != null ? `${mono(s.history)} Messpunkte je System${s.interval ? ` (${Math.round(s.history * s.interval / 60)} min)` : ""}` : "—"],
+        ["Zeitreihe auf Platte", s.verlauf_takt != null
+          ? `ein Punkt alle ${mono(s.verlauf_takt + " s")}, aufbewahrt ${mono(s.verlauf_tage + " Tage")}` : "—"],
+        ["Kacheln der Startseite", s.link_takt != null
+          ? `mit „abrufen": alle ${mono(s.link_takt + " s")} ein GET — Ampel, keine Störung` : "—"],
         ["Teilausfall", "antwortet ein Port nicht, während andere tragen → Warnung"],
         ["Abruf scheitert", "erreichbar, aber API-Zugang abgelehnt → Warnung statt stiller Lücke"],
         ["Standort", "sind alle überwachten Systeme eines Standorts gleichzeitig still → <b>eine</b> Meldung statt zwölf"]
@@ -1467,6 +1849,12 @@ function viewCfg() {
           : icmp.working === false ? `${dot("warn")} ${esc(icmp.note)} — im Container fehlt meist <span class="mono">NET_RAW</span>`
           : icmp.configured === false ? `${dot("idle")} ${esc(icmp.note || "abgeschaltet")}`
           : `${dot("idle")} ${esc(icmp.note || "—")}`],
+        ["Zeitreihen", rt.verlauf
+          ? `${rt.verlauf.fehler ? dot("crit") : dot("ok")} ${rt.verlauf.vorhanden} Tagesdatei(en)${
+              rt.verlauf.seit ? ` seit ${esc(rt.verlauf.seit)}` : ""} · ${
+              rt.verlauf.bytes != null ? mono((rt.verlauf.bytes / 1048576).toFixed(1) + " MB") : "—"} in ${mono(rt.verlauf.verzeichnis)}${
+              rt.verlauf.fehler ? `<br><span style="color:var(--crit)">nicht schreibbar: ${esc(rt.verlauf.fehler)}</span>` : ""}`
+          : `${dot("idle")} keine Ablage — dieser Dienst schreibt keine Zeitreihen`],
         ["Zugangsdaten", `liegen in <span class="mono">secrets.json</span> neben dem Bestand, Rechte 0600 — nach außen nur maskiert`],
         ["Schreibrechte", "keine: der Leitstand fragt ab, quittiert und schweigt — er greift nirgends ein"]
       ])}</div>
@@ -1614,70 +2002,17 @@ function inspectorContent(kind, id) {
         ${h && (h.hist || []).length ? `<div><div class="sec-title">Antwortzeit ${esc(h.name)}</div>${spark(h.hist, { w:460, h:70, color:`var(--${i.sev})` })}</div>` : ""}`,
       foot:`
         <button class="btn btn--primary" data-action="ack" data-id="${esc(i.id)}">${i.ack ? "Quittierung aufheben" : "Quittieren"}</button>
+        ${h ? `<button class="btn" data-action="system" data-id="${esc(i.host)}">Verlauf</button>` : ""}
         <button class="btn" data-action="silence" data-id="${esc(i.host)}" data-minutes="120">2 h stummschalten</button>
         ${h && h.url ? `<a class="btn" href="${esc(h.url)}" target="_blank" rel="noopener">${ICON.ext} System öffnen</a>` : ""}`
     };
   }
 
-  if (kind === "host") {
-    const h = byId(state.hosts, id); if (!h) return null;
-    const inc = state.incidents.filter(x => x.host === h.id);
-    const rows = [
-      ["Typ", esc(TYPE_LABEL[h.type] || h.type)],
-      h.role ? ["Rolle", esc(h.role)] : null,
-      ["Standort", esc(siteName(h.site))],
-      ["Adresse", `<span class="mono">${esc(nz(h.ip))}</span>`],
-      h.url ? ["Oberfläche", `<a class="mono" href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.url)}</a>`] : null,
-      ["Version", `<span class="mono">${esc(nz(h.version))}</span>`],
-      ["Laufzeit", esc(nz(h.uptime))],
-      /* Ohne die Zahl der Kerne sagt eine Last nichts über „viel" oder
-         „wenig" — sie steht deshalb da, ohne bewertet zu werden. */
-      h.load ? ["Last (1 / 5 / 15 min)", `<span class="mono">${esc(h.load)}</span>`] : null,
-      ["Zuletzt erreicht", esc(fmtWhen(h.lastSeen) || "nie")],
-      ["Überwacht", h.monitored === false ? "nein — absichtlich unüberwacht" : "ja"]
-    ].filter(Boolean);
-
-    return {
-      kicker:TYPE_LABEL[h.type] || h.type, title:h.name, sev:h.status,
-      body:`
-        ${h.note ? `<div class="row" style="gap:8px;align-items:flex-start">${dot(h.status)}<span style="color:var(--${h.status});font-size:13px">${esc(h.note)}</span></div>` : ""}
-        <div><div class="sec-title">Stammdaten</div><dl class="kv">
-          ${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}
-        </dl></div>
-        <div><div class="sec-title">Prüfungen im letzten Durchlauf</div>
-          ${(h.checks || []).length ? (h.checks || []).map(c => `<div class="row" style="gap:8px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
-            ${dot(c.skipped ? "idle" : c.ok ? "ok" : "crit")}
-            <span class="mono">${esc(c.kind)}${c.port ? "/" + c.port : ""}</span>
-            <span class="faint" style="min-width:0">${esc(c.detail || "")}</span>
-            <span class="spacer"></span><span class="mono faint">${c.ms != null ? c.ms + " ms" : ""}</span>
-          </div>`).join("") : '<div class="empty">Noch kein Durchlauf.</div>'}</div>
-        ${h.tls ? `<div><div class="sec-title">Zertifikat</div><dl class="kv">
-          <dt>Common Name</dt><dd class="mono">${esc(h.tls.cn || "—")}</dd>
-          <dt>Aussteller</dt><dd>${esc(h.tls.issuer || "—")}${h.tls.selfSigned ? " (eigensigniert)" : ""}</dd>
-          <dt>Restlaufzeit</dt><dd class="mono">${h.tls.days != null ? h.tls.days + " Tage" : "—"}</dd>
-        </dl></div>` : ""}
-        ${hasMetrics(h) ? `<div><div class="sec-title">Auslastung</div><div class="col" style="gap:8px">
-          ${h.cpu != null ? meter("CPU", h.cpu) : ""}${h.ram != null ? meter("RAM", h.ram) : ""}${h.disk != null ? meter("Speicher", h.disk) : ""}
-        </div></div>` : ""}
-        ${(h.storages || h.stores || []).length ? `<div><div class="sec-title">${h.type === "pbs" ? "Datastores" : "Speicher"}</div>
-          <div class="col" style="gap:8px">${(h.storages || h.stores).map(s =>
-            meter(s.name, s.used, { text: s.used != null ? s.used + " %" : "—" })).join("")}</div></div>` : ""}
-        ${h.collectorError ? `<div class="row" style="gap:8px;align-items:flex-start;color:var(--warn)">${dot("warn")}
-          <span style="font-size:12.5px">Abruf über die API: ${esc(h.collectorError)}</span></div>` : ""}
-        ${diagnoseAnsicht(h)}
-        ${(h.hist || []).length ? `<div><div class="sec-title">Antwortzeit</div>${spark(h.hist, { w:460, h:70, color:`var(--${h.status === "ok" ? "accent" : h.status})` })}</div>` : ""}
-        ${inc.length ? `<div><div class="sec-title">Offene Meldungen</div>${inc.map(i => `
-          <div class="row" style="gap:8px;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer" data-action="inspect" data-kind="incident" data-id="${esc(i.id)}">
-            ${dot(i.sev)}<span style="font-size:12.5px">${esc(i.title)}</span>
-            <span class="spacer"></span><span class="mono faint" style="font-size:11px">${esc(i.id)}</span></div>`).join("")}</div>` : ""}`,
-      foot:`
-        ${h.url ? `<a class="btn btn--primary" href="${esc(h.url)}" target="_blank" rel="noopener">${ICON.ext} Oberfläche öffnen</a>` : ""}
-        <button class="btn" data-action="diagnose" data-id="${esc(h.id)}">Diagnose</button>
-        <button class="btn" data-action="check-now">Jetzt prüfen</button>
-        ${inc.length ? `<button class="btn" data-action="silence" data-id="${esc(h.id)}" data-minutes="120">2 h stummschalten</button>` : ""}
-        <button class="btn" data-action="admin-edit" data-kind="hosts" data-id="${esc(h.id)}">Bearbeiten</button>`
-    };
-  }
+  /* „host" gibt es hier nicht mehr: ein System hat seit dem Verlauf über
+     Tage eine eigene Seite (viewSystem). Zwei Darstellungen desselben
+     Gegenstands nebeneinander zu pflegen, hieße, dass eine davon bald
+     etwas anderes zeigt als die andere. `open("host", …)` führt deshalb
+     auf die Seite. */
 
   if (kind === "tunnel") {
     const t = byId(state.tunnels, id); if (!t) return null;
@@ -1701,7 +2036,8 @@ function inspectorContent(kind, id) {
              des verknüpften Peers. Der sagt, wann die Strecke zuletzt stand, nicht ob gerade etwas hindurchkommt.
              Eine Adresse im Transfernetz nachzutragen ist die belastbarere Messung.`}</p>`,
       foot:`
-        <button class="btn btn--primary" data-action="check-now">Jetzt prüfen</button>
+        <button class="btn btn--primary" data-action="system" data-id="${esc(t.id)}">Verlauf über Tage</button>
+        <button class="btn" data-action="check-now">Jetzt prüfen</button>
         <button class="btn" data-action="admin-edit" data-kind="tunnels" data-id="${esc(t.id)}">Bearbeiten</button>`
     };
   }
@@ -1872,7 +2208,10 @@ function checkNow() {
    Zeichnen & Verdrahten
    ============================================================ */
 const RENDERERS = { lage:viewLage, sites:viewSites, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
-  dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung };
+  dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung,
+  /* Keine Schaltfläche in der Leiste: diese Seite gehört immer zu einem
+     bestimmten Gegenstand und wird über #/system/<kennung> erreicht. */
+  system:viewSystem };
 
 function render() {
   const scroll = $("#scroll") ? $("#scroll").scrollTop : 0;
@@ -1913,8 +2252,68 @@ function render() {
   if (pq) { pq.focus(); pq.setSelectionRange(pq.value.length, pq.value.length); }
 }
 
-function go(view) { state.view = view; state.inspector = null; state.paletteOpen = false; location.hash = "#/" + view; render(); }
-function open(kind, id) { state.inspector = { kind, id }; state.paletteOpen = false; render(); }
+/* Die Adresszeile trägt die Ansicht — und bei der Detailseite auch den
+   Gegenstand. Damit ist ein einzelnes System verlinkbar und der Zurück-
+   Knopf des Browsers tut das, was er soll. */
+function go(view, arg) {
+  state.view = view;
+  state.inspector = null;
+  state.paletteOpen = false;
+  location.hash = "#/" + view + (arg ? "/" + encodeURIComponent(arg) : "");
+  render();
+}
+function open(kind, id) {
+  /* Ein System hat eine eigene Seite, keine Schublade. */
+  if (kind === "host") return openSystem(id);
+  state.inspector = { kind, id };
+  state.paletteOpen = false;
+  render();
+}
+
+/* ---------- Detailseite ---------- */
+function openSystem(id) {
+  const tage = state.detail?.tage || 1;
+  state.detail = { id, tage, daten: null, busy: true, error: null, geladen: 0 };
+  state.diagnose = null;
+  go("system", id);
+  ladeVerlauf();
+}
+
+/* Der Verlauf kommt aus einem eigenen Abruf, nicht aus dem Zustandsstrom:
+   er ist groß, ändert sich langsam und geht nur diese eine Seite an. */
+async function ladeVerlauf() {
+  const d = state.detail;
+  if (!d) return;
+  if (!LIVE()) { d.error = "kein Dienst erreichbar"; d.busy = false; render(); return; }
+  const angefragt = `${d.id}/${d.tage}`;
+  d.busy = true;
+  render();
+  try {
+    const daten = await window.LEITSTAND.call("GET", `/api/verlauf/${encodeURIComponent(d.id)}?tage=${d.tage}`);
+    /* Zwischenzeitlich weitergeklickt? Dann gehört diese Antwort nicht
+       mehr auf den Schirm. */
+    if (!state.detail || `${state.detail.id}/${state.detail.tage}` !== angefragt) return;
+    state.detail.daten = daten;
+    state.detail.error = null;
+  } catch (e) {
+    if (!state.detail || `${state.detail.id}/${state.detail.tage}` !== angefragt) return;
+    state.detail.error = e.message;
+  } finally {
+    if (state.detail && `${state.detail.id}/${state.detail.tage}` === angefragt) {
+      state.detail.busy = false;
+      state.detail.geladen = Date.now();
+    }
+    render();
+  }
+}
+
+/* Zurück, ohne die Seite zu verlassen: der Browser weiß, woher man kam.
+   Gibt es keinen Verlauf (direkt aufgerufener Link), führt der Weg auf
+   die Systemliste statt ins Leere. */
+function zurueck() {
+  if (window.history && window.history.length > 1) window.history.back();
+  else go("compute");
+}
 function toggleTheme() {
   const cur = document.documentElement.getAttribute("data-theme");
   const next = cur === "light" ? "dark" : cur === "dark" ? "light"
@@ -1932,6 +2331,10 @@ document.addEventListener("click", ev => {
 
   switch (a) {
     case "view": ev.preventDefault(); go(el.dataset.view); break;
+    case "system": ev.preventDefault(); openSystem(el.dataset.id); break;
+    case "zurueck": ev.preventDefault(); zurueck(); break;
+    case "verlauf-tage": if (state.detail) { state.detail.tage = Number(el.dataset.tage) || 1; state.detail.daten = null; ladeVerlauf(); } break;
+    case "verlauf-neu": if (state.detail) ladeVerlauf(); break;
     case "site": state.site = el.dataset.site; state.inspector = null; render(); break;
     case "site-filter": state.site = el.dataset.id; state.inspector = null; go(state.view); break;
     case "toggle-problems": state.onlyProblems = !state.onlyProblems; render(); break;
@@ -2019,9 +2422,26 @@ document.addEventListener("keydown", ev => {
   const v = VIEWS[+ev.key - 1]; if (v) go(v.id);
 });
 
+/* #/compute  oder  #/system/pve-01 */
+function ausAdresse() {
+  const roh = String(location.hash || "").replace(/^#\/?/, "");
+  const [view, ...rest] = roh.split("/");
+  return { view, arg: rest.length ? decodeURIComponent(rest.join("/")) : null };
+}
+
 window.addEventListener("hashchange", () => {
-  const v = location.hash.replace("#/", "");
-  if (RENDERERS[v] && v !== state.view) { state.view = v; render(); }
+  const { view, arg } = ausAdresse();
+  if (!RENDERERS[view]) return;
+  if (view === "system") {
+    if (!arg) return;
+    /* Zurück auf dieselbe Seite ist kein neuer Abruf. */
+    if (state.detail?.id === arg && state.view === "system") return;
+    state.view = "system";
+    state.detail = { id: arg, tage: state.detail?.tage || 1, daten: null, busy: true, error: null, geladen: 0 };
+    ladeVerlauf();
+    return;
+  }
+  if (view !== state.view) { state.view = view; render(); }
 });
 
 /* ============================================================
@@ -2045,6 +2465,13 @@ function applyLive(st) {
   state.offline = null;
   render();
   markSource();
+
+  /* Der Verlauf hängt nicht am Zustandsstrom — er wird beim Öffnen der
+     Seite geholt und danach im Minutentakt aufgefrischt. Öfter hätte
+     keinen Sinn: schneller als der Takt der Ablage entstehen keine neuen
+     Punkte. */
+  const d = state.detail;
+  if (state.view === "system" && d && !d.busy && (!d.daten || Date.now() - d.geladen > 60000)) ladeVerlauf();
 }
 
 /* Beim ersten Zustand wird der Stand gemerkt, danach nur noch verglichen.
@@ -2132,8 +2559,11 @@ function markSource() {
 }
 
 (() => {
-  const v = location.hash.replace("#/", "");
-  if (RENDERERS[v]) state.view = v;
+  const { view, arg } = ausAdresse();
+  if (RENDERERS[view]) state.view = view;
+  /* Eine Detailseite ist verlinkbar: geladen wird sie erst, wenn der
+     Dienst antwortet — vorher gäbe es nichts zu zeigen. */
+  if (view === "system" && arg) state.detail = { id: arg, tage: 1, daten: null, busy: true, error: null, geladen: 0 };
 
   const L = window.LEITSTAND;
   if (L && L.pending) {
@@ -2320,7 +2750,7 @@ function collectLinks() {
   for (const el of document.querySelectorAll("[data-link]")) {
     const [gi, ii, feld] = el.dataset.link.split(".");
     const it = state.rawLinks[+gi]?.items?.[+ii];
-    if (it) it[feld] = el.value;
+    if (it) it[feld] = el.type === "checkbox" ? el.checked : el.value;
   }
 }
 
@@ -2366,6 +2796,10 @@ async function saveLinks() {
           if (it.host) o.host = it.host;
           if ((it.url || "").trim()) o.url = it.url.trim();
           if (!o.name) o.name = o.host || o.url || "";
+          /* Geprüft wird nur eine eigene Adresse ohne verknüpftes System —
+             sonst hätte die Kachel zwei Ampeln und niemand wüsste, welche
+             gerade gilt. */
+          if (it.pruefen && o.url && !o.host) o.pruefen = true;
           return o;
         })
         .filter(it => it.host || it.url)
@@ -2457,7 +2891,7 @@ async function saveSettings() {
   } catch (e) { toast("Nicht gespeichert", e.message, "crit"); }
 }
 
-window.LeitstandUI = { render, state, applyLive, go };
+window.LeitstandUI = { render, state, applyLive, go, openSystem };
 
 /* ============================================================
    Ansicht: Verwaltung
@@ -2662,11 +3096,13 @@ function adminLinks() {
           <button class="btn btn--sm" data-action="link-delgroup" data-idx="${gi}">Gruppe löschen</button>
         </div>
         <div class="panel-body panel-body--flush tablewrap">
-          <table class="t"><thead><tr><th style="width:34px"></th><th>Beschriftung</th><th>System</th><th>Adresse</th><th class="right"></th></tr></thead><tbody>
+          <table class="t"><thead><tr><th style="width:34px"></th><th>Beschriftung</th><th>System</th><th>Adresse</th><th style="width:110px">Ampel</th><th class="right"></th></tr></thead><tbody>
           ${(g.items || []).length ? g.items.map((it, ii) => {
             const h = it.host ? byId(state.hosts, it.host) : null;
-            return `<tr data-sev="${h ? h.status : "idle"}">
-              <td class="sev">${dot(h ? h.status : "idle")}</td>
+            const gemeldet = LINKGROUPS[gi]?.links?.[ii];
+            const ampel = kachelAmpel(gemeldet && gemeldet.u === it.url ? gemeldet : { p: !!it.pruefen, st: null }, h);
+            return `<tr data-sev="${ampel}">
+              <td class="sev">${dot(ampel)}</td>
               <td><input class="admin-input" data-link="${gi}.${ii}.name" value="${esc(it.name || "")}" placeholder="${esc(it.host || "Beschriftung")}" aria-label="Beschriftung"></td>
               <td><select class="admin-input" data-link="${gi}.${ii}.host" aria-label="System">
                 <option value="">— keins (reines Lesezeichen)</option>
@@ -2674,12 +3110,17 @@ function adminLinks() {
               </select></td>
               <td><input class="admin-input mono" data-link="${gi}.${ii}.url" value="${esc(it.url || "")}"
                 placeholder="${esc(h && h.url ? h.url + " (vom System)" : "https://…")}" aria-label="Adresse"></td>
+              <td><label class="admin-check" title="${esc(h
+                ? "Die Ampel kommt vom verknüpften System — es wird ohnehin vollständig überwacht."
+                : "Die Adresse alle " + (state.settings?.link_takt ?? 60) + " s abrufen und die Kachel danach färben. Erzeugt keine Störung und keine Meldung.")}">
+                <input type="checkbox" data-link="${gi}.${ii}.pruefen" ${it.pruefen && !h ? "checked" : ""} ${h ? "disabled" : ""}>
+                <span>${h ? "vom System" : "abrufen"}</span></label></td>
               <td class="right">
                 <button class="btn btn--sm" data-action="link-move" data-group="${gi}" data-idx="${ii}" data-dir="-1" ${ii === 0 ? "disabled" : ""}>↑</button>
                 <button class="btn btn--sm" data-action="link-move" data-group="${gi}" data-idx="${ii}" data-dir="1" ${ii === (g.items.length - 1) ? "disabled" : ""}>↓</button>
                 <button class="btn btn--sm" data-action="link-del" data-group="${gi}" data-idx="${ii}">Löschen</button>
               </td></tr>`;
-          }).join("") : `<tr><td colspan="5"><div class="empty">Noch nichts in dieser Gruppe.</div></td></tr>`}
+          }).join("") : `<tr><td colspan="6"><div class="empty">Noch nichts in dieser Gruppe.</div></td></tr>`}
           </tbody></table>
         </div>
       </div>`).join("") : '<div class="empty">Noch keine Gruppe — oben rechts „+ Gruppe".</div>'}
@@ -2691,7 +3132,12 @@ function adminLinks() {
       <button class="btn btn--primary" data-action="link-save">Speichern</button>
     </div>
     <div class="panel-note">Ohne Adresse übernimmt die Kachel die Oberfläche des verknüpften Systems. Eine eigene
-      Adresse ist für Unterpfade nützlich — etwa <span class="mono">/admin</span> statt der Startseite des Dienstes.</div>
+      Adresse ist für Unterpfade nützlich — etwa <span class="mono">/admin</span> statt der Startseite des Dienstes.
+      <br><b>Ampel:</b> Ist ein System verknüpft, trägt die Kachel dessen Zustand. Ohne System bleibt sie grau —
+      es sei denn, <b>abrufen</b> ist gesetzt: dann holt der Leitstand die Adresse selbst, alle
+      <span class="mono">${esc(String(state.settings?.link_takt ?? 60))} s</span>, und färbt die Kachel nach dem Statuscode.
+      Das ist ausdrücklich <i>keine</i> Überwachung: es entsteht keine Störung, nichts wird quittiert, niemand wird
+      geweckt. Wer das braucht, legt das Ziel als System an.</div>
   </div>`;
 }
 
@@ -2776,13 +3222,30 @@ function adminSettings() {
       ${f("slow_ms", "Grenze „langsam“", "Millisekunden bis Gelb")}
       ${f("tls_warn_days", "Zertifikat: Warnung", "Tage Restlaufzeit")}
       ${f("tls_crit_days", "Zertifikat: kritisch", "Tage Restlaufzeit")}
-      ${f("history", "Verlaufspunkte", "je System vorgehalten")}
+      ${f("history", "Verlaufspunkte", "je System im Speicher, für die Sparkline")}
       ${f("icmp", "ICMP verwenden", "true oder false")}
+      ${f("verlauf_takt", "Zeitreihe: Takt", "Sekunden je Punkt auf der Platte")}
+      ${f("verlauf_tage", "Zeitreihe: Aufbewahrung", "Tage, danach fällt der älteste heraus")}
+      ${f("link_takt", "Startseite: Prüftakt", "Sekunden zwischen zwei Abrufen einer Kachel")}
     </div></div>
     <div class="panel-note">Ein geänderter Abstand greift ab dem nächsten Durchlauf. Steht ICMP auf
       <span class="mono">false</span>, wird nur noch TCP geprüft — für Weboberflächen genügt das, für reine
-      Ping-Ziele nicht.</div>
+      Ping-Ziele nicht.
+      <br>Takt und Aufbewahrung der Zeitreihe bestimmen, wie viel Platz das Volume braucht: rund 100 Byte je Punkt,
+      Gegenstand und Takt. Eine Minute über 30 Tage sind etwa 4 MB je System.${verlaufNote()}</div>
   </div>`;
+}
+
+/* Was tatsächlich auf der Platte liegt — gezählt vom Dienst, nicht
+   geschätzt von hier. Ein Schreibfehler (volles Volume) steht ausdrücklich
+   da: eine Zeitreihe, die still nicht mehr wächst, merkt sonst niemand. */
+function verlaufNote() {
+  const v = state.runtime?.verlauf;
+  if (!v) return "";
+  const mb = v.bytes != null ? (v.bytes / 1048576).toFixed(v.bytes > 10485760 ? 0 : 1) + " MB" : "—";
+  return `<br><b>Ablage:</b> <span class="mono">${esc(v.verzeichnis)}</span> — ${v.vorhanden} Tagesdatei(en)${
+    v.seit ? `, älteste vom ${esc(v.seit)}` : ""}, ${esc(mb)}.${
+    v.fehler ? ` <span style="color:var(--crit)">Zuletzt nicht schreibbar: ${esc(v.fehler)}</span>` : ""}`;
 }
 
 /* ---------- Formular als Schublade ---------- */

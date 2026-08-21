@@ -119,21 +119,32 @@ stehen in der Oberfläche, nicht im Code.
 
 ---
 
-## 4. Zeitreihen und eine Detailseite je System
+## 4. Zeitreihen und eine Detailseite je System — **erledigt**
 
-**Warum.** Messwerte halten heute 120 Punkte im Arbeitsspeicher, also gut eine
-halbe Stunde, und ein Neustart wischt sie weg. Damit lässt sich die Frage
-„war das gestern Nacht auch schon so?" nicht beantworten — und das ist die
-Frage, die nach jeder Störung kommt.
+**Was daraus geworden ist.** Eine eigene, sehr kleine Ablage
+([`server/src/verlauf.js`](server/src/verlauf.js)): eine Datei je Tag im Volume
+(`/data/verlauf/2026-08-21.jsonl`), eine Zeile je Messpunkt als JSON, ein Punkt
+je Minute und Gegenstand, 30 Tage lang. Angehängt wird ohne Sperre; ein
+abgeschnittener Schreibvorgang kostet eine Zeile, nicht die Datei. Innerhalb
+eines Taktes bleiben Mittel-, Kleinst- und Größtwert erhalten, und die
+schlechteste Ampel gewinnt — ein Aussetzer von zwanzig Sekunden verschwindet
+nicht im Mittelwert.
 
-**Wo.** [`server/src/engine.js`](server/src/engine.js) (`push`, `hist`),
-Ablage im Volume neben dem Bestand. Die Architektur sieht VictoriaMetrics vor;
-für den Anfang tut es eine schlanke eigene Datei je Tag, solange das Format
-später auslesbar bleibt.
+Ein Klick auf ein System führt auf `#/system/<kennung>`: Verlauf über 24 h, 7
+oder 30 Tage (Antwortzeit mit Spannweite, CPU, RAM, Speicher, Durchsatz, dazu
+ein Ampelband), darunter Stammdaten, Prüfungen, Zertifikat, Auslastung, offene
+Meldungen und die Diagnose. Der Inspector für Systeme ist damit entfallen —
+zwei Darstellungen desselben Gegenstands driften auseinander. Wo nichts
+gemessen wurde, ist die Linie **unterbrochen**, nicht durchgezogen.
 
-**Fertig, wenn.** Ein Klick auf ein System führt auf eine eigene Seite mit
-Verlauf über Tage — Antwortzeit, CPU, RAM, Platte, Durchsatz —, und die Werte
-überleben einen Neustart des Behälters.
+Abrufbar auch ohne Oberfläche: `GET /api/verlauf/<kennung>?tage=7`. Takt und
+Aufbewahrung stehen als `verlauf_takt` / `verlauf_tage` in den Schwellwerten;
+was tatsächlich auf der Platte liegt — und ob zuletzt geschrieben werden
+konnte — steht unter *Einstellungen → Dieser Dienst*.
+
+**Offen geblieben:** VictoriaMetrics (die Architektur sieht sie vor; das
+Zeilenformat ist so gewählt, dass sie sich daraus befüllen ließe) und ein
+Vergleich zweier Zeiträume nebeneinander.
 
 ---
 
@@ -193,9 +204,8 @@ Zuordnung zu Standort oder Systemgruppe statt zu einem einzelnen Gerät.
       `secrets.json` bleibt außen vor — mit Absicht, aber nirgends steht das.
       Entweder verschlüsselt mitnehmen oder im Reiter *Sicherung* dazuschreiben,
       dass Zugangsdaten nicht Teil eines zurückgeholten Standes sind.
-- [ ] **Testzahl im README.** Steht an zwei Stellen als Zahl und veraltet bei
-      jedem Zulauf. Entweder aus dem Testlauf erzeugen oder den Satz ohne Zahl
-      schreiben.
+- [x] **Testzahl im README.** Stand an zwei Stellen als Zahl und veraltete bei
+      jedem Zulauf. Jetzt steht der Satz ohne Zahl.
 - [ ] **Fehler beim Zusammenbauen des Zustands sind unsichtbar.** Der
       Healthcheck fragt `/api/version`, damit ein Anzeigefehler keine
       Neustartschleife auslöst — richtig so. Nur merkt dann niemand, wenn

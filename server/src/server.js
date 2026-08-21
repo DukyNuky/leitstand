@@ -4,6 +4,7 @@
      GET    /api/state            aktueller Zustand für die Oberfläche
      GET    /api/version          welche Fassung hier läuft (Commit, Zeitpunkt)
      GET    /api/stream           dasselbe als Server-Sent-Events
+     GET    /api/verlauf/:id      Zeitreihe eines Systems — ?tage=7
      POST   /api/incidents/:id/ack        { on: true|false }
      POST   /api/hosts/:id/silence        { minutes: 120 }
      GET    /api/admin/inventory  Bestand + maskierte Zugangsdaten
@@ -30,6 +31,7 @@ import { Secrets } from "./secrets.js";
 import { Engine } from "./engine.js";
 import { buildState } from "./api.js";
 import { makeCollectors, TESTERS } from "./collectors/index.js";
+import { Verlauf, verdichte, belegteReihen } from "./verlauf.js";
 import { runCheck } from "./probe.js";
 import { buildInfo } from "./version.js";
 import { diagnoseHost, alsText } from "./diagnose.js";
@@ -105,7 +107,17 @@ export function createServer(opts = {}) {
 
   let inv = Inv.load(invFile);
   const secrets = new Secrets(secFile);
-  const engine = new Engine(inv, { statePath: stateFile, collectors: makeCollectors(secrets) });
+
+  /* Zeitreihen liegen im selben Volume wie der Bestand, aber in einem
+     eigenen Verzeichnis: sie wachsen, sie sind wertlos für eine
+     Wiederherstellung, und sie gehören ausdrücklich nicht in das Archiv
+     der Bestände. */
+  const verlauf = new Verlauf(opts.verlauf || process.env.LEITSTAND_VERLAUF || beside("verlauf"), {
+    takt: inv.settings.verlauf_takt, tage: inv.settings.verlauf_tage
+  });
+  verlauf.aufraeumen();
+
+  const engine = new Engine(inv, { statePath: stateFile, collectors: makeCollectors(secrets), verlauf });
 
   const clients = new Set();
   engine.onChange(() => {
@@ -161,7 +173,31 @@ export function createServer(opts = {}) {
       return;
     }
 
+    /* Der Verlauf eines Gegenstands über Tage — die Frage, die nach jeder
+       Störung kommt. Lesend und ohne Zugangsdaten, wie der Zustand selbst.
+       Verdichtet wird serverseitig: eine Woche im Minutentakt sind 10 000
+       Punkte, und kein Diagramm zeigt mehr als ein paar hundert davon. */
     let mm;
+    if ((mm = p.match(/^\/api\/verlauf\/([^/]+)$/)) && m === "GET") {
+      const id = decodeURIComponent(mm[1]);
+      const host = inv.hosts.find(h => String(h.id) === id);
+      const tunnel = inv.tunnels.find(t => String(t.id) === id);
+      if (!host && !tunnel) return json(res, 404, { error: `„${id}“ ist nicht angelegt.` });
+      const tage = Math.min(90, Math.max(1, Number(url.searchParams.get("tage")) || 7));
+      const roh = verlauf.reihe(id, { tage, art: host ? "h" : "t" });
+      const punkte = verdichte(roh, Math.min(2000, Math.max(200, Number(url.searchParams.get("punkte")) || 900)));
+      return json(res, 200, {
+        id, art: host ? "host" : "tunnel",
+        name: host ? (host.name || host.id) : id,
+        tage, takt: verlauf.takt,
+        punkte, gemessen: roh.length, gezeigt: punkte.length,
+        reihen: belegteReihen(roh),
+        von: roh[0] ? new Date(roh[0].t * 1000).toISOString() : null,
+        bis: roh.at(-1) ? new Date(roh.at(-1).t * 1000).toISOString() : null,
+        ablage: verlauf.info()
+      });
+    }
+
     if ((mm = p.match(/^\/api\/incidents\/([^/]+)\/ack$/)) && m === "POST") {
       const body = await readJson(req);
       const inc = engine.ack(decodeURIComponent(mm[1]), body.on !== false);
@@ -244,7 +280,8 @@ export function createServer(opts = {}) {
 
     if (p === "/api/admin/links" && m === "PUT") {
       const body = await readJson(req);
-      commit({ ...inv, links: body.links || [] });
+      const links = (body.links || []).map(g => ({ ...g, items: (g.items || []).map(Inv.normalizeLink) }));
+      commit({ ...inv, links });
       return json(res, 200, { ok: true, links: inv.links });
     }
 
@@ -369,6 +406,7 @@ export function createServer(opts = {}) {
 
   server.engine = engine;
   server.secrets = secrets;
+  server.verlauf = verlauf;
   server.getInventory = () => inv;
   server.settings = () => inv.settings;
   return server;

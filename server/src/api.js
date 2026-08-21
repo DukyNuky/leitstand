@@ -43,7 +43,12 @@ export function buildState(engine, secrets, bestand = null) {
            leerer Bestand genauso aus wie ein absichtlich leerer — und die
            Frage „wo sind meine Systeme hin?" ist von der Oberfläche aus
            nicht zu beantworten. */
-        bestand
+        bestand,
+        /* Wo die Zeitreihen liegen, wie weit sie zurückreichen und was sie
+           belegen. Die Einstellungen-Ansicht zeigt das, damit niemand raten
+           muss, ob überhaupt geschrieben wird — und ein Schreibfehler
+           (volles Volume) sichtbar wird, statt still zu bleiben. */
+        verlauf: engine.verlauf ? engine.verlauf.info() : null
       },
       generated: new Date().toISOString()
     },
@@ -52,7 +57,7 @@ export function buildState(engine, secrets, bestand = null) {
     tunnels: inv.tunnels.map(t => tunnelView(t, engine.tunnels.get(t.id))),
     incidents: incidentViews(engine),
     certs: certViews(hosts),
-    links: linkViews(inv, byId),
+    links: linkViews(inv, byId, engine),
     integrations: integrationViews(inv, secrets, engine),
     peers: peerViews(inv, engine),
     /* Diese Bereiche kennt der Dienst noch nicht — leer statt erfunden. */
@@ -277,12 +282,26 @@ function certViews(hosts) {
     .sort((a, b) => a.days - b.days);
 }
 
-function linkViews(inv, byId) {
+function linkViews(inv, byId, engine) {
   return inv.links.map(g => ({
     name: g.group,
     links: g.items.map(i => {
       const h = i.host ? byId.get(i.host) : null;
-      return { n: i.name || (h ? h.name : i.url), u: i.url || (h ? h.url : "#"), h: i.host || null };
+      const url = i.url || (h ? h.url : "#");
+      /* Die Ampel der Kachel kommt vom verknüpften System, wenn es eines
+         gibt — das ist die belastbarere Aussage. Sonst, und nur wenn
+         ausdrücklich gewünscht, aus dem Abruf der Adresse selbst. Ist
+         beides nicht der Fall, bleibt die Kachel grau: ein Lesezeichen
+         behauptet nichts. */
+      const pruefung = !h && i.pruefen ? engine?.linkChecks.get(url) : null;
+      return {
+        n: i.name || (h ? h.name : i.url), u: url, h: i.host || null,
+        p: !!i.pruefen && !h,
+        st: pruefung ? pruefung.status : null,
+        ms: pruefung ? pruefung.ms : null,
+        detail: pruefung ? pruefung.detail : null,
+        stand: pruefung ? new Date(pruefung.stand).toISOString() : null
+      };
     })
   }));
 }

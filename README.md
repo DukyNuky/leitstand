@@ -85,6 +85,7 @@ Geräte gezogen. Im Volume liegen danach:
 /data/secrets.json         Zugangsdaten, Rechte 0600
 /data/incidents.json       Störungen und Quittierungen, überlebt Neustarts
 /data/archiv/              ein Auszug des Bestands je Tag, an dem er sich geändert hat
+/data/verlauf/             Zeitreihen: eine Datei je Tag, eine Zeile je Messpunkt
 ```
 
 Die Auszüge legt der Dienst selbst an — beim Start und nach jeder Änderung,
@@ -141,7 +142,8 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | | |
 |---|---|
 | **Erreichbarkeit** | ICMP, TCP-Port, HTTP-Status — alle 15 s, drei Fehlschläge bis Rot; Port- und TLS-Prüfung fragen die IP **und** den Namen aus der Oberflächen-Adresse, damit ein System hinter einem Reverse Proxy nicht als Teilausfall gilt |
-| **Antwortzeiten** | Verlauf je System, sichtbar als Sparkline |
+| **Antwortzeiten** | Sparkline in der Tabelle für die letzte halbe Stunde — und ein **Verlauf über Tage** auf der Seite jedes Systems, der einen Neustart übersteht |
+| **Zeitreihen** | ein Punkt je Minute und Gegenstand auf der Platte (Antwortzeit mit Spannweite, CPU, RAM, Speicher, Durchsatz, Ampel), 30 Tage lang, als lesbares JSON je Zeile |
 | **Zertifikate** | Restlaufzeit aller TLS-Ziele, Warnung ab 30 Tagen, Rot ab 14 |
 | **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake des verknüpften Peers. Die Karte zeigt auch Strecken **zwischen Nebenstandorten**, nicht nur die zum Hauptstandort |
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version |
@@ -150,6 +152,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, Durchsatz je Schnittstelle, WireGuard-Peers mit Handshake-Alter |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
+| **Startseite** | Kacheln tragen die Ampel des verknüpften Systems; ein Lesezeichen ohne System kann auf Wunsch selbst geprüft werden — ein GET je Minute, Ampel ohne Störung |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
 Alles andere (pfSense, TrueNAS, AdGuard, Portainer, Mailcow, Home
@@ -335,7 +338,8 @@ Antworten (private_key, psk …) wird dabei ausdrücklich verborgen.
 | `⌘K` / `Strg+K` | Kommandopalette: Sprung zu Host, Standort, Tunnel, Störung, Link |
 | `1` – `9` | Ansicht wechseln |
 | `Esc` | Inspector, Formular oder Palette schließen |
-| Klick auf Zeile/Kachel | Inspector rechts mit Details und Aktionen |
+| Klick auf ein System | eigene Seite: Verlauf über 24 h / 7 / 30 Tage, Stammdaten, Prüfungen, Meldungen |
+| Klick auf Standort, Tunnel, Störung | Inspector rechts mit Details und Aktionen |
 | Kopfleiste `HQ RZ …` | Standortfilter über alle Ansichten |
 | „Nur Probleme" | blendet alles Grüne aus |
 | `◐` | Hell/Dunkel |
@@ -353,6 +357,7 @@ server/
   src/probe.js            ICMP, TCP, TLS-Restlaufzeit, DNS, HTTP
   src/inventory.js        Laden, Prüfen, Zurückschreiben (mit Sicherung)
   src/engine.js           Ampeln, Verlauf, Störungen, Standort-Bündelung
+  src/verlauf.js          Zeitreihen auf der Platte: verdichten, schreiben, lesen
   src/collectors/proxmox.js   VE, Backup Server, Mail Gateway
   src/collectors/opnsense.js  Fassung, Speicher, Platte, Durchsatz, WireGuard
   src/collectors/index.js     alle Sammler an einer Stelle
@@ -362,7 +367,7 @@ server/
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   197 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -376,7 +381,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 197 Tests
+cd server && npm test
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen

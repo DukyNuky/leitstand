@@ -238,7 +238,10 @@ test("Inspector, Verwaltung und Formulare zeichnen für jeden Fall", async () =>
     assert.ok(!/undefined|NaN|\[object Object\]/.test(html), `${was} zeigt einen Platzhalterwert`);
   };
 
-  for (const [kind, id] of [["host", "web"], ["host", "lab"], ["tunnel", "wg-hq-rz"],
+  /* „host" fehlt hier mit Absicht: ein System hat seit dem Verlauf über
+     Tage eine eigene Seite statt einer Schublade — geprüft wird sie unten
+     im eigenen Test. */
+  for (const [kind, id] of [["tunnel", "wg-hq-rz"],
                             ["site", "hq"], ["incident", zustand.incidents[0]?.id]]) {
     if (!id) continue;
     ui.state.inspector = { kind, id };
@@ -599,4 +602,125 @@ test("Ohne gemeldete Peers steht im Formular, was dafür fehlt", async () => {
   const html = ziele.get("#overlays").innerHTML;
   assert.ok(!/data-field="peerRef"/.test(html), "eine leere Auswahlliste hilft niemandem");
   assert.match(html, /API-Schlüssel/);
+});
+
+/* ============================================================
+   Die Detailseite eines Systems
+
+   Sie ist der Grund, aus dem Messwerte überhaupt auf die Platte gehen.
+   Geprüft wird das, was an ihr schiefgehen kann, ohne dass es auffällt:
+   eine Linie, die über eine Nacht ohne Messung hinwegläuft, und ein
+   leeres Diagramm, das wie eine Messung aussieht.
+   ============================================================ */
+
+/* Ein Verlauf, wie ihn /api/verlauf liefert. */
+function verlaufDaten(punkte, extra = {}) {
+  return {
+    id: "web", art: "host", name: "web", tage: 1, takt: 60,
+    punkte, gemessen: punkte.length, gezeigt: punkte.length,
+    reihen: [{ key: "ms", label: "Antwortzeit", einheit: "ms" }],
+    von: punkte[0] ? new Date(punkte[0].t * 1000).toISOString() : null,
+    bis: punkte.at(-1) ? new Date(punkte.at(-1).t * 1000).toISOString() : null,
+    ablage: { verzeichnis: "/data/verlauf", takt: 60, tage: 30, vorhanden: 1, seit: "2026-08-21", bytes: 4096, fehler: null },
+    ...extra
+  };
+}
+
+function reihe(n, ab = 1755000000, schritt = 60) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ t: ab + i * schritt, k: "h", id: "web", ms: 10 + (i % 5), min: 8, max: 20, n: 4, st: "ok" });
+  return out;
+}
+
+test("Ein System hat eine eigene Seite mit Verlauf statt einer Schublade", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+
+  ui.openSystem("web");
+  assert.equal(ui.state.view, "system", "der Klick führt auf die Seite, nicht in die Schublade");
+  assert.equal(ui.state.detail.id, "web");
+
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = verlaufDaten(reihe(120));
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML + ziele.get("#top").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "die Seite zeigt einen Platzhalterwert");
+  assert.match(html, /Antwortzeit/);
+  assert.match(html, /<svg class="vd"/, "das Diagramm fehlt");
+  assert.match(html, /Prüfungen im letzten Durchlauf/);
+  assert.match(html, /Stammdaten/);
+});
+
+/* Eine durchgezogene Linie über eine Nacht ohne Messwerte wäre eine
+   Behauptung — genau die Sorte, die eine Überwachung nicht machen darf. */
+test("Wo nichts gemessen wurde, ist die Linie unterbrochen", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+
+  const vorher = reihe(30);
+  const nachher = reihe(30, vorher.at(-1).t + 6 * 3600);      /* sechs Stunden Funkstille */
+  ui.openSystem("web");
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = verlaufDaten([...vorher, ...nachher]);
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  const linien = (html.match(/<polyline/g) || []).length;
+  assert.equal(linien, 2, "die Lücke wird übermalt statt gezeigt");
+});
+
+test("Ohne aufgezeichnete Punkte behauptet die Seite nichts", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+
+  ui.openSystem("web");
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = verlaufDaten([]);
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/<svg class="vd"/.test(html), "ein leeres Diagramm sieht aus wie eine Messung");
+  assert.match(html, /noch nichts auf der Platte/i);
+
+  /* Und wenn der Abruf scheitert, steht das da — nicht eine leere Fläche. */
+  ui.state.detail.daten = null;
+  ui.state.detail.error = "HTTP 500";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML, /nicht abrufbar/);
+});
+
+/* Eine Kachel ohne verknüpftes System darf grün sein — aber nur, wenn
+   jemand die Adresse tatsächlich abgerufen hat. */
+test("Die Kachel der Startseite zeigt die geprüfte Erreichbarkeit", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+
+  zustand.links = [{ name: "Werkzeuge", links: [
+    { n: "Geprüft", u: "https://example.org/", h: null, p: true, st: "ok", ms: 42, detail: "HTTP 200", stand: "2026-08-21T10:00:00Z" },
+    { n: "Kaputt", u: "https://example.net/", h: null, p: true, st: "crit", ms: null, detail: "Verbindung abgewiesen", stand: "2026-08-21T10:00:00Z" },
+    { n: "Ungeprüft", u: "https://example.com/", h: null, p: false, st: null, ms: null, detail: null, stand: null },
+    { n: "Wartet", u: "https://example.edu/", h: null, p: true, st: null, ms: null, detail: null, stand: null }
+  ] }];
+  ui.applyLive(zustand);
+  ui.state.view = "links";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  const ampel = name => {
+    const teil = html.split(name)[1] || "";
+    return (teil.match(/dot dot--(\w+)/) || [])[1];
+  };
+  assert.equal(ampel("Geprüft"), "ok");
+  assert.equal(ampel("Kaputt"), "crit");
+  assert.equal(ampel("Ungeprüft"), "idle", "ein Lesezeichen behauptet nichts");
+  assert.equal(ampel("Wartet"), "idle", "„noch nicht geprüft“ ist nicht „in Ordnung“");
+  assert.match(html, /HTTP 200/);
 });

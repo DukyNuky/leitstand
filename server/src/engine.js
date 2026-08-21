@@ -16,8 +16,10 @@ export class Engine {
     this.inv = inv;
     this.statePath = opts.statePath || null;
     this.collectors = opts.collectors || {};      /* typ -> async (host) => Zusatzdaten */
+    this.verlauf = opts.verlauf || null;          /* Zeitreihen-Ablage, siehe verlauf.js */
     this.hosts = new Map();
     this.tunnels = new Map();
+    this.linkChecks = new Map();                  /* url -> Ampel einer Startseiten-Kachel */
     this.incidents = new Map();                   /* fingerprint -> Störung */
     this.seq = 0;
     this.lastRun = null;
@@ -81,11 +83,13 @@ export class Engine {
   async #durchlauf() {
     await Promise.all([
       ...this.inv.hosts.map(h => this.#checkHost(h)),
-      ...this.inv.tunnels.map(t => this.#checkTunnel(t))
+      ...this.inv.tunnels.map(t => this.#checkTunnel(t)),
+      this.#checkLinks()
     ]);
     this.#peerZuTunnel();
     this.#rollup();
     this.lastRun = new Date().toISOString();
+    this.#verlaufNotieren();
     this.#saveState();
     this.#emit();
   }
@@ -97,7 +101,91 @@ export class Engine {
     this.timer = setInterval(() => this.runOnce(), every);
     if (this.timer.unref) this.timer.unref();
   }
-  stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
+  stop() {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    /* Was im laufenden Takt schon gemessen wurde, gehört auf die Platte,
+       bevor der Prozess geht — sonst fehlt nach jedem Neustart die letzte
+       Minute, und die ist die interessanteste. */
+    this.verlauf?.schliesse();
+  }
+
+  /* ---------- Zeitreihen ----------
+     Ein Punkt je Gegenstand und Durchlauf; verdichtet und geschrieben wird
+     in verlauf.js. Hier steht nur, welche Kennzahlen es wert sind, Tage zu
+     überdauern: die, die auf der Detailseite gezeichnet werden. */
+  #verlaufNotieren() {
+    if (!this.verlauf) return;
+    const jetzt = Date.now();
+    const s = this.inv.settings;
+    this.verlauf.einstellen({ takt: s.verlauf_takt, tage: s.verlauf_tage });
+    for (const h of this.inv.hosts) {
+      const st = this.hosts.get(h.id);
+      if (!st || st.status === "unknown") continue;
+      const x = st.extra || {};
+      this.verlauf.notiere("h", h.id, {
+        ms: st.ms, st: st.status,
+        cpu: zahl(x.cpu), ram: zahl(x.ram), disk: zahl(x.disk),
+        in: zahl(x.thrIn), out: zahl(x.thrOut)
+      }, jetzt);
+    }
+    for (const t of this.inv.tunnels) {
+      const st = this.tunnels.get(t.id);
+      if (!st || st.status === "unknown") continue;
+      this.verlauf.notiere("t", t.id, { ms: st.ms, st: st.status }, jetzt);
+    }
+    this.verlauf.schreibe(jetzt);
+  }
+
+  /* ---------- Kacheln der Startseite ----------
+     Eine Verknüpfung ohne verknüpftes System ist heute ein reines
+     Lesezeichen: grauer Punkt, keine Aussage. Ist am Eintrag `pruefen`
+     gesetzt, wird die Adresse selbst abgerufen — mehr nicht, ein GET und
+     der Statuscode. Das beantwortet die einzige Frage, die eine Kachel
+     stellt: komme ich da hin?
+
+     Bewusst ohne Störung und ohne Quittieren: hinter diesen Kacheln
+     stehen fremde Dienste und Seiten im Internet, für die niemand nachts
+     geweckt werden will. Wer eine echte Überwachung braucht, legt ein
+     System an.
+
+     Eigener Takt, weil der Durchlauf alle 15 s kommt und eine fremde
+     Seite so oft abzurufen unhöflich bis auffällig wäre. */
+  async #checkLinks() {
+    const s = this.inv.settings;
+    const takt = Math.max(15, s.link_takt || 60) * 1000;
+    const jetzt = Date.now();
+    const gewollt = new Set();
+    const faellig = [];
+
+    for (const g of this.inv.links || []) {
+      for (const it of g.items || []) {
+        if (!it.pruefen || !it.url || it.host) continue;
+        gewollt.add(it.url);
+        const st = this.linkChecks.get(it.url);
+        if (st && jetzt - st.stand < takt) continue;
+        if (!faellig.includes(it.url)) faellig.push(it.url);
+      }
+    }
+    /* Was niemand mehr anzeigt, wird auch nicht mehr geprüft. */
+    for (const url of [...this.linkChecks.keys()]) if (!gewollt.has(url)) this.linkChecks.delete(url);
+
+    await Promise.all(faellig.map(async url => {
+      const alt = this.linkChecks.get(url);
+      const r = await runCheck({ kind: "http", url }, {}, s);
+      const fails = r.ok ? 0 : (alt?.fails || 0) + 1;
+      /* Ein einzelner Fehlschlag ist Gelb, erst die Wiederholung Rot —
+         dieselbe Zurückhaltung wie bei einem System. Eine Antwort mit
+         Fehlercode ist etwas anderes als keine Antwort: der Dienst steht,
+         er mag den Aufruf nur nicht. */
+      const status = r.ok ? "ok"
+        : /^HTTP \d/.test(r.detail || "") ? "warn"
+        : fails >= (s.fail_threshold || 3) ? "crit" : "warn";
+      this.linkChecks.set(url, {
+        status, ms: r.ms ?? null, detail: r.detail || null,
+        fails, stand: Date.now(), seit: r.ok ? new Date().toISOString() : alt?.seit || null
+      });
+    }));
+  }
 
   /* ---------- Ein System ---------- */
   async #checkHost(h) {
@@ -438,3 +526,8 @@ function rollupDetail(site, still, tunnels) {
 }
 
 function push(arr, v, max) { arr.push(v); while (arr.length > max) arr.shift(); }
+
+/* Nur echte Messwerte gehen in die Zeitreihe. Ein Sammler, der nichts
+   liefert, hinterlässt eine Lücke — keine Null, die sich später wie eine
+   Messung liest. */
+function zahl(v) { return Number.isFinite(v) ? v : null; }

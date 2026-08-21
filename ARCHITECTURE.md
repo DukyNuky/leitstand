@@ -139,7 +139,37 @@ Punkt — steht in [TODO.md](TODO.md).
 | 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, Durchsatz, Peers und Handshake am Tunnel; Zustandstabelle, CARP und pfSense offen |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
 | 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | offen — bislang nur Erreichbarkeit |
-| 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
+| 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | Zeitreihen und Detailseite **gebaut** (eigene Ablage statt VictoriaMetrics, siehe unten); Wartungsfenster, Push und Totmannschalter offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
+
+### Zeitreihen: eine Datei je Tag statt einer Datenbank
+
+Vorgesehen ist VictoriaMetrics. Gebaut ist zunächst eine eigene, sehr kleine
+Ablage — `server/src/verlauf.js`, eine Datei je Tag im Volume, eine Zeile je
+Messpunkt als JSON:
+
+```
+/data/verlauf/2026-08-21.jsonl
+{"t":1755765600,"k":"h","id":"pve-01","ms":12,"min":10,"max":41,"n":4,"cpu":3.5,"ram":61,"st":"ok"}
+```
+
+Der Grund ist derselbe wie beim Bestand als YAML: ein weiterer Container, ein
+weiteres Ablageformat und eine weitere Abfragesprache kosten mehr, als sie in
+diesem Netz einbringen. Anhängen braucht keine Sperre, ein abgeschnittener
+Schreibvorgang kostet eine Zeile statt der Datei, und auslesen lässt sich das
+mit `grep` und `jq`. Kommt VictoriaMetrics später doch, ist dies das Format,
+aus dem sie befüllt wird — es geht nichts verloren.
+
+Verdichtet wird auf einen Punkt je Minute (`verlauf_takt`). Was innerhalb
+dieser Minute gemessen wurde, bleibt trotzdem erhalten: Mittel-, Kleinst- und
+Größtwert stehen in der Zeile, und die **schlechteste** Ampel der Minute
+gewinnt — ein Aussetzer von zwanzig Sekunden darf nicht im Mittelwert
+verschwinden. Aufbewahrt wird 30 Tage (`verlauf_tage`); die Detailseite
+verdichtet beim Abruf ein zweites Mal, weil kein Diagramm 10 000 Punkte zeigt.
+
+Auf der Detailseite wird eine Lücke als Lücke gezeichnet: lief der Dienst eine
+Nacht lang nicht, ist die Linie unterbrochen statt durchgezogen. Eine
+durchgezogene Linie über eine Nacht ohne Messwerte wäre genau die Sorte
+Behauptung, die Regel 5 verbietet.
 
 ### Was in Stufe 1 bewusst anders gelöst ist
 

@@ -488,3 +488,18 @@ select.admin-input { font-family: var(--f-sans); cursor: pointer; }
    Tippen, damit das Feld zeigt, was gespeichert wird. */
 .admin-input--gross { text-transform: uppercase; letter-spacing: .14em; font-family: var(--f-mono); }
 .admin-input--gross::placeholder { letter-spacing: .14em; }
+
+/* ---------- Verlauf über Tage ----------
+   Das Diagramm skaliert gleichmäßig mit der Breite (viewBox 900 × Höhe),
+   damit Linienstärken und Beschriftungen nicht in die Breite gezogen
+   werden. Das Ampelband darunter darf gezerrt werden — es besteht nur
+   aus Rechtecken. */
+.vd { display: block; width: 100%; height: auto; }
+.vd-tick { font-family: var(--f-mono); font-size: 10px; fill: var(--faint); }
+.vd-band { display: block; width: 100%; height: 10px; border-radius: 2px; overflow: hidden; }
+.btn[aria-current="true"] { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+
+/* Häkchen in der Startseiten-Tabelle: nur Kachel-Ampel, keine Störung. */
+.admin-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); cursor: pointer; }
+.admin-check input { accent-color: var(--accent); cursor: pointer; }
+.admin-check input:disabled { cursor: not-allowed; }
