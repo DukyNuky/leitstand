@@ -724,3 +724,134 @@ test("Die Kachel der Startseite zeigt die geprüfte Erreichbarkeit", async () =>
   assert.equal(ampel("Wartet"), "idle", "„noch nicht geprüft“ ist nicht „in Ordnung“");
   assert.match(html, /HTTP 200/);
 });
+
+/* ============================================================
+   AdGuard Home und Portainer in der Oberfläche
+
+   Nicht mit erfundenem Zustand, sondern über die ganze Kette: zwei
+   nachgebaute Geräte, ein echter Bestand mit hinterlegten Zugangsdaten,
+   ein echter Durchlauf — und erst daraus die Ansichten. Damit fällt auch
+   auf, wenn ein Sammler ein Feld anders nennt, als die Ansicht es liest.
+   ============================================================ */
+
+async function zustandMitDiensten(fakeOpt = {}) {
+  const { fakeAdguard, fakePortainer, listen: hoere, close: schliesse,
+    ADGUARD_USER, ADGUARD_PASS, PORTAINER_TOKEN } = await import("./fake-dienste.js");
+
+  const ag = fakeAdguard(fakeOpt.adguard || {});
+  const pt = fakePortainer(fakeOpt.portainer || {});
+  const agUrl = await hoere(ag), ptUrl = await hoere(pt);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-dienste-"));
+  try {
+    fs.writeFileSync(path.join(dir, "inventory.yaml"), `
+settings: { interval: 3600, icmp: false, timeout: 2 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: dns-01, type: adguard, site: hq, url: "${agUrl}", role: DNS-Filter }
+  - { id: ptr-01, type: portainer, site: hq, url: "${ptUrl}", role: Container }
+tunnels: []
+links: []
+`);
+    fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+      "dns-01": { user: ADGUARD_USER, password: ADGUARD_PASS },
+      "ptr-01": { token: PORTAINER_TOKEN }
+    }));
+    const server = createServer({
+      inventory: path.join(dir, "inventory.yaml"),
+      secrets: path.join(dir, "secrets.json"),
+      state: path.join(dir, "incidents.json")
+    });
+    await server.engine.runOnce();
+    const { buildState } = await import("../src/api.js");
+    const zustand = buildState(server.engine, server.secrets);
+    server.engine.stop();
+    return zustand;
+  } finally {
+    await schliesse(ag); await schliesse(pt);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("AdGuard zeigt Anfragen, Blockanteil und den Zustand des Schutzes", async () => {
+  const zustand = await zustandMitDiensten();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "dienste";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Dienste-Ansicht");
+  assert.match(html, /2400/, "Anfragen der letzten 24 h");
+  assert.match(html, /20 %/, "Blockanteil");
+  assert.match(html, /23\.4 ms/, "mittlere Bearbeitungszeit");
+  assert.match(html, /Schutz an/);
+  assert.match(html, /73000 Regeln/);
+  assert.ok(!/Stufe 5/.test(html), "der Hinweis auf den fehlenden Sammler gehört weg");
+});
+
+test("Abgeschalteter Schutz steht als Warnung in der Ansicht", async () => {
+  const zustand = await zustandMitDiensten({ adguard: { protection: false } });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "dienste";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /Schutz aus/);
+  assert.match(html, /Schutz ist abgeschaltet/);
+});
+
+test("Portainer zeigt Umgebungen, Container und wer klemmt", async () => {
+  const zustand = await zustandMitDiensten();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "compute";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Compute-Ansicht");
+  assert.match(html, /1\/2/, "eine von zwei Umgebungen erreichbar");
+  assert.match(html, /20\/22/, "laufende von allen Containern");
+  assert.match(html, /jellyfin/, "der Container mit Exit 137 gehört mit Namen hin");
+  assert.match(html, /Speichergrenze/);
+  assert.match(html, /paperless/);
+
+  /* Und dieselben Zahlen auf der Detailseite des Systems. */
+  ui.openSystem("ptr-01");
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = null;
+  ui.render();
+  const seite = ziele.get("#wrap").innerHTML;
+  assert.match(seite, /docker-hq/);
+  assert.match(seite, /Neustartschleife/);
+  assert.ok(!/undefined|NaN/.test(seite));
+});
+
+/* Ohne Zugangsdaten darf keine Null erscheinen, die wie eine Messung
+   aussieht — sondern der Hinweis, was fehlt. */
+test("Ohne hinterlegten Zugang steht da, was fehlt — keine Nullen", async () => {
+  const zustand = await zustandMitDiensten();
+  for (const h of zustand.hosts) {
+    for (const k of ["dnsQueries", "dnsBlocked", "blockRate", "avgMs", "protection", "dnsRunning", "filtering",
+                     "filters", "filtersAktiv", "filterRules", "upstreams", "endpoints", "endpointsDown",
+                     "stacks", "containers", "unhealthy", "restarting", "oom", "running", "stopped"]) h[k] = null;
+    h.umgebungen = null; h.probleme = null; h.note = null;
+  }
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+
+  ui.state.view = "dienste";
+  ui.render();
+  const dienste = ziele.get("#wrap").innerHTML;
+  assert.match(dienste, /Kennzahlen erst mit hinterlegtem Zugang/);
+  assert.ok(!/undefined|NaN/.test(dienste));
+
+  ui.state.view = "compute";
+  ui.render();
+  const compute = ziele.get("#wrap").innerHTML;
+  assert.match(compute, /API-Token/);
+  assert.ok(!/undefined|NaN/.test(compute));
+});

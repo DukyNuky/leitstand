@@ -45,15 +45,18 @@ das ausdrücklich dasteht. Ein Test weist einen Aufruf ohne Nachweis mit 401 ab.
 
 ## 2. Mehr Details je System — die fehlenden Sammler
 
-**Warum.** Sechs von elf Systemtypen werden bisher nur angepingt. Sie stehen
-grün da, weil ein Port offen ist — was auf ihnen los ist, weiß der Leitstand
-nicht. Genau das ist der Unterschied zwischen „das Gerät antwortet" und „der
-Dienst tut, was er soll": ein TrueNAS mit einem degradierten Pool antwortet
-tadellos.
+**Warum.** Vier von elf Systemtypen werden bisher nur angepingt — AdGuard Home
+und Portainer sind seither dazugekommen. Sie stehen grün da, weil ein Port
+offen ist; was auf ihnen los ist, weiß der Leitstand nicht. Genau das ist der
+Unterschied zwischen „das Gerät antwortet" und „der Dienst tut, was er soll":
+ein TrueNAS mit einem degradierten Pool antwortet tadellos.
 
-**Wo.** Vorlage sind die beiden fertigen Sammler:
-[`server/src/collectors/proxmox.js`](server/src/collectors/proxmox.js) und
-[`server/src/collectors/opnsense.js`](server/src/collectors/opnsense.js).
+**Wo.** Vorlage sind die fertigen Sammler — am nächsten liegen die beiden
+zuletzt gebauten, weil sie klein sind:
+[`adguard.js`](server/src/collectors/adguard.js) (Basic-Auth) und
+[`portainer.js`](server/src/collectors/portainer.js) (Token im Kopf); ausführlicher
+sind [`proxmox.js`](server/src/collectors/proxmox.js) und
+[`opnsense.js`](server/src/collectors/opnsense.js).
 Angemeldet wird in [`collectors/index.js`](server/src/collectors/index.js)
 (`makeCollectors` und `TESTERS`), Zugangsfelder in
 [`ui/assets/app.js`](ui/assets/app.js) (`zugangsFelder`), Endpunkte und
@@ -65,21 +68,39 @@ ein erreichbares System mit abgelehntem Zugang geht auf Gelb statt still ohne
 Werte dazustehen; die Diagnose
 ([`server/src/diagnose.js`](server/src/diagnose.js)) zeigt jeden einzelnen
 Aufruf mit Antwort; ein Test läuft gegen einen nachgebauten Dienst wie
-[`server/test/fake-proxmox.js`](server/test/fake-proxmox.js).
+[`server/test/fake-dienste.js`](server/test/fake-dienste.js). Für Sammler, die
+sich wie AdGuard und Portainer verhalten (eine Kopfzeile, feste Pfade, JSON),
+genügt in der Diagnose ein Eintrag in `EINFACH` — der Weg dorthin ist schon
+gebaut.
 
-- [ ] **2.1 AdGuard Home** — `/control/status`, `/control/stats`. Anfragen 24 h,
-      Blockanteil, Ø Antwortzeit, Upstream-Fehler, Fassung. Ampel: Ø > 100 ms
-      gelb. Der DNS-Filter ist der Dienst, dessen Ausfall im ganzen Netz sofort
-      weh tut — er verdient mehr als einen offenen Port. *(Beim Anlegen liegt
-      die Oberfläche oft hinter einem Reverse Proxy; die Prüfung versucht
-      deshalb IP und Namen aus der Adresse, siehe `probe.js`.)*
+- [x] **2.1 AdGuard Home** — gebaut:
+      [`server/src/collectors/adguard.js`](server/src/collectors/adguard.js).
+      Anmeldung mit Benutzer und Passwort der Oberfläche (einen eigenen
+      Nur-Lese-Zugang kennt AdGuard nicht), gelesen werden `/control/status`,
+      `/control/stats`, `/control/filtering/status` und `/control/dns_info`.
+      Ampel: DNS-Dienst steht → rot; **Schutz oder Filterung abgeschaltet** →
+      gelb (das sieht ein offener Port nie); Ø Bearbeitungszeit > 100 ms → gelb.
+      Zwei Fallen sind unterwegs aufgefallen und stehen im Sammler beschrieben:
+      das Statistikfenster ist einstellbar (24 h bis 90 Tage — der Sammler
+      summiert bei Stundeneimern die letzten 24 und benennt sonst den echten
+      Zeitraum), und `avg_processing_time` kommt je nach Fassung in Sekunden
+      oder Millisekunden. **Nicht gebaut, weil die API es nicht hergibt:**
+      Upstream-Fehler. Dafür gibt es keine Zahl — also steht dort keine.
 - [ ] **2.2 TrueNAS SCALE** — `/api/v2.0/pool`, `/alert/list`, `/disk`.
       Pool-Zustand und Belegung, Scrub-Alter, SMART, Replikation. Ampel: Pool
       nicht `ONLINE` → rot, Scrub älter als 35 Tage → gelb.
-- [ ] **2.3 Portainer** — `/api/endpoints`, `/api/stacks`, Containerliste je
-      Endpunkt. Stacks, Container gesamt/laufend, `unhealthy`, Neustartzähler.
-      Ampel: Restart-Schleife → gelb, Exit 137 → gelb mit Hinweis auf die
-      Speichergrenze.
+- [x] **2.3 Portainer** — gebaut:
+      [`server/src/collectors/portainer.js`](server/src/collectors/portainer.js).
+      Die Zahlen kommen aus der Momentaufnahme, die Portainer je Umgebung
+      ohnehin zieht (ein Aufruf für alles); die Containerliste wird nur geholt,
+      um den Container zu **benennen**, der klemmt. Ampel: keine Umgebung
+      antwortet → rot; einzelne Umgebung still, `unhealthy`, Neustartschleife
+      oder Exit 137 → gelb mit Namen. Wichtig und leicht zu übersehen: fehlen
+      die Rechte, liefert Portainer eine **leere Liste** statt einer
+      Fehlermeldung — das wird ausdrücklich als Rechteproblem gemeldet, sonst
+      stünde da eine ruhige Null, wo Dutzende Container laufen. **Nicht gebaut:**
+      der Neustartzähler; er stünde nur in einem `inspect` je Container, und
+      der Zustand `restarting` samt Exit-Code sagt dasselbe billiger.
 - [ ] **2.4 Mailcow** — `/api/v1/get/mailq/all`, `/get/status/containers`,
       `/get/status/vmail`. Warteschlange, Domains, Postfächer, Containerzustand.
       Ampel: Queue > 25 gelb, > 100 rot.

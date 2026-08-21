@@ -64,8 +64,10 @@ if (kennung) {
   process.exit(b.ok ? 0 : 1);
 }
 
-/* Alle — ausführlich oder als Übersicht */
-const mitSammler = inv.hosts.filter(h => ["pve", "pbs", "pmg"].includes(h.type));
+/* Alle — ausführlich oder als Übersicht.
+   Welche Typen einen Sammler haben, steht am Typ selbst: eine zweite Liste
+   hier veraltete bei jedem neuen Sammler, und zwar unbemerkt. */
+const mitSammler = inv.hosts.filter(h => Inv.TYPES[h.type]?.api);
 const zuPruefen = alle ? inv.hosts : mitSammler;
 if (!zuPruefen.length) {
   console.log("Kein System mit Sammler angelegt. Mit --alle werden auch die reinen Erreichbarkeitsprüfungen gezeigt.");

@@ -82,21 +82,34 @@ Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
 
 ## AdGuard Home — 3 Instanzen
 
+> **Gebaut** — `server/src/collectors/adguard.js`. Einen eigenen Nur-Lese-Zugang
+> kennt AdGuard nicht: es sind dieselben Daten wie für die Oberfläche. Gelesen
+> wird ausschließlich.
+
 | | |
 |---|---|
-| Zugang | HTTP Basic-Auth, eigener Benutzer |
-| Endpunkte | `/control/status`, `/control/stats`, `/control/querylog?limit=…` |
-| Kennzahlen | Anfragen 24 h, Blockanteil, Ø Antwortzeit, Upstream-Fehler, Top-Domains |
-| Ampel | Ø Antwortzeit > 100 ms → gelb · Instanz nicht erreichbar → rot (DNS-Ausfall wirkt sofort im ganzen Netz) |
+| Zugang | HTTP Basic-Auth, Benutzer und Passwort der Oberfläche |
+| Endpunkte | `/control/status`, `/control/stats`, `/control/filtering/status`, `/control/dns_info` |
+| Kennzahlen | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl, Upstreams, Fassung |
+| Ampel | DNS-Dienst steht → rot · Schutz oder Filterung abgeschaltet → gelb · Ø Bearbeitungszeit > 100 ms → gelb |
+| Nicht abrufbar | **Upstream-Fehler** — die API führt dafür keine Zahl, weder im Zustand noch in der Statistik. Steht deshalb nirgends, statt geschätzt zu werden |
+| Fallstrick | Das Statistikfenster ist einstellbar (24 h bis 90 Tage). Der Sammler summiert bei stündlichen Eimern die letzten 24 und benennt sonst den tatsächlichen Zeitraum — „Anfragen 24 h" an eine Zahl über 90 Tage zu schreiben wäre schlicht falsch |
+| Fallstrick | `avg_processing_time` kommt je nach Fassung in Sekunden (dokumentiert) oder Millisekunden. Umgedeutet wird nur, was als Sekunde absurd wäre (> 5 s je Anfrage) |
 
 ## Portainer — 4 Instanzen
 
+> **Gebaut** — `server/src/collectors/portainer.js`. Die Zahlen kommen aus der
+> Momentaufnahme, die Portainer ohnehin je Umgebung zieht; die Containerliste
+> wird nur geholt, um den Container zu **benennen**, der klemmt.
+
 | | |
 |---|---|
-| Zugang | API-Token im Header `X-API-Key`, Benutzer mit Leserecht |
-| Endpunkte | `/api/endpoints`, `/api/stacks`, `/api/endpoints/{id}/docker/containers/json?all=1` |
-| Kennzahlen | Stacks, Container gesamt/laufend, `unhealthy`, Neustartzähler, veraltete Images |
-| Ampel | Container in Restart-Schleife (> 3 Neustarts in 10 min) → gelb · Exit 137 (OOM) → gelb mit Hinweis auf Speichergrenze |
+| Zugang | API-Token im Header `X-API-Key`, je Umgebung Rolle `read-only` |
+| Endpunkte | `/api/system/status` (alt: `/api/status`), `/api/endpoints`, `/api/stacks`, `/api/endpoints/{id}/docker/containers/json?all=1` |
+| Kennzahlen | Umgebungen erreichbar/gesamt, Stacks (aktiv/angehalten), Container laufend/gestoppt, `unhealthy`, Neustartschleifen, Exit 137, Docker-Fassung und Alter der Momentaufnahme je Umgebung |
+| Ampel | keine Umgebung antwortet → rot · einzelne Umgebung still, `unhealthy`, Neustartschleife oder Exit 137 → gelb mit Namen des Containers |
+| Nicht abrufbar | **Neustartzähler** — die Containerliste führt ihn nicht, er stünde nur in einem `inspect` je Container. Gemeldet wird stattdessen der Zustand `restarting` und der Exit-Code |
+| Fallstrick | Fehlen die Rechte, liefert Portainer eine **leere** Liste statt einer Fehlermeldung. Der Sammler meldet das ausdrücklich als Rechteproblem — sonst stünde da eine ruhige Null, wo Dutzende Container laufen |
 
 ## TrueNAS SCALE
 
@@ -159,8 +172,8 @@ Proxmox VE/PMG       Benutzer leitstand@pve, Rolle PVEAuditor auf / mit Vererbun
 Proxmox Backup       Benutzer leitstand@pbs, Rolle Audit auf / mit Propagate — auch für die Token-ID selbst
 OPNsense             System → Access → Users → leitstand, Gruppe mit Lesezugriff, API-Key erzeugen
 pfSense              eigener SSH-Schlüssel, Benutzer ohne Shell-Rechte darüber hinaus
-AdGuard              zusätzlicher Benutzer in der YAML-Konfiguration
-Portainer            Benutzer leitstand, Rolle „read-only“ je Umgebung, Token
+AdGuard              zusätzlicher Benutzer in AdGuardHome.yaml (users), Benutzer + Passwort eintragen
+Portainer            Benutzer leitstand, Rolle „read-only“ je Umgebung, Token unter My account → Access tokens
 TrueNAS              Credentials → API Keys
 Mailcow              Configuration → Access → API, „Read-Only“, Quell-IP einschränken
 Home Assistant       Profil → Long-Lived Access Tokens

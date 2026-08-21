@@ -25,15 +25,15 @@ export const DEFAULTS = {
    ausdrücklich konfiguriert ist. Der Standardport steht am Typ, damit
    „Proxmox hinzufügen“ in der Oberfläche mit zwei Feldern auskommt. */
 export const TYPES = {
-  pve:       { label: "Proxmox VE",           port: 8006, api: "proxmox" },
-  pbs:       { label: "Proxmox Backup Server",port: 8007, api: "proxmox" },
-  pmg:       { label: "Proxmox Mail Gateway", port: 8006, api: "proxmox" },
-  opnsense:  { label: "OPNsense",             port: 443,  api: "opnsense" },
+  pve:       { label: "Proxmox VE",           port: 8006, api: "proxmox",   zugang: "API-Token" },
+  pbs:       { label: "Proxmox Backup Server",port: 8007, api: "proxmox",   zugang: "API-Token" },
+  pmg:       { label: "Proxmox Mail Gateway", port: 8006, api: "proxmox",   zugang: "API-Token" },
+  opnsense:  { label: "OPNsense",             port: 443,  api: "opnsense",  zugang: "API-Schlüssel und Secret" },
   pfsense:   { label: "pfSense",              port: 443,  api: null },
   truenas:   { label: "TrueNAS SCALE",        port: 443,  api: null },
   mailcow:   { label: "Mailcow",              port: 443,  api: null },
-  adguard:   { label: "AdGuard Home",         port: 443,  api: null },
-  portainer: { label: "Portainer",            port: 9443, api: null },
+  adguard:   { label: "AdGuard Home",         port: 443,  api: "adguard",   zugang: "Benutzer und Passwort" },
+  portainer: { label: "Portainer",            port: 9443, api: "portainer", zugang: "API-Token" },
   hass:      { label: "Home Assistant",       port: 8123, api: null },
   other:     { label: "Sonstiges",            port: 443,  api: null }
 };

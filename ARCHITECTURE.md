@@ -138,7 +138,7 @@ Punkt — steht in [TODO.md](TODO.md).
 | 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** |
 | 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, Durchsatz, Peers und Handshake am Tunnel; Zustandstabelle, CARP und pfSense offen |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
-| 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | offen — bislang nur Erreichbarkeit |
+| 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home und Portainer gebaut**; TrueNAS, Mailcow und Home Assistant offen — bislang nur Erreichbarkeit |
 | 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | Zeitreihen und Detailseite **gebaut** (eigene Ablage statt VictoriaMetrics, siehe unten); Wartungsfenster, Push und Totmannschalter offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
 
 ### Zeitreihen: eine Datei je Tag statt einer Datenbank

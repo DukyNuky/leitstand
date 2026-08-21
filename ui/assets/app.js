@@ -731,6 +731,10 @@ function viewCompute() {
   const pve = hs.filter(h => h.type === "pve");
   const store = hs.filter(h => ["truenas", "pbs"].includes(h.type));
   const cont = hs.filter(h => h.type === "portainer");
+  /* Die auffälligen Container aller Portainer-Instanzen in einer Liste:
+     „3 auffällig" in einer Zelle sagt nicht, welcher — und genau danach
+     wird gefragt. */
+  const contProbleme = cont.flatMap(h => (h.probleme || []).map(p => ({ ...p, host: h.name })));
   const vms = sumKnown(pve, "vms"), lxc = sumKnown(pve, "lxc");
   return `
   <div class="panel">
@@ -756,18 +760,26 @@ function viewCompute() {
     </div>
 
     <div class="panel">
-      <div class="panel-head"><h3>Container-Plattformen</h3><span class="hint">Portainer</span></div>
+      <div class="panel-head"><h3>Container-Plattformen</h3><span class="hint">Portainer</span>
+        ${contProbleme.length ? `<div class="spacer"></div><span class="chip chip--warn">${contProbleme.length} auffällige Container</span>` : ""}</div>
       <div class="panel-body panel-body--flush tablewrap">
-        <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Standort</th><th>Adresse</th><th>Zertifikat</th><th>Antwortzeit</th></tr></thead><tbody>
-        ${cont.length ? simpleRows(cont, [
-          h => `<span class="mono faint">${esc(nz(h.ip))}</span>`,
-          h => certCell(h),
-          h => histCell(h)
-        ]) : '<tr><td colspan="6"><div class="empty">Kein Portainer in dieser Auswahl.</div></td></tr>'}
+        <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Standort</th><th>Umgebungen</th><th>Stacks</th><th>Container</th><th>Auffällig</th><th>Antwortzeit</th></tr></thead><tbody>
+        ${cont.length ? portainerRows(cont)
+          : '<tr><td colspan="8"><div class="empty">Kein Portainer in dieser Auswahl.</div></td></tr>'}
         </tbody></table>
       </div>
-      ${cont.length ? `<div class="panel-note">Stacks, Container und ungesunde Dienste liest der Leitstand über die
-        Portainer-API — <b>Stufe 5</b>.</div>` : ""}
+      ${contProbleme.length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th>Container</th><th>Umgebung</th><th>Zustand</th><th>Befund</th></tr></thead><tbody>
+        ${contProbleme.map(p => `<tr data-sev="warn">
+          <td class="mono">${esc(p.name)}</td>
+          <td class="faint">${esc(p.umgebung)}</td>
+          <td class="mono faint">${esc(p.status || p.zustand)}</td>
+          <td>${esc(p.grund)}</td></tr>`).join("")}
+        </tbody></table></div>` : ""}
+      ${cont.some(h => h.containers == null && h.endpoints == null) ? `<div class="panel-note">Stacks, Container und
+        ungesunde Dienste liest der Leitstand über die Portainer-API — dafür fehlt hier noch ein API-Token
+        (<b>Verwaltung → System bearbeiten</b>).</div>` : ""}
+      ${cont.some(h => h.containerNote) ? `<div class="panel-note">${esc(cont.find(h => h.containerNote).containerNote)}.</div>` : ""}
     </div>
   </div>
 
@@ -1089,6 +1101,64 @@ function serviceCard(h, body) {
   </div>`;
 }
 
+/* Eine AdGuard-Kachel sagt zuerst, ob überhaupt gefiltert wird — ein
+   abgeschalteter Schutz ist die Angabe, die ein offener Port nicht kennt.
+   Ohne hinterlegten Zugang bleibt es bei dem, was gemessen wurde. */
+function adguardCard(h) {
+  const kennzahlen = h.dnsQueries != null || h.protection != null;
+  if (!kennzahlen) return serviceCard(h, `
+    <div class="stat-row">
+      ${stat("Antwort", nz(h.ms, " ms"))}
+      ${stat("Zuletzt erreicht", fmtWhen(h.lastSeen) || "—")}
+      ${stat("Zertifikat", h.tls?.days != null ? h.tls.days + " T" : "—")}
+      <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
+    </div>
+    <div class="row" style="gap:8px;font-size:12px;color:var(--faint)">
+      ${dot("idle")}<span>${h.collectorError ? esc(h.collectorError) : "Kennzahlen erst mit hinterlegtem Zugang"} — Verwaltung → ${esc(h.name)}</span></div>`);
+
+  const schutz = h.protection === false ? `<span class="chip chip--warn">Schutz aus</span>`
+    : h.protection === true ? `<span class="chip chip--ok">Schutz an</span>` : "";
+  const filter = h.filtering === false ? `<span class="chip chip--warn">Filterung aus</span>` : "";
+  const dns = h.dnsRunning === false ? `<span class="chip chip--crit">DNS steht</span>` : "";
+  return serviceCard(h, `
+    <div class="stat-row">
+      ${stat(`Anfragen${h.statsFenster ? " / " + h.statsFenster : ""}`, nz(h.dnsQueries))}
+      ${stat("Geblockt", h.blockRate != null ? h.blockRate + " %" : "—")}
+      ${stat("Ø Bearbeitung", nz(h.avgMs, " ms"))}
+      ${stat("Antwort", nz(h.ms, " ms"))}
+      <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
+    </div>
+    <div class="row row-wrap" style="gap:6px">
+      ${dns}${schutz}${filter}
+      ${h.filterRules ? `<span class="chip chip--plain">${esc(h.filtersAktiv ?? "?")} Listen · ${esc(String(h.filterRules))} Regeln</span>` : ""}
+      ${h.upstreams ? `<span class="chip chip--plain">${esc(String(h.upstreams))} Upstream(s)</span>` : ""}
+      ${h.version ? `<span class="chip chip--plain mono">${esc(h.version)}</span>` : ""}
+    </div>`);
+}
+
+/* Eine Zeile je Portainer, und die zählt, was zählt: wie viele Umgebungen
+   antworten und wie viele Container klemmen. */
+function portainerRows(hosts) {
+  return hosts.map(h => {
+    const auffaellig = (h.unhealthy || 0) + (h.restarting || 0) + (h.oom || 0);
+    const kennt = h.containers != null || h.endpoints != null;
+    return `<tr data-sev="${h.status}" data-action="inspect" data-kind="host" data-id="${h.id}">
+      <td class="sev">${dot(h.status)}</td>
+      <td><div class="mono">${esc(h.name)}</div><div class="t-sub">${esc(h.version ? "Portainer " + h.version : h.role)}</div></td>
+      <td>${chip("plain", siteShort(h.site))}</td>
+      <td class="mono">${h.endpoints == null ? '<span class="faint">—</span>'
+        : `${h.endpoints - (h.endpointsDown || 0)}/${h.endpoints}${h.endpointsDown ? ` <span style="color:var(--warn)">↓${h.endpointsDown}</span>` : ""}`}</td>
+      <td class="mono">${nz(h.stacks)}</td>
+      <td class="mono">${h.containers == null ? '<span class="faint">—</span>'
+        : `${h.running}/${h.containers}`}</td>
+      <td>${!kennt ? '<span class="faint">—</span>'
+        : h.restarting == null && h.unhealthy == null ? '<span class="faint">nicht gelesen</span>'
+        : auffaellig ? `<span class="chip chip--warn">${auffaellig}</span>` : '<span class="mono faint">0</span>'}</td>
+      <td>${histCell(h)}</td>
+    </tr>`;
+  }).join("");
+}
+
 function viewDienste() {
   if (!state.hosts.length) return onboarding();
   const hs = visibleHosts();
@@ -1109,15 +1179,17 @@ function viewDienste() {
     </div>
     <div class="card-meta mono" style="font-size:10.5px">${checkList(h)}</div>`)).join("");
 
+  const ohneZugang = ag.filter(h => h.dnsQueries == null && h.protection == null);
   return `
   <div class="panel">
     <div class="panel-head"><h3>DNS-Filter</h3><span class="hint">AdGuard Home</span>
       <div class="spacer"></div><span class="hint">geprüft wird mit einer echten Auflösung, nicht nur am Port</span></div>
     <div class="panel-body"><div class="grid g3">${ag.length
-      ? einfach(ag, h => stat("Zertifikat", h.tls?.days != null ? h.tls.days + " T" : "—"))
+      ? ag.map(adguardCard).join("")
       : '<div class="empty">Kein AdGuard in dieser Auswahl.</div>'}</div></div>
-    ${ag.length ? `<div class="panel-note">Anfragen je Tag, Blockrate und Upstream-Latenz stehen unter
-      <span class="mono">/control/stats</span> und brauchen einen Zugang — <b>Stufe 5</b>.</div>` : ""}
+    ${ohneZugang.length ? `<div class="panel-note">Anfragen, Blockanteil und Bearbeitungszeit stehen unter
+      <span class="mono">/control/stats</span> und brauchen Benutzer und Passwort —
+      ${ohneZugang.map(h => `<b>Verwaltung → ${esc(h.name)}</b>`).join(", ")}.</div>` : ""}
   </div>
 
   <div class="grid g2">
@@ -1621,6 +1693,8 @@ function viewSystem() {
       ${auslastungBlock(h)}${speicherBlock(h)}
     </div></div>` : ""}
 
+  ${h ? kennzahlenPanel(h) : ""}
+
   ${inc.length ? `<div class="panel">
     <div class="panel-head"><h3>Offene Meldungen</h3><span class="hint">${inc.length}</span></div>
     <div class="panel-body col" style="gap:0">${inc.map(i => `
@@ -1741,6 +1815,69 @@ function zertifikatBlock(h) {
 function auslastungBlock(h) {
   if (!hasMetrics(h)) return "";
   return `${h.cpu != null ? meter("CPU", h.cpu) : ""}${h.ram != null ? meter("RAM", h.ram) : ""}${h.disk != null ? meter("Speicher", h.disk) : ""}`;
+}
+
+/* Was ein Sammler über die reine Auslastung hinaus liefert. Steht hier
+   nichts, gibt es für diesen Typ noch keinen Sammler — oder es ist kein
+   Zugang hinterlegt, und dann sagt die Kachel das ohnehin. */
+function kennzahlenPanel(h) {
+  const kv = rows => `<dl class="kv">${rows.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  const ja = (v, an, aus) => (v == null ? "—" : v ? an : `<span style="color:var(--warn)">${aus}</span>`);
+
+  if (h.type === "adguard" && (h.dnsQueries != null || h.protection != null)) {
+    return `<div class="panel">
+      <div class="panel-head"><h3>DNS-Filter</h3><span class="hint">aus /control/status und /control/stats</span></div>
+      <div class="panel-body">${kv([
+        ["Anfragen", h.dnsQueries != null ? `<span class="mono">${esc(String(h.dnsQueries))}</span>${h.statsFenster ? ` / ${esc(h.statsFenster)}` : ""}` : "—"],
+        ["Geblockt", h.dnsBlocked != null ? `<span class="mono">${esc(String(h.dnsBlocked))}</span>${h.blockRate != null ? ` (${h.blockRate} %)` : ""}` : "—"],
+        ["Ø Bearbeitung", h.avgMs != null ? `<span class="mono">${h.avgMs} ms</span>` : "—"],
+        ["DNS-Dienst", ja(h.dnsRunning, "läuft", "steht")],
+        ["Schutz", ja(h.protection, "an", "abgeschaltet")],
+        ["Filterung", ja(h.filtering, "an", "abgeschaltet")],
+        ["Filterlisten", h.filters != null ? `${h.filtersAktiv ?? "?"} von ${h.filters} aktiv${h.filterRules ? ` · ${h.filterRules} Regeln` : ""}` : "—"],
+        ["Älteste Liste", h.filterStand ? esc(fmtWhen(h.filterStand)) : "—"],
+        ["Upstreams", nz(h.upstreams)]
+      ])}</div>
+      <div class="panel-note">Eine Zahl für Upstream-Fehler führt die AdGuard-API nicht — weder im Zustand noch in
+        der Statistik. Sie steht deshalb nirgends, statt geschätzt zu werden.</div>
+    </div>`;
+  }
+
+  if (h.type === "portainer" && (h.endpoints != null || h.containers != null)) {
+    const umg = h.umgebungen || [];
+    const probleme = h.probleme || [];
+    return `<div class="panel">
+      <div class="panel-head"><h3>Container</h3><span class="hint">aus der Momentaufnahme von Portainer</span></div>
+      <div class="panel-body">${kv([
+        ["Umgebungen", h.endpoints != null ? `${h.endpoints - (h.endpointsDown || 0)} von ${h.endpoints} erreichbar` : "—"],
+        ["Stacks", h.stacks != null ? `${h.stacks}${h.stacksInaktiv ? ` · ${h.stacksInaktiv} angehalten` : ""}` : "—"],
+        ["Container", h.containers != null ? `${h.running} laufend, ${h.stopped} gestoppt` : "—"],
+        ["Unhealthy", nz(h.unhealthy)],
+        ["Neustartschleife", h.restarting == null ? "— nicht gelesen" : String(h.restarting)],
+        ["Exit 137 (OOM)", h.oom == null ? "— nicht gelesen" : String(h.oom)]
+      ])}</div>
+      ${umg.length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th style="width:34px"></th><th>Umgebung</th><th>Docker</th><th>Container</th><th>Unhealthy</th><th>Stand</th></tr></thead><tbody>
+        ${umg.map(u => `<tr data-sev="${u.erreichbar ? "ok" : "warn"}">
+          <td class="sev">${dot(u.erreichbar ? "ok" : "warn")}</td>
+          <td class="mono">${esc(u.name)}</td>
+          <td class="mono faint">${esc(nz(u.docker))}</td>
+          <td class="mono">${u.running == null ? "—" : `${u.running} / ${u.running + u.stopped}`}</td>
+          <td class="mono">${nz(u.unhealthy)}</td>
+          <td class="faint">${esc(fmtWhen(u.stand) || "—")}</td></tr>`).join("")}
+        </tbody></table></div>` : ""}
+      ${probleme.length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th>Container</th><th>Umgebung</th><th>Zustand</th><th>Befund</th></tr></thead><tbody>
+        ${probleme.map(p => `<tr data-sev="warn">
+          <td class="mono">${esc(p.name)}</td><td class="faint">${esc(p.umgebung)}</td>
+          <td class="mono faint">${esc(p.status || p.zustand)}</td><td>${esc(p.grund)}</td></tr>`).join("")}
+        </tbody></table></div>` : ""}
+      <div class="panel-note">Die Zahlen stammen aus der Momentaufnahme, die Portainer in eigenem Takt zieht —
+        die Spalte „Stand" sagt, wie alt sie ist. Einen Neustartzähler führt die Containerliste nicht; gemeldet
+        wird, wer gerade neu startet, wer unhealthy ist und wer mit 137 an der Speichergrenze ausgestiegen ist.</div>
+    </div>`;
+  }
+  return "";
 }
 
 function speicherBlock(h) {
@@ -2902,8 +3039,8 @@ const HOST_TYPES = [
   ["pve", "Proxmox VE", 8006, true], ["pbs", "Proxmox Backup Server", 8007, true],
   ["pmg", "Proxmox Mail Gateway", 8006, true], ["opnsense", "OPNsense", 443, true],
   ["pfsense", "pfSense", 443, false], ["truenas", "TrueNAS SCALE", 443, false],
-  ["mailcow", "Mailcow", 443, false], ["adguard", "AdGuard Home", 443, false],
-  ["portainer", "Portainer", 9443, false], ["hass", "Home Assistant", 8123, false],
+  ["mailcow", "Mailcow", 443, false], ["adguard", "AdGuard Home", 443, true],
+  ["portainer", "Portainer", 9443, true], ["hass", "Home Assistant", 8123, false],
   ["other", "Sonstiges", 443, false]
 ];
 const typeLabel = t => (HOST_TYPES.find(x => x[0] === t) || [, t])[1];
@@ -2914,6 +3051,29 @@ const typeHasApi = t => !!(HOST_TYPES.find(x => x[0] === t) || [])[3];
    Schlüsselpaar. Ein gemeinsames Formular für beides führte nur dazu, dass
    man Felder ausfüllt, die niemand liest. */
 function zugangsFelder(type, cred, getippt) {
+  /* AdGuard kennt keinen eigenen Nur-Lese-Zugang: es sind dieselben Daten,
+     mit denen man sich an der Oberfläche anmeldet. Der Leitstand ruft
+     ausschließlich lesende Endpunkte auf. */
+  if (type === "adguard") return `
+    <div class="admin-grid">
+      ${inpc("user", "Benutzer", cred, "wie an der AdGuard-Oberfläche", getippt)}
+      ${inpc("password", "Passwort", cred, cred.password ? "hinterlegt — leer lassen, um es zu behalten" : "dasselbe wie an der Oberfläche", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0">Gelesen werden <span class="mono">/control/status</span>,
+    <span class="mono">/control/stats</span> und die Filterlisten — Anfragen, Blockanteil, mittlere Bearbeitungszeit
+    und vor allem, <b>ob der Schutz überhaupt an ist</b>. Liegt die Oberfläche hinter einem Reverse Proxy unter einem
+    Unterpfad, gehört dieser mit in die Adresse (<span class="mono">https://proxy/adguard</span>).</p>`;
+
+  if (type === "portainer") return `
+    <div class="admin-grid">
+      ${inpc("token", "API-Token", cred, cred.token ? "hinterlegt — leer lassen, um ihn zu behalten" : "aus „My account“ → „Access tokens“", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0">In Portainer oben rechts unter
+    <span class="mono">My account → Access tokens</span> erzeugen; er ist nur beim Anlegen zu sehen. Dem Benutzer je
+    Umgebung die Rolle <span class="mono">read-only</span> geben (<span class="mono">Environments → Access</span>) —
+    ohne sie liefert Portainer eine <b>leere</b> Liste statt einer Fehlermeldung, und der Leitstand sähe null Container,
+    wo Dutzende laufen.</p>`;
+
   if (type === "opnsense") return `
     <div class="admin-grid">
       ${inpc("key", "API-Schlüssel", cred, "der lange Wert aus der Schlüsseldatei", getippt)}
@@ -3000,7 +3160,7 @@ function adminHosts() {
         <td class="mono faint">${esc(h.ip || h.url || "—")}</td>
         <td class="mono faint" style="font-size:11px">${(h.checks || []).map(c => c.kind + (c.port ? "/" + c.port : "")).join(" · ") || "—"}</td>
         <td>${!typeHasApi(h.type) ? '<span class="faint">—</span>'
-            : (state.credentials && state.credentials[h.id]) ? chip("ok", "Token") : chip("warn", "fehlt")}</td>
+            : (state.credentials && state.credentials[h.id]) ? chip("ok", "hinterlegt") : chip("warn", "fehlt")}</td>
         <td class="right">
           <button class="btn btn--sm" data-action="admin-edit" data-kind="hosts" data-id="${esc(h.id)}">Bearbeiten</button>
           <button class="btn btn--sm" data-action="admin-delete" data-kind="hosts" data-id="${esc(h.id)}">Löschen</button>
@@ -3254,13 +3414,20 @@ function verlaufNote() {
    eingegebene Geheimnis weg, und Speichern legt stillschweigend nichts an.
    Gespeicherte Geheimnisse kommen nur maskiert zurück und werden deshalb
    nie in das Feld zurückgeschrieben. */
+/* Welche Zugangsfelder Geheimnisse sind — dieselbe Liste wie im Dienst
+   (server/src/secrets.js). Sie kommen nur maskiert zurück; stünde die
+   Maske im Feld, schriebe ein Speichern die Punkte als neues Geheimnis
+   zurück. Also bleibt das Feld leer, und leer heißt „unverändert". */
+const GEHEIMFELDER = new Set(["secret", "password", "token", "apiKey"]);
+
 function inpc(key, label, cred, ph, typed) {
+  const geheim = GEHEIMFELDER.has(key);
   const wert = typed && typed[key] != null && typed[key] !== ""
     ? typed[key]
-    : (key === "secret" ? "" : (cred[key] ?? ""));
+    : (geheim ? "" : (cred[key] ?? ""));
   return `<label class="admin-field">
     <span class="admin-label">${esc(label)}</span>
-    <input class="admin-input" data-cred="${key}" type="${key === "secret" ? "password" : "text"}"
+    <input class="admin-input" data-cred="${key}" type="${geheim ? "password" : "text"}"
       value="${esc(wert)}" placeholder="${esc(ph || "")}" autocomplete="off">
   </label>`;
 }

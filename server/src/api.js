@@ -168,6 +168,19 @@ function hostView(h, st = {}) {
     thrIn: x.thrIn ?? null, thrOut: x.thrOut ?? null, thrQuelle: x.thrQuelle || null,
     interfaces: x.interfaces || null,
     wgPeers: x.wgPeers ?? null, wgIfaces: x.wgIfaces ?? null, wgStill: x.wgStill ?? null,
+    /* AdGuard Home */
+    dnsQueries: x.dnsQueries ?? null, dnsBlocked: x.dnsBlocked ?? null, blockRate: x.blockRate ?? null,
+    avgMs: x.avgMs ?? null, statsFenster: x.statsFenster || null,
+    protection: x.protection ?? null, dnsRunning: x.dnsRunning ?? null, filtering: x.filtering ?? null,
+    filters: x.filters ?? null, filtersAktiv: x.filtersAktiv ?? null, filterRules: x.filterRules ?? null,
+    filterStand: x.filterStand || null, upstreams: x.upstreams ?? null,
+    /* Portainer */
+    endpoints: x.endpoints ?? null, endpointsDown: x.endpointsDown ?? null,
+    stacks: x.stacks ?? null, stacksInaktiv: x.stacksInaktiv ?? null,
+    containers: x.containers ?? null, unhealthy: x.unhealthy ?? null,
+    restarting: x.restarting ?? null, oom: x.oom ?? null,
+    umgebungen: x.umgebungen || null, probleme: x.probleme || null,
+    containerNote: x.containerNote || null,
     collectorError: x.error || null
   };
 }
@@ -326,7 +339,7 @@ function integrationViews(inv, secrets, engine) {
       name: t.label,
       type: e.type,
       method: !supported ? "nur Erreichbarkeit (Prüfung ohne Zugang)"
-        : e.withCred ? "API-Token" : "API-Token — noch nicht hinterlegt",
+        : e.withCred ? (t.zugang || "API-Token") : `${t.zugang || "API-Token"} — noch nicht hinterlegt`,
       targets: e.targets,
       every: `${inv.settings.interval} s`,
       status: e.errors ? "warn" : (supported && !e.withCred) ? "idle" : "ok",

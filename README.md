@@ -150,13 +150,15 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
 | **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, Durchsatz je Schnittstelle, WireGuard-Peers mit Handshake-Alter |
+| **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** |
+| **Portainer** | Umgebungen erreichbar/gesamt, Stacks, Container laufend/gestoppt, `unhealthy`, Neustartschleifen und Exit 137 (Speichergrenze) — mit dem **Namen** des Containers, der klemmt |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
 | **Startseite** | Kacheln tragen die Ampel des verknüpften Systems; ein Lesezeichen ohne System kann auf Wunsch selbst geprüft werden — ein GET je Minute, Ampel ohne Störung |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
-Alles andere (pfSense, TrueNAS, AdGuard, Portainer, Mailcow, Home
-Assistant) wird bisher nur auf Erreichbarkeit geprüft. Die Oberfläche zeigt für
+Alles andere (pfSense, TrueNAS, Mailcow, Home Assistant) wird bisher nur auf
+Erreichbarkeit geprüft. Die Oberfläche zeigt für
 noch unbekannte Kennzahlen einen Strich — **nie einen erfundenen Wert.**
 
 **Was als Nächstes ansteht, steht in [TODO.md](TODO.md)** — je Punkt mit Grund,
@@ -360,6 +362,8 @@ server/
   src/verlauf.js          Zeitreihen auf der Platte: verdichten, schreiben, lesen
   src/collectors/proxmox.js   VE, Backup Server, Mail Gateway
   src/collectors/opnsense.js  Fassung, Speicher, Platte, Durchsatz, WireGuard
+  src/collectors/adguard.js   Anfragen, Blockanteil, Bearbeitungszeit, Filterlisten
+  src/collectors/portainer.js Umgebungen, Stacks, Container — und wer klemmt
   src/collectors/index.js     alle Sammler an einer Stelle
   src/secrets.js          Zugangsdaten, 0600, nach außen nur maskiert
   src/api.js              Zustand in der Form, die die Oberfläche erwartet
@@ -385,9 +389,12 @@ cd server && npm test
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
-nachgebauten Proxmox-Endpunkt (`test/fake-proxmox.js`), der auch 401 und 403
-richtig beantwortet. Dadurch lässt sich der Proxmox-Weg vollständig prüfen,
-ohne einen echten Cluster anzufassen.
+nachgebaute Endpunkte für Proxmox, AdGuard Home und Portainer
+(`test/fake-proxmox.js`, `test/fake-dienste.js`), die auch 401 und 403 richtig
+beantworten. Dadurch lässt sich jeder Sammler vollständig prüfen, ohne ein
+echtes Gerät anzufassen — samt der Eigenheiten, an denen es im Betrieb hängt:
+Portainer filtert Listen nach Rechten statt abzulehnen, AdGuard führt seine
+Statistik über ein einstellbares Fenster.
 
 `test/ui.test.js` zeichnet die Oberfläche ohne Browser: die Ansichten sind reine
 Funktionen von Zustand nach HTML, also lassen sie sich mit einer echten

@@ -18,6 +18,24 @@ import { runCheck } from "./probe.js";
 import { authHeader, baseUrl, RECHTEHINWEIS, TRENNER } from "./collectors/proxmox.js";
 import { requestJson } from "./http.js";
 import * as Opn from "./collectors/opnsense.js";
+import * as Adg from "./collectors/adguard.js";
+import * as Ptn from "./collectors/portainer.js";
+
+/* Sammler, die sich gleich verhalten: eine Kopfzeile zur Anmeldung, feste
+   Pfade, JSON zurück. Für die gibt es einen gemeinsamen Weg (diagnoseEinfach)
+   statt je einer Abschrift. */
+const EINFACH = {
+  adguard: {
+    modul: Adg, name: "AdGuard Home",
+    fehlt: "Es ist kein Zugang hinterlegt. AdGuard meldet mit Benutzer und Passwort an — dieselben, mit denen "
+      + "man sich an der Oberfläche anmeldet. Einzutragen unter Verwaltung → System bearbeiten."
+  },
+  portainer: {
+    modul: Ptn, name: "Portainer",
+    fehlt: "Es ist kein API-Token hinterlegt. In Portainer oben rechts unter „My account“ → „Access tokens“ "
+      + "einen erzeugen und unter Verwaltung → System bearbeiten eintragen."
+  }
+};
 
 /* Welche Aufrufe der jeweilige Sammler tatsächlich braucht. Die Reihenfolge
    ist die Reihenfolge der Abhängigkeit: was oben scheitert, macht alles
@@ -56,6 +74,7 @@ export async function diagnoseHost(host, cred, settings = {}) {
   }
 
   if (host.type === "opnsense") return await diagnoseOpnsense(host, cred, bericht);
+  if (EINFACH[host.type]) return await diagnoseEinfach(host, cred, bericht, EINFACH[host.type]);
 
   const kollektor = PFADE[host.type];
   if (!kollektor) {
@@ -153,6 +172,105 @@ async function diagnoseOpnsense(host, cred, bericht) {
       : " WireGuard antwortet nicht; das ist verschmerzbar, solange durch den Tunnel gemessen wird.")
     + " Die Feldnamen unten sind die Grundlage für den Sammler.";
   return bericht;
+}
+
+/* ---------- AdGuard Home und Portainer ----------
+   Beide sprechen dasselbe Muster: eine Kopfzeile zur Anmeldung, feste
+   Pfade, JSON zurück. Der Ablauf ist derselbe wie oben — jeder Aufruf
+   einzeln, mit dem, was zurückkam, und am Ende ein Satz zum ersten
+   Schritt, der nicht durchkam.
+
+   Ein Pfad darf {umgebung} enthalten: das ersetzt die Diagnose durch die
+   Kennung der ersten erreichbaren Umgebung aus der Antwort davor
+   (Portainer). Eine fest eingetragene 1 wäre geraten — und bei einer
+   Portainer-Installation, in der die erste Umgebung gelöscht wurde,
+   schlicht falsch. */
+async function diagnoseEinfach(host, cred, bericht, { modul, name, fehlt }) {
+  bericht.ziel = modul.baseUrl(host);
+  const kopf = modul.authHeader(cred);
+  bericht.zugang = kopfForm(cred, kopf);
+  if (!kopf) { bericht.fazit = fehlt; return bericht; }
+
+  let umgebung = null;
+  for (const { pfad, alternativen = [], zweck, optional } of modul.PFADE) {
+    if (pfad.includes("{umgebung}") && umgebung == null) {
+      bericht.api.push({
+        pfad, zweck, optional: true, ok: false, status: null, ms: null,
+        fehler: "übersprungen — es ist keine erreichbare Umgebung bekannt", antwort: null, befund: null
+      });
+      continue;
+    }
+    const wege = [pfad, ...alternativen].map(p => p.replace("{umgebung}", String(umgebung)));
+    const r = modul.ersterTreffer
+      ? await modul.ersterTreffer(host, cred, wege, 8000)
+      : { ...(await modul.api(host, cred, wege[0], 8000)), pfad: wege[0] };
+
+    const eintrag = {
+      pfad: r.pfad || wege[0], zweck, optional: !!optional,
+      ok: !!r.ok, status: r.status ?? null, ms: r.ms ?? null,
+      fehler: r.ok ? null : r.error || "unbekannter Fehler",
+      antwort: r.ok ? null : kurzfassung(r.body),
+      befund: r.ok ? modul.befund(r.pfad || wege[0], r.data) : null,
+      felder: null
+    };
+    /* Verglichen wird mit dem eingesetzten Pfad, nicht mit der Vorlage:
+       sonst stünde bei jedem {umgebung} ein „antwortet unter …", das nur
+       die eigene Ersetzung zurückliest. */
+    if (r.ok && r.pfad && r.pfad !== wege[0]) eintrag.befund = `${eintrag.befund} (antwortet unter ${r.pfad})`;
+    bericht.api.push(eintrag);
+
+    /* Aus der Umgebungsliste die erste erreichbare merken. */
+    if (r.ok && pfad === "/api/endpoints" && Array.isArray(r.data))
+      umgebung = (r.data.find(e => e.Status === 1) || r.data[0])?.Id ?? null;
+
+    if (!r.ok && !optional) break;
+  }
+
+  const gescheitert = bericht.api.find(a => !a.ok && !a.optional);
+  if (gescheitert) {
+    const wo = `${gescheitert.pfad} (${gescheitert.fehler})`;
+    bericht.fazit = gescheitert.status === 401 || gescheitert.status === 403
+      ? `Die Anmeldung wird abgelehnt: ${wo}. ${modul.hintFor(gescheitert) || ""}`.trim()
+      : gescheitert.status === 404
+        ? `Erreicht, aber der Endpunkt fehlt: ${wo}. ${modul.hintFor(gescheitert) || ""}`.trim()
+        : `Der Abruf bricht bei ${wo} ab.`;
+    return bericht;
+  }
+
+  /* Eine leere Liste ist bei Portainer kein Erfolg: sie wird nach Rechten
+     gefiltert, statt abgelehnt zu werden — genau wie bei Proxmox. */
+  const leer = bericht.api.find(a => a.ok && /nach Rechten/.test(a.befund || ""));
+  if (leer) {
+    bericht.fazit = `Angemeldet, aber ${leer.befund}. ${modul.hintFor({ status: 403 }) || ""}`.trim();
+    return bericht;
+  }
+
+  const abgelehnt = bericht.api.find(a => !a.ok && (a.status === 401 || a.status === 403));
+  bericht.ok = !abgelehnt;
+  bericht.fazit = abgelehnt
+    ? `Die Kennzahlen kommen an, aber ${abgelehnt.pfad} wird abgelehnt (${abgelehnt.status}). `
+      + `${modul.hintFor(abgelehnt) || ""}`.trim()
+    : `Alle nötigen Aufrufe kommen durch — ${name} liefert, was der Sammler braucht.`;
+  return bericht;
+}
+
+/* Die Form der Anmeldung, ohne das Geheimnis: genug, um einen Tippfehler
+   zu sehen, zu wenig, um damit etwas anzufangen. Basic ist nur Base64 —
+   die Kopfzeile selbst darf hier nirgends auftauchen. */
+function kopfForm(cred, kopf) {
+  if (!cred) return { vorhanden: false, hinweis: "kein Zugang hinterlegt" };
+  if (!kopf) return { vorhanden: false, hinweis: "Zugang unvollständig — Benutzer, Passwort oder Token fehlt" };
+  if (kopf["X-API-Key"]) {
+    const t = String(kopf["X-API-Key"]);
+    return { vorhanden: true, form: `X-API-Key: ${t.slice(0, 4)}…•••••• (${t.length} Zeichen)`, hinweis: null };
+  }
+  const benutzer = cred.user || cred.username || null;
+  return {
+    vorhanden: true,
+    form: `Basic ${benutzer ? String(benutzer) : "?"}:••••••••`,
+    benutzer,
+    hinweis: null
+  };
 }
 
 /* Die Gestalt einer Antwort: welche Felder, welcher Art, ungefähr welcher
