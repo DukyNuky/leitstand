@@ -71,13 +71,25 @@ export function createServer(opts = {}) {
   const angelegt = Inv.ensure(invFile, opts.seed || process.env.LEITSTAND_SEED || path.join(ROOT, "inventory.yaml"));
   if (angelegt.created) console.log(`Bestand angelegt: ${invFile}${angelegt.seeded ? " (aus Vorlage)" : " (leeres Gerüst)"}`);
 
+  /* Wandert bei jedem Zustand mit in die Oberfläche. Ein leerer Bestand ist
+     zweideutig: entweder ist wirklich noch nichts angelegt, oder der Dienst
+     liest eine andere Ablage als beim letzten Mal — nach einem Redeploy mit
+     anderem Volume etwa. Beides sieht gleich aus, und nur der Dienst kennt
+     den Unterschied. Also sagt er ihn. */
+  const bestandInfo = () => ({
+    datei: invFile,
+    angelegt: angelegt.created,
+    vorlage: !!angelegt.seeded,
+    sicherung: fs.existsSync(Inv.backupPath(invFile))
+  });
+
   let inv = Inv.load(invFile);
   const secrets = new Secrets(secFile);
   const engine = new Engine(inv, { statePath: stateFile, collectors: makeCollectors(secrets) });
 
   const clients = new Set();
   engine.onChange(() => {
-    const payload = `data: ${JSON.stringify(buildState(engine, secrets))}\n\n`;
+    const payload = `data: ${JSON.stringify(buildState(engine, secrets, bestandInfo()))}\n\n`;
     for (const res of clients) { try { res.write(payload); } catch {} }
   });
 
@@ -113,7 +125,7 @@ export function createServer(opts = {}) {
   async function api(req, res, p, url) {
     const m = req.method;
 
-    if (p === "/api/state" && m === "GET") return json(res, 200, buildState(engine, secrets));
+    if (p === "/api/state" && m === "GET") return json(res, 200, buildState(engine, secrets, bestandInfo()));
 
     /* Klein und ohne Messwerte — zum Nachsehen per curl und für den
        Abgleich nach einem Redeploy, ohne den ganzen Zustand zu holen. */
@@ -122,7 +134,7 @@ export function createServer(opts = {}) {
 
     if (p === "/api/stream" && m === "GET") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-      res.write(`data: ${JSON.stringify(buildState(engine, secrets))}\n\n`);
+      res.write(`data: ${JSON.stringify(buildState(engine, secrets, bestandInfo()))}\n\n`);
       clients.add(res);
       req.on("close", () => clients.delete(res));
       return;

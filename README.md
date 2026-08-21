@@ -85,6 +85,21 @@ Geräte gezogen. Im Volume liegen danach:
 /data/incidents.json       Störungen und Quittierungen, überlebt Neustarts
 ```
 
+**Dieses Volume ist der ganze Bestand.** Hängt nach einem Redeploy ein anderes
+auf `/data` — anderer Stapelname, geänderter `LEITSTAND_DATA`, versehentlich
+entferntes Volume —, dann legt der Dienst dort einen neuen Bestand an und
+startet, als wäre er frisch aufgesetzt. Damit das nicht wie ein Datenverlust
+aussieht, ohne einer zu sein (und umgekehrt), steht in der Oberfläche über
+einem leeren Bestand, **aus welcher Datei** gelesen wird und ob der Dienst sie
+**selbst angelegt** hat. Steht dort die Warnung, ist der alte Bestand nicht weg
+— er liegt im alten Volume:
+
+```bash
+docker inspect leitstand --format '{{json .Mounts}}'   # was hängt auf /data?
+docker volume ls | grep -i leitstand                   # gibt es zwei?
+docker exec leitstand ls -la /data                     # und was liegt drin?
+```
+
 **Das Abbild ist privat**, solange es das Repository ist. Zwei Wege:
 
 - *Bequem:* auf GitHub unter **Packages → leitstand → Package settings →
@@ -334,7 +349,7 @@ server/
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   191 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   193 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -348,7 +363,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 191 Tests
+cd server && npm test     # 193 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen

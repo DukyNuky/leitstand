@@ -397,13 +397,34 @@ function ausbaupanel(titel, stufe, erklärung, inhalt) {
   </div>`;
 }
 
+/* Ein leerer Bestand ist zweideutig: entweder ist wirklich noch nichts
+   angelegt — oder der Dienst liest eine andere Ablage als beim letzten Mal.
+   Nach einem Redeploy mit anderem Volume sieht beides gleich aus, und die
+   Frage „wo sind meine Systeme hin?" wäre von der Oberfläche aus nicht zu
+   beantworten. Deshalb steht hier, aus welcher Datei gelesen wird und ob
+   der Dienst sie beim Start selbst angelegt hat. */
+function bestandHinweis() {
+  const b = state.runtime && state.runtime.bestand;
+  if (!b) return "";
+  const datei = `<span class="mono">${esc(b.datei)}</span>`;
+  if (!b.angelegt)
+    return `<p class="muted" style="margin:0 0 12px;font-size:12.5px">Gelesen wird ${datei}.</p>`;
+  return `<div class="row" style="gap:8px;align-items:flex-start;margin:0 0 14px">${dot("warn")}
+    <p class="muted" style="margin:0;font-size:12.5px;max-width:64ch">Diese Bestandsdatei hat der Dienst beim Start
+      <b>selbst angelegt</b>${b.vorlage ? " (aus der mitgelieferten Vorlage)" : " (leeres Gerüst)"}: ${datei}.
+      War dort vorher etwas eingetragen, liest er heute eine andere Ablage — im Container hängt dann ein anderes
+      Volume auf <span class="mono">/data</span>, und der alte Bestand liegt noch im alten.${
+        b.sicherung ? ` Daneben liegt <span class="mono">inventory.yaml.bak</span>, der Stand vor der letzten Änderung.` : ""}</p></div>`;
+}
+
 function firstStepsBanner() {
   return `<div class="panel panel--hello">
     <div class="panel-body row row-wrap" style="gap:14px">
       <div style="min-width:220px;flex:1">
         <div class="sec-title">Noch kein System angelegt</div>
-        <p class="muted" style="margin:0;font-size:13px">Der Dienst läuft und prüft — er weiß nur noch nicht, was.
+        <p class="muted" style="margin:0 0 10px;font-size:13px">Der Dienst läuft und prüft — er weiß nur noch nicht, was.
         Systeme, Standorte, Tunnel und die Startseite werden unter <b>Verwaltung</b> gepflegt.</p>
+        ${bestandHinweis()}
       </div>
       <button class="btn btn--primary" data-action="view" data-view="verwaltung">Zur Verwaltung</button>
     </div>
@@ -417,6 +438,7 @@ function onboarding() {
       <p class="muted" style="margin:0 0 14px;font-size:13.5px;max-width:64ch">
         Der Bestand ist leer — kein Standort, kein System. Der Leitstand erfindet an dieser Stelle
         nichts, deshalb bleibt alles bis zum ersten Eintrag leer.</p>
+      ${bestandHinweis()}
       <ol class="muted" style="margin:0 0 16px;padding-left:20px;line-height:2;font-size:13px">
         <li><b>Standort</b> anlegen — ein Ort, an dem Geräte stehen</li>
         <li><b>System</b> anlegen — Kennung, Typ und IP genügen; die Prüfungen leiten sich daraus ab</li>

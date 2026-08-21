@@ -11,7 +11,7 @@ import { buildInfo } from "./version.js";
 const uiStatus = s => (s === "unknown" ? "idle" : s);
 const STARTED = new Date().toISOString();
 
-export function buildState(engine, secrets) {
+export function buildState(engine, secrets, bestand = null) {
   const inv = engine.inv;
   const hosts = inv.hosts.map(h => hostView(h, engine.hosts.get(h.id)));
   const byId = new Map(hosts.map(h => [h.id, h]));
@@ -37,7 +37,13 @@ export function buildState(engine, secrets) {
         /* Welcher Stand hier läuft. Die Oberfläche vergleicht das bei jedem
            Zustand mit dem, was sie beim Laden bekommen hat — wird nach einem
            Redeploy neu ausgeliefert, merkt sie es und bietet Neuladen an. */
-        build: buildInfo()
+        build: buildInfo(),
+        /* Woher der Bestand kommt und ob der Dienst ihn beim Start selbst
+           angelegt hat. Ohne diese Angabe sieht ein frisch angelegter,
+           leerer Bestand genauso aus wie ein absichtlich leerer — und die
+           Frage „wo sind meine Systeme hin?" ist von der Oberfläche aus
+           nicht zu beantworten. */
+        bestand
       },
       generated: new Date().toISOString()
     },

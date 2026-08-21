@@ -114,6 +114,14 @@ links:
    Ampeln umsetzen). Ohne Kopie schleppte ein Test seine Änderungen in den
    nächsten — der übelste Fehler in einer Testreihe, weil er von der
    Reihenfolge abhängt. */
+const LEER = `
+settings: { icmp: false, timeout: 1 }
+sites: [ { id: hq, name: Zuhause, primary: true } ]
+hosts: []
+tunnels: []
+links: []
+`;
+
 const zustaende = new Map();
 
 async function echterZustand(text = BESTAND) {
@@ -150,13 +158,7 @@ test("Jede Ansicht zeichnet aus einer echten Serverantwort", async () => {
 /* Der gefährlichste Fall ist der erste Start: kein Standort, kein System,
    keine Messung. Dann darf nichts gerechnet und nichts behauptet werden. */
 test("Leerer Bestand ergibt keine erfundenen Zahlen", async () => {
-  const leer = await echterZustand(`
-settings: { icmp: false, timeout: 1 }
-sites: [ { id: hq, name: Zuhause, primary: true } ]
-hosts: []
-tunnels: []
-links: []
-`);
+  const leer = await echterZustand(LEER);
   const { sandbox, ziele } = ladeUi();
   sandbox.window.LeitstandUI.applyLive(leer);
   const seiten = zeichneAlles(sandbox, ziele);
@@ -165,6 +167,33 @@ links: []
     assert.ok(!/NaN|undefined|Infinity/.test(html), `Ansicht ${name} rechnet mit Nichts`);
   }
   assert.match(seiten.lage, /Noch kein System angelegt|Willkommen/);
+});
+
+/* Der gefährlichste leere Bildschirm ist der, der harmlos aussieht: „noch
+   nichts angelegt" liest sich wie ein Anfang, kann aber heißen, dass der
+   Dienst eine andere Ablage liest als gestern. Dann muss die Datei dabeistehen. */
+test("Ein selbst angelegter Bestand sagt, aus welcher Datei er kommt", async () => {
+  const zustand = await echterZustand(LEER);
+  zustand.meta.runtime.bestand = { datei: "/data/inventory.yaml", angelegt: true, vorlage: false, sicherung: true };
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const seiten = zeichneAlles(sandbox, ziele);
+
+  for (const ansicht of ["lage", "compute"]) {
+    assert.match(seiten[ansicht], /selbst angelegt/, `${ansicht} verschweigt, woher der leere Bestand kommt`);
+    assert.match(seiten[ansicht], /\/data\/inventory\.yaml/, `${ansicht} nennt die Datei nicht`);
+    assert.match(seiten[ansicht], /inventory\.yaml\.bak/, `${ansicht} verschweigt die Sicherung`);
+  }
+
+  /* Lag die Datei schon da, ist der leere Bestand keine Überraschung —
+     dann steht sie nur da, ohne Warnung. */
+  const zweiter = await echterZustand(LEER);
+  zweiter.meta.runtime.bestand = { datei: "/data/inventory.yaml", angelegt: false, vorlage: false, sicherung: false };
+  const b = ladeUi();
+  b.sandbox.window.LeitstandUI.applyLive(zweiter);
+  const ohne = zeichneAlles(b.sandbox, b.ziele);
+  assert.ok(!/selbst angelegt/.test(ohne.lage), "ohne Not gewarnt");
+  assert.match(ohne.lage, /Gelesen wird/);
 });
 
 test("Ohne Dienst zeigt die Oberfläche nichts an statt irgendetwas", () => {

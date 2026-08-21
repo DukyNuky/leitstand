@@ -56,6 +56,35 @@ test("Zustand kommt in der Form, die die Oberfläche erwartet", async () => {
   assert.equal(body.sites[0].short, "HQ", "Kürzel wird abgeleitet");
 });
 
+/* Ein leerer Bestand ist zweideutig: entweder ist wirklich noch nichts
+   angelegt, oder der Dienst liest eine andere Ablage als beim letzten Start
+   — nach einem Redeploy mit anderem Volume etwa. Von außen sieht beides
+   gleich aus; nur der Dienst kennt den Unterschied, also sagt er ihn. */
+test("Der Zustand nennt die Bestandsdatei und ob der Dienst sie selbst angelegt hat", async () => {
+  const { body } = await call("GET", "/api/state");
+  assert.equal(body.meta.runtime.bestand.datei, path.join(dir, "inventory.yaml"));
+  assert.equal(body.meta.runtime.bestand.angelegt, false, "diese Datei lag schon da");
+
+  const leer = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-leer-"));
+  const zweiter = createServer({
+    inventory: path.join(leer, "inventory.yaml"),
+    secrets: path.join(leer, "secrets.json"),
+    state: path.join(leer, "incidents.json"),
+    seed: path.join(leer, "gibt-es-nicht.yaml")
+  });
+  try {
+    await new Promise(r => zweiter.listen(0, "127.0.0.1", r));
+    const st = await (await fetch(`http://127.0.0.1:${zweiter.address().port}/api/state`)).json();
+    assert.equal(st.hosts.length, 0);
+    assert.equal(st.meta.runtime.bestand.angelegt, true, "der Dienst hat die Datei eben erst angelegt");
+    assert.equal(st.meta.runtime.bestand.vorlage, false, "ohne Vorlage bleibt das leere Gerüst");
+    assert.equal(st.meta.runtime.bestand.datei, path.join(leer, "inventory.yaml"));
+  } finally {
+    zweiter.engine.stop(); zweiter.close();
+    fs.rmSync(leer, { recursive: true, force: true });
+  }
+});
+
 test("Erfundene Bereiche bleiben leer statt gefüllt", async () => {
   const { body } = await call("GET", "/api/state");
   for (const k of ["peers", "haproxy", "backups", "mails"]) assert.deepEqual(body[k], []);
