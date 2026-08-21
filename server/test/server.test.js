@@ -85,6 +85,58 @@ test("Der Zustand nennt die Bestandsdatei und ob der Dienst sie selbst angelegt 
   }
 });
 
+/* Zurückholen ist der einzige Weg hier, der einen bestehenden Bestand
+   überschreibt — und der einzige, den man im Ernstfall braucht. Er läuft
+   deshalb gegen einen eigenen Dienst: dieser Test darf den Bestand der
+   anderen nicht unter den Füßen wegziehen. */
+test("Frühere Stände lassen sich ansehen und zurückholen", async () => {
+  const eigen = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-stand-"));
+  const datei = path.join(eigen, "inventory.yaml");
+  fs.writeFileSync(datei, START);
+  const s2 = createServer({ inventory: datei, secrets: path.join(eigen, "secrets.json"), state: path.join(eigen, "incidents.json") });
+  await new Promise(r => s2.listen(0, "127.0.0.1", r));
+  const an = `http://127.0.0.1:${s2.address().port}`;
+  const ruf = async (m, pfad, body) => {
+    const res = await fetch(an + pfad, { method: m, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: await res.json() };
+  };
+
+  try {
+    /* Der Start allein legt schon einen Auszug an — sonst hätte ein Bestand,
+       der sich monatelang nicht ändert, nie einen. */
+    let { body: st } = await ruf("GET", "/api/admin/staende");
+    assert.equal(st.archiv.length, 1, "ein Auszug vom Start");
+    assert.equal(st.datei.hosts, 1);
+    assert.equal(st.sicherung, null, "noch nichts geschrieben, also noch keine Sicherung");
+
+    await ruf("POST", "/api/admin/hosts", { id: "neu", type: "other", site: "hq", ip: "127.0.0.1" });
+    ({ body: st } = await ruf("GET", "/api/admin/staende"));
+    assert.equal(st.datei.hosts, 2, "der neue Stand");
+    assert.equal(st.sicherung.hosts, 1, "und daneben der Stand von vorher");
+
+    const zurueck = await ruf("POST", "/api/admin/restore", { quelle: ".bak" });
+    assert.equal(zurueck.status, 200);
+    assert.equal(zurueck.body.hosts, 1);
+    const { body: jetzt } = await ruf("GET", "/api/state");
+    assert.equal(jetzt.hosts.length, 1, "der Dienst prüft danach den zurückgeholten Bestand");
+    assert.ok(!jetzt.hosts.some(h => h.id === "neu"));
+
+    /* Und der Griff daneben bleibt umkehrbar: die Sicherung trägt jetzt den
+       Stand, der eben ersetzt wurde. */
+    ({ body: st } = await ruf("GET", "/api/admin/staende"));
+    assert.equal(st.sicherung.hosts, 2);
+
+    /* Zurückgeholt wird nur, was ausdrücklich erlaubt ist. */
+    for (const quelle of ["../../etc/passwd", "/etc/passwd", "inventory.yaml", "beliebig"]) {
+      const nein = await ruf("POST", "/api/admin/restore", { quelle });
+      assert.equal(nein.status, 400, `„${quelle}" hätte abgewiesen werden müssen`);
+    }
+  } finally {
+    s2.engine.stop(); s2.close();
+    fs.rmSync(eigen, { recursive: true, force: true });
+  }
+});
+
 test("Erfundene Bereiche bleiben leer statt gefüllt", async () => {
   const { body } = await call("GET", "/api/state");
   for (const k of ["peers", "haproxy", "backups", "mails"]) assert.deepEqual(body[k], []);

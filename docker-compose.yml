@@ -28,9 +28,10 @@ services:
 
     environment:
       TZ: ${TZ:-Europe/Berlin}
+      LEITSTAND_ARCHIV: ${LEITSTAND_ARCHIV:-14}
 
     volumes:
-      # Enthält inventory.yaml, secrets.json und incidents.json.
+      # Enthält inventory.yaml, secrets.json, incidents.json und archiv/.
       # Beim ersten Start wird der Bestand automatisch angelegt.
       # Ein Wert mit Schrägstrich wird als Pfad auf dem Wirt eingehängt,
       # alles andere als benanntes Volume.

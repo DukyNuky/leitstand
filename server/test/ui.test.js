@@ -247,12 +247,33 @@ test("Inspector, Verwaltung und Formulare zeichnen für jeden Fall", async () =>
   }
   ui.state.inspector = null;
 
+  /* Frühere Stände kommen aus einem eigenen Abruf; hier wird eingesetzt,
+     was der Dienst liefert — samt eines unlesbaren Standes, denn genau der
+     darf nicht als Zahl daherkommen. */
+  ui.state.staende = {
+    datei: { datei: "/data/inventory.yaml", name: "inventory.yaml", zeit: "2026-08-21T10:00:00Z", lesbar: true, sites: 2, hosts: 3, tunnels: 1 },
+    sicherung: { datei: "/data/inventory.yaml.bak", name: "inventory.yaml.bak", zeit: "2026-08-21T09:00:00Z", lesbar: true, sites: 2, hosts: 4, tunnels: 1 },
+    archiv: [
+      { datei: "/data/archiv/inventory-2026-08-21.yaml", name: "inventory-2026-08-21.yaml", zeit: "2026-08-21T08:00:00Z", lesbar: true, sites: 2, hosts: 4, tunnels: 1 },
+      { datei: "/data/archiv/inventory-2026-08-14.yaml", name: "inventory-2026-08-14.yaml", zeit: "2026-08-14T08:00:00Z", lesbar: false, fehler: "YAML lässt sich nicht lesen" }
+    ],
+    verzeichnis: "/data/archiv", behalten: 14
+  };
+
   ui.state.view = "verwaltung";
-  for (const tab of ["hosts", "sites", "tunnels", "links", "settings"]) {
+  for (const tab of ["hosts", "sites", "tunnels", "links", "settings", "staende"]) {
     ui.state.adminTab = tab;
     ui.render();
     sauber(ziele.get("#wrap").innerHTML, `Verwaltung/${tab}`);
   }
+  /* Der zuletzt gezeichnete Reiter ist „staende": ein unlesbarer Stand wird
+     benannt statt angeboten, ein lesbarer lässt sich zurückholen. */
+  const staende = ziele.get("#wrap").innerHTML;
+  assert.match(staende, /data-action="admin-restore" data-quelle="\.bak"/);
+  assert.match(staende, /data-quelle="inventory-2026-08-21\.yaml"/);
+  assert.match(staende, /nicht lesbar/);
+  assert.ok(!/data-quelle="inventory-2026-08-14\.yaml"/.test(staende), "ein unlesbarer Stand darf nicht anklickbar sein");
+  ui.state.adminTab = "hosts";
 
   for (const [kind, mode, id] of [["hosts", "new", null], ["hosts", "edit", "web"],
                                   ["sites", "new", null], ["sites", "edit", "hq"],

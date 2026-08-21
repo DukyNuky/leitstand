@@ -57,6 +57,7 @@ Alle Stellschrauben des Stacks stehen in [`.env`](.env) neben der Compose-Datei:
 | `LEITSTAND_PORT` | `8080` | Port auf dem Docker-Wirt |
 | `LEITSTAND_BIND` | leer (alle Adressen) | z. B. `127.0.0.1`, wenn ein Reverse Proxy davor liegt |
 | `LEITSTAND_DATA` | `leitstand-data` | benanntes Volume — oder ein Pfad wie `/srv/leitstand/data` |
+| `LEITSTAND_ARCHIV` | `14` | wie viele Tagesauszüge des Bestands aufgehoben werden; `0` schaltet sie ab |
 | `TZ` | `Europe/Berlin` | Zeitzone für Zeitstempel |
 | `LEITSTAND_RESTART` | `unless-stopped` | Neustartverhalten |
 
@@ -83,7 +84,15 @@ Geräte gezogen. Im Volume liegen danach:
 /data/inventory.yaml       Bestand   (Sicherung als inventory.yaml.bak)
 /data/secrets.json         Zugangsdaten, Rechte 0600
 /data/incidents.json       Störungen und Quittierungen, überlebt Neustarts
+/data/archiv/              ein Auszug des Bestands je Tag, an dem er sich geändert hat
 ```
+
+Die Auszüge legt der Dienst selbst an — beim Start und nach jeder Änderung,
+höchstens einen je Tag. Wie viele bleiben, sagt `LEITSTAND_ARCHIV` (Vorgabe 14,
+`0` schaltet das Archiv ab). Ansehen und zurückholen lässt sich das alles unter
+*Verwaltung → Sicherung*: dort steht zu jedem Stand, **was darin steht**, bevor
+man ihn einsetzt — und Zurückholen legt den bisherigen Stand zugleich als
+`.bak` ab, sodass auch der Griff daneben umkehrbar bleibt.
 
 **Dieses Volume ist der ganze Bestand.** Hängt nach einem Redeploy ein anderes
 auf `/data` — anderer Stapelname, geänderter `LEITSTAND_DATA`, versehentlich
@@ -146,6 +155,9 @@ docker compose up -d          # aus der Wurzel des Repositorys
 Alles andere (pfSense, TrueNAS, AdGuard, Portainer, Mailcow, Home
 Assistant) wird bisher nur auf Erreichbarkeit geprüft. Die Oberfläche zeigt für
 noch unbekannte Kennzahlen einen Strich — **nie einen erfundenen Wert.**
+
+**Was als Nächstes ansteht, steht in [TODO.md](TODO.md)** — je Punkt mit Grund,
+Einstieg und dem, woran man erkennt, dass er fertig ist.
 
 **Was ausdrücklich noch fehlt: die Alarmierung.** Push-Kanäle und Totmannschalter
 stehen aus (Stufe 6). Bis dahin ist der Leitstand ein Bildschirm, kein Wecker —
@@ -218,6 +230,7 @@ einen Texteditor:
 | **Tunnel** | anlegen, ändern, löschen · Strecke, Interface, Transfernetz, Gegenstelle im Tunnel |
 | **Startseite** | Gruppen anlegen, umbenennen, sortieren · Verknüpfungen hinzufügen, mit System verbinden, sortieren, löschen |
 | **Schwellwerte** | Intervall, Zeitlimit, Fehlschläge bis Rot, „langsam“, Zertifikatsfristen, Verlaufslänge, ICMP |
+| **Sicherung** | frühere Stände ansehen — Sicherung und Tagesauszüge, je mit Inhalt — und einen davon **zurückholen** |
 
 Alles landet in derselben `inventory.yaml`, die sich auch von Hand bearbeiten
 lässt; vor jedem Schreiben wird eine Sicherung als `.bak` daneben abgelegt.
@@ -349,7 +362,7 @@ server/
   src/diagnose.js         jeden Aufruf des Sammlers einzeln zeigen
   src/cli.js              dieselbe Diagnose im Terminal (npm run probe)
   src/server.js           HTTP, SSE, Verwaltungs-Schnittstelle
-  test/                   193 Tests, u. a. gegen einen nachgebauten Proxmox
+  test/                   197 Tests, u. a. gegen einen nachgebauten Proxmox
 
 ui/                       Die Oberfläche, vom Dienst ausgeliefert
   assets/live.js          Brücke zum Server: Erstabruf, SSE, Wiederverbinden
@@ -363,7 +376,7 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 ## Tests
 
 ```bash
-cd server && npm test     # 193 Tests
+cd server && npm test     # 197 Tests
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen

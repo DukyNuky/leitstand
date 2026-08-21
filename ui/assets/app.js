@@ -174,6 +174,8 @@ const state = {
   settings: null,
   runtime: null,
   invFile: null,
+  staende: null,
+  staendeLaeuft: false,
   diagnose: null,             /* Befund zu einem System, siehe diagnoseAnsicht */
   fassung: null,              /* der Stand, mit dem diese Seite geladen wurde */
   gestartet: null,            /* Startzeitpunkt des Dienstes beim Laden dieser Seite */
@@ -1959,11 +1961,15 @@ document.addEventListener("click", ev => {
 
     /* ---- Verwaltung ---- */
     case "admin-open": go("verwaltung"); state.adminTab = el.dataset.tab || "hosts"; render(); break;
-    case "admintab": state.adminTab = el.dataset.tab; render(); break;
+    case "admintab":
+      state.adminTab = el.dataset.tab;
+      if (state.adminTab === "staende") ladeStaende();
+      render(); break;
     case "admin-new": state.inspector = null; openForm(el.dataset.kind, "new"); break;
     case "admin-edit": state.inspector = null; openForm(el.dataset.kind, "edit", el.dataset.id); break;
     case "admin-delete": adminDelete(el.dataset.kind, el.dataset.id); break;
     case "admin-reload": state.rawLinks = null; adminCall("POST", "/api/admin/reload", null, "Bestand neu eingelesen"); break;
+    case "admin-restore": adminRestore(el.dataset.quelle); break;
     case "admin-check": adminCall("POST", "/api/admin/check", null, "Durchlauf ausgelöst"); break;
     case "admin-save-settings": saveSettings(); break;
 
@@ -2397,6 +2403,41 @@ async function adminDelete(kind, id) {
   } catch (e) { toast("Nicht entfernt", e.message, "crit"); }
 }
 
+async function ladeStaende() {
+  if (!LIVE()) return;
+  try { state.staende = await window.LEITSTAND.call("GET", "/api/admin/staende"); }
+  catch (e) { toast("Frühere Stände nicht ladbar", e.message, "crit"); }
+  finally { state.staendeLaeuft = false; render(); }
+}
+
+/* Zurückholen ist der einzige Knopf hier, der einen bestehenden Bestand
+   überschreibt. Also nennt die Rückfrage, was danach dasteht — und was
+   gerade dasteht. Eine Rückfrage ohne Zahlen ist nur eine Verzögerung. */
+async function adminRestore(quelle) {
+  if (!requireLive()) return;
+  const d = state.staende || {};
+  const q = quelle === ".bak" ? d.sicherung : (d.archiv || []).find(a => a.name === quelle);
+  if (!q) return;
+  const jetzt = d.datei;
+  const frage = `Stand vom ${fmtWhen(q.zeit)} zurückholen?
+
+`
+    + `Danach: ${q.hosts} Systeme, ${q.sites} Standorte, ${q.tunnels} Tunnel
+`
+    + `Jetzt:  ${jetzt && jetzt.lesbar ? `${jetzt.hosts} Systeme, ${jetzt.sites} Standorte, ${jetzt.tunnels} Tunnel` : "unlesbar"}
+
+`
+    + `Der jetzige Stand wird dabei als inventory.yaml.bak gesichert.`;
+  if (!window.confirm(frage)) return;
+  try {
+    const r = await window.LEITSTAND.call("POST", "/api/admin/restore", { quelle });
+    state.rawLinks = null;
+    await loadAdmin();
+    await ladeStaende();
+    toast("Zurückgeholt", `${r.hosts} Systeme, ${r.sites} Standorte, ${r.tunnels} Tunnel aus ${r.quelle}.`, "ok");
+  } catch (e) { toast("Nicht zurückgeholt", e.message, "crit"); }
+}
+
 async function adminCall(method, path, body, msg) {
   try { await window.LEITSTAND.call(method, path, body); await loadAdmin(); toast("Erledigt", msg, "ok"); }
   catch (e) { toast("Fehlgeschlagen", e.message, "crit"); }
@@ -2483,7 +2524,8 @@ npm start        # danach http://localhost:8080</pre>
     <div class="row" style="margin-top:14px"><button class="btn btn--primary" data-action="reconnect">Erneut verbinden</button></div>
   </div></div>`;
 
-  const tabs = [["hosts", "Systeme"], ["sites", "Standorte"], ["tunnels", "Tunnel"], ["links", "Startseite"], ["settings", "Schwellwerte"]];
+  const tabs = [["hosts", "Systeme"], ["sites", "Standorte"], ["tunnels", "Tunnel"], ["links", "Startseite"],
+    ["settings", "Schwellwerte"], ["staende", "Sicherung"]];
   const tab = state.adminTab || "hosts";
   const neuWort = { hosts: "System", sites: "Standort", tunnels: "Tunnel" }[tab];
   const head = `<div class="row row-wrap">
@@ -2496,6 +2538,7 @@ npm start        # danach http://localhost:8080</pre>
   </div>`;
 
   const body = tab === "settings" ? adminSettings()
+    : tab === "staende" ? adminStaende()
     : tab === "sites" ? adminSites()
     : tab === "tunnels" ? adminTunnels()
     : tab === "links" ? adminLinks()
@@ -2649,6 +2692,71 @@ function adminLinks() {
     </div>
     <div class="panel-note">Ohne Adresse übernimmt die Kachel die Oberfläche des verknüpften Systems. Eine eigene
       Adresse ist für Unterpfade nützlich — etwa <span class="mono">/admin</span> statt der Startseite des Dienstes.</div>
+  </div>`;
+}
+
+/* ---------- Frühere Stände ----------
+
+   Eine Sicherung, die man nicht ansehen kann, bevor man sie einsetzt, ist
+   ein Sprung ins Dunkle: man erfährt erst hinterher, was man sich geholt
+   hat. Deshalb steht zu jedem Stand, wie viel darin steht — und die
+   Rückfrage nennt beide Zahlen, die jetzige und die künftige. */
+function adminStaende() {
+  const d = state.staende;
+  /* Geholt wird erst, wenn jemand hersieht — und von wo auch immer er
+     hergekommen ist. Die Kennung verhindert, dass jedes Neuzeichnen einen
+     weiteren Abruf lostritt. */
+  if (!d) {
+    if (!state.staendeLaeuft) { state.staendeLaeuft = true; ladeStaende(); }
+    return `<div class="panel"><div class="panel-body"><div class="empty">Frühere Stände werden geholt …</div></div></div>`;
+  }
+
+  const zahl = x => x && x.lesbar
+    ? `${x.hosts} Systeme · ${x.sites} Standorte · ${x.tunnels} Tunnel`
+    : `<span style="color:var(--crit)">nicht lesbar${x && x.fehler ? ": " + esc(x.fehler) : ""}</span>`;
+
+  const zeile = (x, titel, quelle, hinweis) => `<tr>
+    <td><div>${esc(titel)}</div><div class="t-sub mono">${esc(x.name)}</div></td>
+    <td class="mono">${esc(fmtWhen(x.zeit) || "—")}</td>
+    <td>${zahl(x)}</td>
+    <td class="faint" style="font-size:12px">${hinweis}</td>
+    <td class="right">${x.lesbar
+      ? `<button class="btn btn--sm" data-action="admin-restore" data-quelle="${esc(quelle)}">Zurückholen</button>`
+      : ""}</td>
+  </tr>`;
+
+  const jetzt = d.datei;
+  const rows = [
+    d.sicherung ? zeile(d.sicherung, "Sicherung", ".bak", "Stand unmittelbar vor der letzten Änderung") : "",
+    ...(d.archiv || []).map(a => zeile(a, "Auszug", a.name, "Stand am Ende dieses Tages"))
+  ].filter(Boolean).join("");
+
+  return `<div class="panel">
+    <div class="panel-head"><h3>Jetziger Bestand</h3>
+      <div class="spacer"></div>
+      <span class="mono faint" style="font-size:11.5px">${esc((jetzt && jetzt.datei) || "—")}</span></div>
+    <div class="panel-body">
+      <div class="stat-row">
+        ${stat("Systeme", jetzt && jetzt.lesbar ? jetzt.hosts : "—")}
+        ${stat("Standorte", jetzt && jetzt.lesbar ? jetzt.sites : "—")}
+        ${stat("Tunnel", jetzt && jetzt.lesbar ? jetzt.tunnels : "—")}
+        ${stat("Zuletzt geschrieben", (jetzt && fmtWhen(jetzt.zeit)) || "—")}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>Frühere Stände</h3><span class="hint">${(d.archiv || []).length} Auszüge, ${d.behalten ?? "—"} werden behalten</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th>Stand</th><th>Vom</th><th>Inhalt</th><th>Wofür</th><th class="right"></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5"><div class="empty">Noch kein früherer Stand — der erste entsteht bei der nächsten Änderung.</div></td></tr>`}</tbody></table>
+    </div>
+    <div class="panel-note">Zurückholen schreibt den gewählten Stand in
+      <span class="mono">${esc((jetzt && jetzt.datei) || "inventory.yaml")}</span> und legt den bisherigen zugleich als
+      <span class="mono">.bak</span> ab — der Griff daneben lässt sich also genauso zurücknehmen wie der Fehler,
+      wegen dem man ihn gemacht hat. Zugangsdaten bleiben unberührt; sie stehen in
+      <span class="mono">secrets.json</span> und gehören nicht zum Bestand.
+      ${d.verzeichnis ? `Die Auszüge liegen in <span class="mono">${esc(d.verzeichnis)}</span>.` : ""}</div>
   </div>`;
 }
 

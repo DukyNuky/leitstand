@@ -118,6 +118,58 @@ test("Vor dem Überschreiben wird gesichert", () => {
   assert.equal(wieder.hosts.length, 1, "Sicherung lässt sich zurückholen");
 });
 
+/* Ein Auszug je Tag: wer zehnmal am Tag speichert, will nicht zehn
+   Dateien, sondern den Stand des Tages. Und die ältesten fallen heraus,
+   sonst wächst das Volume unbemerkt. */
+test("Das Archiv hält einen Stand je Tag und wirft die ältesten weg", () => {
+  const file = tmp();
+  Inv.save(file, Inv.normalize(minimal));
+
+  const tag = n => new Date(Date.UTC(2026, 7, n, 12));
+  Inv.archiviere(file, 3, tag(1));
+  Inv.archiviere(file, 3, tag(1));                       /* derselbe Tag, kein zweiter Stand */
+  assert.deepEqual(Inv.archivNamen(file), ["inventory-2026-08-01.yaml"]);
+
+  for (const n of [2, 3, 4]) Inv.archiviere(file, 3, tag(n));
+  assert.deepEqual(Inv.archivNamen(file),
+    ["inventory-2026-08-04.yaml", "inventory-2026-08-03.yaml", "inventory-2026-08-02.yaml"],
+    "drei behalten, jung zuerst — der erste ist raus");
+
+  const liste = Inv.archivListe(file);
+  assert.equal(liste[0].hosts, 1, "was drinsteht, steht vor der Entscheidung");
+  assert.equal(liste[0].lesbar, true);
+});
+
+test("Ein unlesbarer Stand wird benannt, nicht verschwiegen", () => {
+  const file = tmp();
+  fs.writeFileSync(file, "sites: [\n  broken");
+  const b = Inv.beschreibe(file);
+  assert.equal(b.lesbar, false);
+  assert.match(b.fehler, /YAML/);
+  assert.equal(Inv.beschreibe(file + ".gibtsnicht"), null);
+});
+
+/* Zurückholen darf nie das Einzige sein, was noch da war: der bisherige
+   Stand wird zur neuen Sicherung, damit auch der Griff daneben umkehrbar
+   bleibt. */
+test("Zurückholen sichert den Stand, den es ersetzt", () => {
+  const file = tmp();
+  Inv.save(file, Inv.normalize(minimal));
+  Inv.archiviere(file, 5, new Date(Date.UTC(2026, 7, 1, 12)));
+
+  const zwei = Inv.normalize({ ...minimal, hosts: [...minimal.hosts, { id: "pve-2", type: "pve", site: "hq", ip: "10.0.0.6" }] });
+  Inv.save(file, zwei);
+  assert.equal(Inv.load(file).hosts.length, 2);
+
+  const archiv = path.join(Inv.archivVerzeichnis(file), "inventory-2026-08-01.yaml");
+  const wieder = Inv.restore(file, archiv);
+  assert.equal(wieder.hosts.length, 1, "der Auszug ist zurück");
+  assert.equal(Inv.load(Inv.backupPath(file)).hosts.length, 2, "und der ersetzte Stand liegt als Sicherung daneben");
+
+  assert.throws(() => Inv.restore(file, path.join(Inv.archivVerzeichnis(file), "gibt-es-nicht.yaml")),
+    /Keine Sicherung/);
+});
+
 test("Kaputtes YAML nennt den Grund", () => {
   const file = tmp();
   fs.writeFileSync(file, "sites: [\n  broken");

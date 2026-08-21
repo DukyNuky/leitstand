@@ -234,11 +234,87 @@ function stripDerived(h) {
 }
 
 export function backupPath(file) { return file + ".bak"; }
-export function restore(file) {
-  const bak = backupPath(file);
-  if (!fs.existsSync(bak)) throw new InventoryError("Keine Sicherung vorhanden.");
-  fs.copyFileSync(bak, file);
-  return load(file);
+
+/* ---------- Frühere Stände ----------
+
+   Es gibt zwei davon, und sie beantworten verschiedene Fragen:
+
+   `.bak`   — der Stand unmittelbar vor der letzten Änderung. Für den
+              Fehlgriff von eben: einen Standort zu früh gelöscht, ein Feld
+              falsch überschrieben.
+
+   Archiv   — je ein Auszug pro Tag, an dem sich etwas geändert hat. Für
+              die Frage, die später kommt: „was stand hier vor zwei Wochen?"
+              Der Tag genügt als Kennung; wer am selben Tag zehnmal
+              speichert, will nicht zehn Dateien, sondern den Stand des
+              Tages. Die ältesten fallen heraus, sonst wächst das Volume
+              unbemerkt.
+
+   Beides sind Kopien derselben lesbaren YAML-Datei — mit einem Texteditor
+   und `cp` kommt man auch ohne diese Oberfläche wieder an seinen Bestand. */
+
+export function archivVerzeichnis(file) { return path.join(path.dirname(file), "archiv"); }
+
+const ARCHIVNAME = /^inventory-(\d{4}-\d{2}-\d{2})\.yaml$/;
+
+export function archiviere(file, behalten = 14, jetzt = new Date()) {
+  if (!fs.existsSync(file)) return null;
+  const dir = archivVerzeichnis(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const tag = new Date(jetzt.getTime() - jetzt.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const ziel = path.join(dir, `inventory-${tag}.yaml`);
+  fs.copyFileSync(file, ziel);
+
+  /* Aufräumen nach Namen, nicht nach Änderungszeit: der Name ist der Tag,
+     um den es geht, und der ändert sich nicht, wenn jemand die Datei
+     anfasst. */
+  const alle = fs.readdirSync(dir).filter(n => ARCHIVNAME.test(n)).sort();
+  const weg = alle.slice(0, Math.max(0, alle.length - behalten));
+  for (const n of weg) { try { fs.rmSync(path.join(dir, n)); } catch {} }
+  return { datei: ziel, tag, entfernt: weg.length, staende: alle.length - weg.length };
+}
+
+/* Was in einem früheren Stand steht, ohne ihn einzusetzen. Eine Sicherung
+   blind zurückzuholen ist schlimmer als keine zu haben: man weiß erst
+   hinterher, was man sich geholt hat. Unlesbares wird als solches
+   gemeldet und nicht verschwiegen. */
+export function beschreibe(datei) {
+  if (!fs.existsSync(datei)) return null;
+  const st = fs.statSync(datei);
+  const info = { datei, name: path.basename(datei), zeit: st.mtime.toISOString(), groesse: st.size, lesbar: false };
+  try {
+    const inv = load(datei);
+    return { ...info, lesbar: true,
+      sites: inv.sites.length, hosts: inv.hosts.length, tunnels: inv.tunnels.length };
+  } catch (e) { return { ...info, fehler: e.message }; }
+}
+
+/* Nur die Namen — jung zuerst. Zum Zählen und Aufräumen genügt das, und es
+   kostet ein Verzeichnis statt vierzehn YAML-Zerlegungen. */
+export function archivNamen(file) {
+  const dir = archivVerzeichnis(file);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter(n => ARCHIVNAME.test(n)).sort().reverse();
+}
+
+/* Mit Inhalt — für die Verwaltung, die zeigen soll, was in einem Stand
+   steht, bevor jemand ihn zurückholt. */
+export function archivListe(file) {
+  const dir = archivVerzeichnis(file);
+  return archivNamen(file).map(n => beschreibe(path.join(dir, n))).filter(Boolean);
+}
+
+/* Einen früheren Stand zurückholen.
+
+   Geprüft wird die Quelle, bevor sie irgendetwas ersetzt — eine unlesbare
+   Sicherung darf den laufenden Bestand nicht mitnehmen. Der bisherige Stand
+   wird dabei zur neuen Sicherung: ein Fehlgriff lässt sich damit genauso
+   zurücknehmen wie der Fehler, wegen dem man ihn gemacht hat. */
+export function restore(file, quelle = backupPath(file)) {
+  if (!fs.existsSync(quelle)) throw new InventoryError("Keine Sicherung vorhanden.");
+  const inv = load(quelle);
+  save(file, inv);
+  return inv;
 }
 
 export function resolvePath(p) { return path.resolve(process.cwd(), p); }

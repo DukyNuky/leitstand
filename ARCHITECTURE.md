@@ -127,6 +127,9 @@ ist der Auffangkanal für alles, was keine Schnittstelle hat.
 
 ## Umsetzungsstand
 
+Was von hier aus als Nächstes zu tun ist — mit Grund, Einstieg und Abnahme je
+Punkt — steht in [TODO.md](TODO.md).
+
 | Stufe | Inhalt | Stand |
 |---|---|---|
 | 1 | Bestand als YAML, ICMP/TCP/TLS-Prober, Startseite mit Ampeln | **gebaut** |

@@ -16,6 +16,8 @@
      DELETE /api/admin/credentials/:id
      POST   /api/admin/test       Verbindung prüfen, ohne zu speichern
      POST   /api/admin/diagnose   jeden Aufruf einzeln zeigen — { id }
+     GET    /api/admin/staende    frühere Stände: Sicherung und Archiv
+     POST   /api/admin/restore    einen davon zurückholen — { quelle }
      POST   /api/admin/reload     inventory.yaml neu einlesen
      POST   /api/admin/check      sofortigen Durchlauf auslösen  */
 
@@ -71,16 +73,34 @@ export function createServer(opts = {}) {
   const angelegt = Inv.ensure(invFile, opts.seed || process.env.LEITSTAND_SEED || path.join(ROOT, "inventory.yaml"));
   if (angelegt.created) console.log(`Bestand angelegt: ${invFile}${angelegt.seeded ? " (aus Vorlage)" : " (leeres Gerüst)"}`);
 
+  /* Ein Auszug je Tag, an dem sich etwas geändert hat — und einer beim
+     Start, damit auch ein Bestand im Archiv landet, der monatelang
+     unverändert läuft. Schlägt es fehl, ist das kein Grund, die Änderung
+     zu verwerfen: der Bestand steht dann trotzdem, nur der Auszug fehlt. */
+  const behalten = Number(process.env.LEITSTAND_ARCHIV ?? 14);
+  const archiviere = () => {
+    if (behalten <= 0) return null;
+    try { return Inv.archiviere(invFile, behalten); }
+    catch (e) { console.warn("[archiv]", e.message); return null; }
+  };
+  archiviere();
+
   /* Wandert bei jedem Zustand mit in die Oberfläche. Ein leerer Bestand ist
      zweideutig: entweder ist wirklich noch nichts angelegt, oder der Dienst
      liest eine andere Ablage als beim letzten Mal — nach einem Redeploy mit
      anderem Volume etwa. Beides sieht gleich aus, und nur der Dienst kennt
-     den Unterschied. Also sagt er ihn. */
+     den Unterschied. Also sagt er ihn.
+
+     Gezählt, nicht gelesen: diese Angabe hängt an jedem Zustand, und der
+     geht alle 15 Sekunden an jeden offenen Reiter. Vierzehn YAML-Dateien
+     dafür zu zerlegen wäre Arbeit für nichts — der Inhalt der Auszüge wird
+     erst geholt, wenn jemand die Verwaltung öffnet. */
   const bestandInfo = () => ({
     datei: invFile,
     angelegt: angelegt.created,
     vorlage: !!angelegt.seeded,
-    sicherung: fs.existsSync(Inv.backupPath(invFile))
+    sicherung: fs.existsSync(Inv.backupPath(invFile)),
+    staende: Inv.archivNamen(invFile).length
   });
 
   let inv = Inv.load(invFile);
@@ -99,6 +119,7 @@ export function createServer(opts = {}) {
      Dienst nicht in einen halben Zustand bringen. */
   const commit = next => {
     Inv.save(invFile, next);
+    archiviere();
     inv = next;
     engine.reload(inv);
     /* Sofort melden, nicht erst nach dem nächsten Durchlauf: ein neu
@@ -256,6 +277,33 @@ export function createServer(opts = {}) {
       return json(res, 200, { ...bericht, text: alsText(bericht) });
     }
 
+    /* Frühere Stände zum Ansehen, nicht zum Einsetzen: was drinsteht,
+       gehört vor die Entscheidung, nicht hinter sie. */
+    if (p === "/api/admin/staende" && m === "GET") {
+      return json(res, 200, {
+        datei: Inv.beschreibe(invFile),
+        sicherung: Inv.beschreibe(Inv.backupPath(invFile)),
+        archiv: Inv.archivListe(invFile),
+        verzeichnis: Inv.archivVerzeichnis(invFile),
+        behalten
+      });
+    }
+
+    if (p === "/api/admin/restore" && m === "POST") {
+      const body = await readJson(req);
+      const quelle = quellPfad(body.quelle);
+      if (!quelle) return json(res, 400, { error: `Unbekannte Quelle „${body.quelle}".` });
+      /* Inv.restore prüft die Quelle, bevor sie etwas ersetzt, und legt den
+         bisherigen Stand als .bak ab — der Griff daneben ist damit selbst
+         wieder rücknehmbar. */
+      inv = Inv.restore(invFile, quelle);
+      archiviere();
+      engine.reload(inv);
+      engine.announce();
+      await engine.runOnce();
+      return json(res, 200, { ok: true, quelle: path.basename(quelle), hosts: inv.hosts.length, sites: inv.sites.length, tunnels: inv.tunnels.length });
+    }
+
     if (p === "/api/admin/reload" && m === "POST") {
       inv = Inv.load(invFile);
       engine.reload(inv);
@@ -295,6 +343,17 @@ export function createServer(opts = {}) {
     };
   }
   const hasCred = c => c && Object.values(c).some(v => v);
+
+  /* Welche Datei zurückgeholt werden darf: die Sicherung neben dem Bestand
+     oder ein Auszug aus dem Archiv — jeder andere Pfad wird abgewiesen, und
+     zwar anhand des Namens, nicht anhand einer Bereinigung. Was nicht
+     ausdrücklich erlaubt ist, kommt hier nicht durch. */
+  function quellPfad(quelle) {
+    const name = String(quelle || ".bak");
+    if (name === ".bak" || name === "sicherung") return Inv.backupPath(invFile);
+    if (!/^inventory-\d{4}-\d{2}-\d{2}\.yaml$/.test(name)) return null;
+    return path.join(Inv.archivVerzeichnis(invFile), name);
+  }
 
   /* ---------- Statisch ---------- */
   function serveStatic(res, p) {
