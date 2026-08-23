@@ -133,12 +133,15 @@ export async function collectPve(host, cred, settings) {
      /nodes/{name} — die lassen sich erst fragen, wenn der Name feststeht.
      Beide dürfen fehlschlagen, ohne den Rest mitzunehmen: sie sind
      Auskunft, nicht Messung. */
-  const [statusRes, aptRes] = await Promise.all([
+  const [statusRes, aptRes, jobsRes, dumpRes] = await Promise.all([
     api(host, "pve", cred, `/nodes/${encodeURIComponent(me.node)}/status`),
-    api(host, "pve", cred, `/nodes/${encodeURIComponent(me.node)}/apt/update`)
+    api(host, "pve", cred, `/nodes/${encodeURIComponent(me.node)}/apt/update`),
+    api(host, "pve", cred, "/cluster/backup"),
+    api(host, "pve", cred, `/nodes/${encodeURIComponent(me.node)}/tasks?typefilter=vzdump&limit=100`)
   ]);
   knotenstatus(out, statusRes.ok ? statusRes.data?.data : null);
   pakete(out, aptRes);
+  sicherungen(out, jobsRes, dumpRes, me.node);
 
   /* Gäste und Speicher stehen in der Bestandsliste. Sie kann fehlschlagen
      oder — was häufiger vorkommt — mit 200 und leerem Inhalt antworten:
@@ -201,11 +204,23 @@ export async function collectPve(host, cred, settings) {
      nicht jede Nacht rot leuchten. Welche Zahl gerade galt, steht mit in
      der Notiz, damit man die Meldung ohne Nachschlagen einordnen kann. */
   out.schwellen = grenze;
+  /* Bewertet wird der **letzte** Lauf, nicht „ein Fehlschlag in 24 h": ist
+     danach einer geglückt, ist die Sache erledigt, und eine Meldung, die
+     trotzdem stehen bleibt, lernt man zu übergehen. Ein Auftrag, der nie
+     lief, ist dagegen keine Störung — er kann heute erst angelegt worden
+     sein; das steht als Notiz da. */
+  const kaputt = (out.backupJobs || []).find(j => j.aktiv && j.letzterStatus === "fehler");
+  const schief = (out.backupJobs || []).find(j => j.aktiv && j.letzterStatus === "warn");
   if (out.cluster && out.quorum === false) { out.status = "crit"; out.note = "Knoten hat kein Quorum"; }
   else if (fullest && fullest.used >= grenze.disk_crit) { out.status = "crit"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt (kritisch ab ${grenze.disk_crit} %)`; }
   else if (out.ram != null && out.ram >= grenze.ram_crit) { out.status = "crit"; out.note = `RAM-Auslastung ${out.ram} % (kritisch ab ${grenze.ram_crit} %)`; }
+  else if (kaputt) { out.status = "crit"; out.note = `Sicherung „${kaputt.name}“ ist zuletzt fehlgeschlagen`; }
   else if (out.ram != null && out.ram >= grenze.ram_warn) { out.status = "warn"; out.note = `RAM-Auslastung ${out.ram} %`; }
   else if (fullest && fullest.used >= grenze.disk_warn) { out.status = "warn"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
+  else if (schief) { out.status = "warn"; out.note = `Sicherung „${schief.name}“ lief mit Warnungen — ein Gast blieb liegen`; }
+  else if (!out.note && out.backupNote) out.note = out.backupNote;
+  else if (!out.note && (out.backupJobs || []).some(j => j.aktiv && !j.zuletzt))
+    out.note = "Ein eingerichteter Sicherungsauftrag ist noch nie gelaufen";
   /* Ausstehende Pakete sind ein Hinweis, keine Störung — sie stehen als
      Notiz da und drehen die Ampel nicht. Dieselbe Zurückhaltung wie bei
      OPNsense: wer nachts geweckt wird, soll wissen, dass etwas kaputt ist,
@@ -213,6 +228,120 @@ export async function collectPve(host, cred, settings) {
   else if (!out.note && out.updates) out.note = `${out.updates} Paketaktualisierung(en) stehen aus`;
   return out;
 }
+
+/* ---------- Sicherungsaufträge ----------
+
+   Zwei Fragen, und sie hängen loser zusammen, als man denkt: was ist
+   eingerichtet (`/cluster/backup`) und was ist gelaufen (die
+   vzdump-Aufgaben des Knotens). Das eine ist eine Absicht, das andere ein
+   Ereignis, und nur das zweite sagt, ob heute Nacht etwas gesichert
+   wurde.
+
+   Zusammenführen lassen sie sich nur, soweit Proxmox es zulässt. Bei
+   einem geplanten Lauf trägt die Aufgabe je nach Fassung die Kennung des
+   Auftrags — und je nach Fassung eben nicht. Steht sie da, gehören die
+   Zeitpunkte zum Auftrag; steht sie nicht da, gelten die des Knotens.
+   Welches von beidem eine Zeile zeigt, steht als `quelle` dabei: eine
+   Zuordnung zu behaupten, die Proxmox nicht hergibt, wäre schlimmer als
+   eine ungenaue, die sich zu erkennen gibt. */
+function sicherungen(out, jobsRes, dumpRes, node) {
+  if (!dumpRes.ok && !jobsRes.ok) {
+    out.backupJobs = null;
+    out.backupLaeufe = null;
+    /* 403 heißt: der Token darf die Aufgabenliste nicht sehen. Das ist
+       eine Rechtefrage und keine Aussage über Sicherungen. */
+    if (jobsRes.status === 403 || dumpRes.status === 403) out.backupNote = "Sicherungen nicht lesbar — dem Token fehlt Sys.Audit auf dem Knoten.";
+    return;
+  }
+
+  const laeufe = (dumpRes.ok ? dumpRes.data?.data || [] : [])
+    .filter(t => t && Number.isFinite(zahl(t.endtime)))
+    .map(t => ({ auftrag: t.id || t.worker_id || null, endtime: zahl(t.endtime), lauf: laufStatus(t.status) }))
+    .sort((a, b) => b.endtime - a.endtime);
+
+  out.backupLaeufe = dumpRes.ok ? zeitpunkte(laeufe) : null;
+
+  if (!jobsRes.ok) {
+    out.backupJobs = null;
+    if (jobsRes.status === 403) out.backupNote = "Die Auftragsliste ist nicht lesbar — dem Token fehlt Datastore.Audit.";
+    return;
+  }
+
+  out.backupJobs = (jobsRes.data?.data || [])
+    /* Ein Auftrag ohne Knotenbindung läuft auf jedem Knoten, jeder für
+       seine eigenen Gäste — er gehört deshalb auch auf jeden Knoten. */
+    .filter(j => j && (!j.node || j.node === node))
+    .map(j => {
+      const eigene = j.id ? laeufe.filter(l => l.auftrag === j.id) : [];
+      return {
+        id: j.id || null,
+        name: j.comment || j.id || "Sicherungsauftrag",
+        aktiv: j.enabled === undefined || j.enabled === 1 || j.enabled === true || j.enabled === "1",
+        zeitplan: j.schedule || zeitplan(j.dow, j.starttime),
+        ziel: j.storage || null,
+        modus: j.mode || null,
+        umfang: umfang(j),
+        naechster: zeitpunkt(j["next-run"] ?? j.next_run),
+        node: j.node || null,
+        /* Woher die Zeitpunkte stammen — siehe oben. */
+        quelle: eigene.length ? "auftrag" : "knoten",
+        ...zeitpunkte(eigene.length ? eigene : laeufe)
+      };
+    });
+}
+
+/* Aus einer nach Zeit absteigenden Liste die drei Zeitpunkte, um die es
+   geht: wann zuletzt gelaufen, wann zuletzt geglückt, wann zuletzt
+   schiefgegangen. Sie stehen nebeneinander, weil sie verschiedene Fragen
+   beantworten — ein Auftrag, der heute Nacht fehlschlug und vorgestern
+   glückte, ist etwas anderes als einer, der nie lief. */
+function zeitpunkte(laeufe) {
+  const letzter = laeufe[0] || null;
+  return {
+    zuletzt: zeitpunkt(letzter?.endtime),
+    letzterStatus: letzter?.lauf ?? null,
+    zuletztOk: zeitpunkt(laeufe.find(l => l.lauf === "ok")?.endtime),
+    zuletztFehler: zeitpunkt(laeufe.find(l => l.lauf === "fehler")?.endtime),
+    laeufe: laeufe.length
+  };
+}
+
+/* vzdump kennt drei Ausgänge, und der mittlere ist der, den man leicht
+   übersieht: „OK" ist geglückt, „WARNINGS: 2" ist gelaufen, aber nicht
+   sauber — ein einzelner Gast blieb liegen —, alles andere ist ein
+   Fehlschlag. Beides als „nicht OK" zu führen, verwischt den Unterschied
+   zwischen „ein Gast fehlt" und „heute Nacht gab es keine Sicherung". */
+export function laufStatus(s) {
+  const t = String(s ?? "").trim();
+  if (!t) return null;
+  if (t === "OK") return "ok";
+  if (/^warnings/i.test(t)) return "warn";
+  return "fehler";
+}
+
+/* Ältere Aufträge stehen als Wochentage plus Uhrzeit in der Datei, neuere
+   als Kalenderausdruck. Angezeigt wird, was dasteht. */
+export function zeitplan(dow, starttime) {
+  const tage = String(dow || "").trim();
+  const zeit = String(starttime || "").trim();
+  if (!tage && !zeit) return null;
+  return [tage, zeit].filter(Boolean).join(" ");
+}
+
+/* Was der Auftrag mitnimmt. „alle" ist bei Proxmox eine eigene Angabe und
+   nicht die Liste aller Gäste — wer sie als Liste läse, bekäme null. */
+export function umfang(j) {
+  if (j.all === 1 || j.all === "1" || j.all === true) {
+    const aus = alsListe(j.exclude).length;
+    return aus ? `alle Gäste außer ${aus}` : "alle Gäste";
+  }
+  if (j.pool) return `Pool ${j.pool}`;
+  const ids = alsListe(j.vmid);
+  return ids.length ? `${ids.length} ${ids.length === 1 ? "Gast" : "Gäste"}` : null;
+}
+
+const alsListe = v => String(v ?? "").split(",").map(s => s.trim()).filter(Boolean);
+const zeitpunkt = sek => (zahl(sek) > 0 ? new Date(zahl(sek) * 1000).toISOString() : null);
 
 /* Was nicht gelesen werden konnte, bleibt unbekannt — und wird als Strich
    angezeigt statt als Zahl, der man glaubt. */

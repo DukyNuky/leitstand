@@ -204,6 +204,17 @@ gebaut.
       wird jetzt der Reihe nach: `firmware/status`, `firmware/info`, zuletzt
       die Zeile aus `system_information.versions`.
 
+- [x] **2.12 Sicherungsaufträge aus Proxmox VE** — gebaut. `/cluster/backup`
+      sagt, was eingerichtet ist (Zeitplan, Ziel, Umfang, nächster Lauf), die
+      `vzdump`-Aufgaben des Knotens sagen, was davon gelaufen ist. Die drei
+      Zeitpunkte stehen getrennt — letzter Lauf mit Ausgang, letzter
+      erfolgreicher, letzter fehlgeschlagener —, weil sie drei verschiedene
+      Fragen beantworten. Zugeordnet wird ein Lauf einem Auftrag nur, wenn die
+      Aufgabe dessen Kennung trägt; sonst gelten die Läufe des Knotens, und die
+      Zeile schreibt „vom Knoten" dazu. Ampel am **letzten** Lauf: fehlgeschlagen
+      rot, `WARNINGS` gelb, nie gelaufen eine Notiz. Damit ist das letzte
+      Beispiel aus der Ansicht *Speicher & Sicherung* verschwunden.
+
 ---
 
 ## 3. Alarmierung — Push-Kanäle und Totmannschalter

@@ -33,6 +33,7 @@ function pve({ resStatus = 200, resLeer = false, nodes = null } = {}) {
       ]);
     }
     if (p === "/api2/json/cluster/status") return send(200, []);
+    if (p === "/api2/json/cluster/backup") return send(200, []);
     return send(404, null);
   });
 }
@@ -50,7 +51,7 @@ test("Alles in Ordnung wird als solches gemeldet", async () => {
   const b = await stelle();
   assert.equal(b.ok, true);
   assert.match(b.fazit, /kommen durch/);
-  assert.equal(b.api.length, 4, "alle vier Aufrufe wurden gemacht");
+  assert.equal(b.api.length, 5, "alle fünf Aufrufe wurden gemacht");
   assert.ok(b.api.every(a => a.ok));
   assert.match(b.api.find(a => a.pfad === "/cluster/resources").befund, /qemu 1.*storage 1/);
 });

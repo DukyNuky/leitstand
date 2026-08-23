@@ -88,6 +88,39 @@ export function fakeProxmox() {
           { Package: "pve-manager", OldVersion: "8.3.1", Version: "8.3.2", Title: "Proxmox VE Verwaltung" },
           { Package: "openssl", OldVersion: "3.0.14", Version: "3.0.15", Title: "Kryptobibliothek" }
         ]);
+      /* Zwei Aufträge, wie sie in einer gewachsenen Anlage nebeneinander
+         stehen: einer als Kalenderausdruck neuerer Fassungen, einer noch
+         als Wochentag plus Uhrzeit — und abgeschaltet. */
+      case "/api2/json/cluster/backup":
+        return send(200, [
+          { id: "backup-1a2b3c4d-5678", enabled: 1, schedule: "02:00", storage: "pbs-main",
+            mode: "snapshot", all: 1, comment: "Nacht — alles",
+            "next-run": Math.floor(Date.now() / 1000) + 3600 },
+          { id: "backup-9f8e7d6c-4321", enabled: 0, dow: "sat", starttime: "05:00", storage: "nas",
+            mode: "stop", vmid: "101,102,103", comment: "Wochenende" }
+        ]);
+      /* Die Aufgabenliste eines Knotens. Der erste Lauf trägt die Kennung
+         des Auftrags — neuere Proxmox-Fassungen schreiben sie hinein —,
+         der letzte nicht: so sieht eine gemischte Anlage aus. */
+      case "/api2/json/nodes/pve-hq-01/tasks":
+        return send(200, [
+          { upid: "UPID:pve-hq-01:0000A1:vzdump::root@pam:", type: "vzdump", id: "backup-1a2b3c4d-5678",
+            node: "pve-hq-01", starttime: Math.floor(Date.now() / 1000) - 7800, endtime: Math.floor(Date.now() / 1000) - 7000, status: "OK" },
+          { upid: "UPID:pve-hq-01:00009F:vzdump::root@pam:", type: "vzdump", id: "backup-1a2b3c4d-5678",
+            node: "pve-hq-01", starttime: Math.floor(Date.now() / 1000) - 94000, endtime: Math.floor(Date.now() / 1000) - 93000,
+            status: "job errors" },
+          { upid: "UPID:pve-hq-01:00009A:vzdump::root@pam:", type: "vzdump", id: "",
+            node: "pve-hq-01", starttime: Math.floor(Date.now() / 1000) - 180000, endtime: Math.floor(Date.now() / 1000) - 179000, status: "OK" }
+        ]);
+      /* Der zweite Knoten hat es heute Nacht nicht geschafft. */
+      case "/api2/json/nodes/pve-hq-02/tasks":
+        return send(200, [
+          { upid: "UPID:pve-hq-02:0000B1:vzdump::root@pam:", type: "vzdump", id: "backup-1a2b3c4d-5678",
+            node: "pve-hq-02", starttime: Math.floor(Date.now() / 1000) - 7800, endtime: Math.floor(Date.now() / 1000) - 7600,
+            status: "unable to open file '/mnt/pbs/…' - No space left on device" },
+          { upid: "UPID:pve-hq-02:0000AF:vzdump::root@pam:", type: "vzdump", id: "backup-1a2b3c4d-5678",
+            node: "pve-hq-02", starttime: Math.floor(Date.now() / 1000) - 94000, endtime: Math.floor(Date.now() / 1000) - 93000, status: "OK" }
+        ]);
       case "/api2/json/status/datastore-usage":
         /* So, wie PBS es liefert: `avail` steht daneben und ist bei ZFS
            nicht total − used. Die Schätzung, wann es voll ist, gibt es

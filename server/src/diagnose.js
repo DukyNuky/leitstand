@@ -60,7 +60,8 @@ const PFADE = {
     { pfad: "/version", zweck: "erreichbar und angemeldet" },
     { pfad: "/nodes", zweck: "Knotenliste — hier wird der eigene Knoten gesucht" },
     { pfad: "/cluster/resources", zweck: "Gäste und Speicher — daraus kommen VMs, LXC, Belegung" },
-    { pfad: "/cluster/status", zweck: "Clustername und Quorum", optional: true }
+    { pfad: "/cluster/status", zweck: "Clustername und Quorum", optional: true },
+    { pfad: "/cluster/backup", zweck: "eingerichtete Sicherungsaufträge", optional: true }
   ],
   pbs: [
     { pfad: "/version", zweck: "erreichbar und angemeldet" },

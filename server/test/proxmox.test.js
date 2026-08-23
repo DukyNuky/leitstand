@@ -1,7 +1,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { fakeProxmox, listen, GOOD, WEAK } from "./fake-proxmox.js";
-import { collectPve, collectPbs, collectPmg, testConnection, authHeader, baseUrl } from "../src/collectors/proxmox.js";
+import { collectPve, collectPbs, collectPmg, testConnection, authHeader, baseUrl,
+  laufStatus, umfang, zeitplan } from "../src/collectors/proxmox.js";
 
 let srv, url;
 before(async () => { srv = fakeProxmox(); url = await listen(srv); });
@@ -383,4 +384,87 @@ test("Auch der Datastore des Backup Servers folgt den eigenen Grenzen", async ()
   assert.equal(streng.status, "crit");
   assert.equal(locker.status, "crit");
   assert.equal(locker.schwellen.disk_warn, 95);
+});
+
+/* ============================================================
+   Sicherungsaufträge
+
+   Was eingerichtet ist, steht in /cluster/backup; was gelaufen ist, in
+   den vzdump-Aufgaben des Knotens. Beides zusammenzubringen ist der
+   heikle Teil — und wo es nicht geht, muss es sich zu erkennen geben.
+   ============================================================ */
+
+test("Eingerichtete Aufträge werden mit Zeitplan, Ziel und Umfang gelesen", async () => {
+  const r = await collectPve(host("pve-hq-01"), cred);
+  assert.equal(r.backupJobs.length, 2);
+
+  const nacht = r.backupJobs.find(j => j.id === "backup-1a2b3c4d-5678");
+  assert.equal(nacht.name, "Nacht — alles");
+  assert.equal(nacht.aktiv, true);
+  assert.equal(nacht.zeitplan, "02:00");
+  assert.equal(nacht.ziel, "pbs-main");
+  assert.equal(nacht.umfang, "alle Gäste");
+  assert.ok(nacht.naechster, "der nächste Lauf steht in der Antwort neuerer Fassungen");
+
+  /* Ältere Aufträge stehen als Wochentag plus Uhrzeit da — angezeigt wird,
+     was dasteht, nicht ein daraus gebastelter Kalenderausdruck. */
+  const we = r.backupJobs.find(j => j.id === "backup-9f8e7d6c-4321");
+  assert.equal(we.zeitplan, "sat 05:00");
+  assert.equal(we.umfang, "3 Gäste");
+  assert.equal(we.aktiv, false, "abgeschaltet ist keine Störung, aber eine Auskunft");
+});
+
+/* Die drei Zeitpunkte beantworten drei verschiedene Fragen — und ein
+   Auftrag, der heute Nacht glückte und vorgestern scheiterte, muss beides
+   zeigen. */
+test("Gelaufen, zuletzt erfolgreich und zuletzt fehlgeschlagen stehen nebeneinander", async () => {
+  const r = await collectPve(host("pve-hq-01"), cred);
+  const nacht = r.backupJobs.find(j => j.id === "backup-1a2b3c4d-5678");
+  assert.equal(nacht.quelle, "auftrag", "die Aufgabe trägt die Kennung des Auftrags");
+  assert.equal(nacht.letzterStatus, "ok");
+  assert.ok(nacht.zuletzt);
+  assert.equal(nacht.zuletztOk, nacht.zuletzt, "der letzte Lauf war zugleich der letzte geglückte");
+  assert.ok(nacht.zuletztFehler, "der Fehlschlag von vorgestern bleibt sichtbar");
+  assert.ok(new Date(nacht.zuletztFehler) < new Date(nacht.zuletztOk));
+  /* Dieser Knoten ist wegen seines vollen Speichers ohnehin rot — aber
+     nicht wegen der Sicherung: der Fehlschlag ist überstanden. */
+  assert.ok(!/Sicherung/.test(r.note || ""), "ein überstandener Fehlschlag ist keine Störung mehr");
+});
+
+/* Ohne Kennung in der Aufgabe lässt sich ein Lauf keinem Auftrag
+   zuordnen. Dann gelten die Läufe des Knotens — und die Zeile sagt das,
+   statt eine Genauigkeit zu behaupten, die Proxmox nicht hergibt. */
+test("Ohne Zuordnung gelten die Läufe des Knotens, und das steht dabei", async () => {
+  const r = await collectPve(host("pve-hq-01"), cred);
+  const we = r.backupJobs.find(j => j.id === "backup-9f8e7d6c-4321");
+  assert.equal(we.quelle, "knoten");
+  assert.ok(we.zuletzt);
+});
+
+test("Ein zuletzt fehlgeschlagener Auftrag dreht die Ampel auf Rot", async () => {
+  const r = await collectPve(host("pve-hq-02"), cred);
+  const nacht = r.backupJobs.find(j => j.id === "backup-1a2b3c4d-5678");
+  assert.equal(nacht.letzterStatus, "fehler");
+  assert.ok(nacht.zuletztOk, "der geglückte Lauf von vorgestern steht daneben");
+  assert.equal(r.status, "crit");
+  assert.match(r.note, /Nacht — alles/);
+});
+
+test("vzdump kennt drei Ausgänge, und der mittlere ist keiner von beiden", () => {
+  assert.equal(laufStatus("OK"), "ok");
+  assert.equal(laufStatus("WARNINGS: 2"), "warn", "gelaufen, aber ein Gast blieb liegen");
+  assert.equal(laufStatus("job errors"), "fehler");
+  assert.equal(laufStatus(""), null, "ohne Angabe wird nichts behauptet");
+  assert.equal(laufStatus(null), null);
+});
+
+test("„alle“ ist eine eigene Angabe und keine Liste", () => {
+  assert.equal(umfang({ all: 1 }), "alle Gäste");
+  assert.equal(umfang({ all: 1, exclude: "105,106" }), "alle Gäste außer 2");
+  assert.equal(umfang({ vmid: "101" }), "1 Gast");
+  assert.equal(umfang({ vmid: "101,102" }), "2 Gäste");
+  assert.equal(umfang({ pool: "prod" }), "Pool prod");
+  assert.equal(umfang({}), null, "steht nichts da, wird nichts behauptet");
+  assert.equal(zeitplan("mon,tue", "02:00"), "mon,tue 02:00");
+  assert.equal(zeitplan(null, null), null);
 });

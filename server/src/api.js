@@ -61,8 +61,9 @@ export function buildState(engine, secrets, bestand = null) {
     links: linkViews(inv, byId, engine),
     integrations: integrationViews(inv, secrets, engine),
     peers: peerViews(inv, engine),
+    backups: backupViews(hosts),
     /* Diese Bereiche kennt der Dienst noch nicht — leer statt erfunden. */
-    haproxy: [], backups: [], mails: [], mailrules: [], routes: []
+    haproxy: [], mails: [], mailrules: [], routes: []
   };
 }
 
@@ -189,6 +190,9 @@ function hostView(h, st = {}, settings = {}) {
     load1: x.load1 ?? null, rootUsed: x.rootUsed ?? null, swap: x.swap ?? null,
     updatesNote: x.updatesNote || null, updateListe: x.updateListe || null,
     guests: x.guests || null, templates: x.templates ?? null,
+    /* Sicherungsaufträge des Knotens und was von ihnen gelaufen ist */
+    backupJobs: x.backupJobs || null, backupLaeufe: x.backupLaeufe || null,
+    backupNote: x.backupNote || null,
     storages: x.storages || null, stores: x.stores || null,
     used: x.used ?? null, failed: x.failed ?? null, lastGood: x.lastGood || null,
     in24: x.in24 ?? null, spam: x.spam ?? null, virus: x.virus ?? null,
@@ -393,6 +397,37 @@ function certViews(hosts) {
         : h.tls.days <= 14 ? "crit" : h.tls.days <= 30 ? "warn" : "ok"
     }))
     .sort((a, b) => a.days - b.days);
+}
+
+/* Sicherungsaufträge über alle Knoten hinweg — eine Tabelle statt einer
+   je System, weil die Frage „ist heute Nacht gesichert worden?" nicht am
+   einzelnen Knoten hängt.
+
+   Die Ampel der Zeile ist die des letzten Laufs, nicht die des Systems:
+   ein Knoten kann tadellos laufen und trotzdem seit drei Tagen nichts
+   gesichert haben. Ein abgeschalteter Auftrag bleibt grau — er ist keine
+   Störung, sondern eine Entscheidung. */
+function backupViews(hosts) {
+  const out = [];
+  for (const h of hosts) {
+    for (const j of h.backupJobs || []) {
+      out.push({
+        host: h.id, hostName: h.name, node: h.node || null,
+        id: j.id, name: j.name, aktiv: j.aktiv,
+        zeitplan: j.zeitplan, ziel: j.ziel, modus: j.modus, umfang: j.umfang,
+        naechster: j.naechster,
+        zuletzt: j.zuletzt, letzterStatus: j.letzterStatus,
+        zuletztOk: j.zuletztOk, zuletztFehler: j.zuletztFehler,
+        laeufe: j.laeufe ?? null,
+        quelle: j.quelle,
+        status: !j.aktiv ? "idle"
+          : j.letzterStatus === "fehler" ? "crit"
+          : j.letzterStatus === "warn" ? "warn"
+          : j.letzterStatus === "ok" ? "ok" : "idle"
+      });
+    }
+  }
+  return out;
 }
 
 function linkViews(inv, byId, engine) {

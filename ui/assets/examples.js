@@ -61,11 +61,5 @@ const EXAMPLES = {
       { name: "be_cloud", servers: "2/2", status: "ok",   ms: 41,  route: "cloud.example.org" },
       { name: "be_wiki",  servers: "0/1", status: "crit", ms: null, route: "wiki.example.org" }
     ]
-  },
-
-  /* Stufe 2/4 — Sicherungsaufträge aus PBS und aus vzdump-Berichten */
-  backup: {
-    job: "vzdump täglich", target: "pbs-01/main", last: "03:12",
-    size: "33,3 GB", status: "ok", dur: "09:56"
   }
 };

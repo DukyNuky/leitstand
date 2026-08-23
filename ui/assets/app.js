@@ -1004,23 +1004,61 @@ function aufgabenZelle(wann, ok) {
   return ok === false ? `<span style="color:var(--crit)" title="Der letzte Lauf ist fehlgeschlagen">${text} ✕</span>` : text;
 }
 
+/* ---------- Sicherungsaufträge ----------
+
+   Was eingerichtet ist und was davon gelaufen ist — nebeneinander, weil
+   das eine eine Absicht ist und nur das andere eine Tatsache. Die drei
+   Zeitpunkte stehen getrennt: „zuletzt gelaufen" beantwortet nicht, ob es
+   geklappt hat, und „zuletzt erfolgreich" nicht, ob seither etwas
+   schiefging. Ein Auftrag, der heute Nacht fehlschlug und vorgestern
+   glückte, ist etwas anderes als einer, der nie lief. */
 function backupPanel() {
-  const zeilen = BACKUPS.length ? BACKUPS : [EXAMPLES.backup];
+  const zeilen = BACKUPS.filter(b => state.site === "all"
+    || (state.hosts.find(h => h.id === b.host) || {}).site === state.site);
+
   const tabelle = `<div class="panel-body panel-body--flush tablewrap">
-      <table class="t"><thead><tr><th style="width:34px"></th><th>Auftrag</th><th>Ziel</th><th>Zuletzt</th><th>Umfang</th><th>Dauer</th></tr></thead><tbody>
-      ${zeilen.map(b => `<tr data-sev="${b.status}">
-        <td class="sev">${dot(b.status)}</td><td>${esc(b.job)}</td>
-        <td class="mono faint">${esc(b.target)}</td><td class="mono">${esc(b.last)}</td>
-        <td class="mono">${esc(b.size)}</td><td class="mono faint">${esc(b.dur)}</td></tr>`).join("")}
+      <table class="t"><thead><tr><th style="width:34px"></th><th>Auftrag</th><th>Knoten</th><th>Zeitplan</th>
+        <th>Ziel</th><th>Letzter Lauf</th><th>Zuletzt erfolgreich</th><th>Zuletzt fehlgeschlagen</th></tr></thead><tbody>
+      ${zeilen.length ? zeilen.map(b => `<tr data-sev="${b.status}">
+        <td class="sev">${dot(b.status)}</td>
+        <td><div>${esc(b.name)}${b.aktiv ? "" : ' <span class="chip chip--plain">abgeschaltet</span>'}</div>
+          <div class="t-sub">${esc(b.umfang || "Umfang unbekannt")}${b.modus ? " · " + esc(b.modus) : ""}</div></td>
+        <td class="faint">${esc(b.node || b.hostName)}</td>
+        <td><div class="mono">${esc(b.zeitplan || "—")}</div>${
+          b.naechster ? `<div class="t-sub">nächster: ${esc(fmtWhen(b.naechster) || "—")}</div>` : ""}</td>
+        <td class="mono faint">${esc(b.ziel || "—")}</td>
+        <td class="mono">${laufZelle(b)}</td>
+        <td class="mono faint">${esc(fmtWhen(b.zuletztOk) || "nie")}</td>
+        <td class="mono">${b.zuletztFehler
+          ? `<span style="color:var(--warn)">${esc(fmtWhen(b.zuletztFehler))}</span>`
+          : '<span class="faint">nie</span>'}</td>
+      </tr>`).join("") : `<tr><td colspan="8"><div class="empty">Kein Sicherungsauftrag für diese Auswahl.</div></td></tr>`}
       </tbody></table></div>`;
 
-  if (BACKUPS.length) return `<div class="panel">
-    <div class="panel-head"><h3>Sicherungsaufträge</h3><span class="hint">letzte 24 Stunden</span></div>
-    ${tabelle}</div>`;
+  const geraten = zeilen.some(b => b.quelle === "knoten" && b.zuletzt);
+  return `<div class="panel">
+    <div class="panel-head"><h3>Sicherungsaufträge</h3><span class="hint">eingerichtet in Proxmox VE</span>
+      <div class="spacer"></div><span class="hint">${zeilen.filter(b => b.aktiv).length} von ${zeilen.length} aktiv</span></div>
+    ${tabelle}
+    <div class="panel-note">Bewertet wird der <b>letzte</b> Lauf: ist danach einer geglückt, ist die Sache erledigt.
+      Ein Auftrag, der noch nie lief, bleibt grau — er kann heute erst angelegt worden sein.
+      ${geraten ? `<br>Wo <b>„vom Knoten"</b> steht, ließ sich der Lauf keinem einzelnen Auftrag zuordnen: Proxmox
+        schreibt die Auftragskennung erst ab neueren Fassungen in die Aufgabe. Dann gelten die Zeitpunkte aller
+        <span class="mono">vzdump</span>-Läufe dieses Knotens — bei einem einzigen Auftrag ist das dasselbe, bei
+        mehreren eine Näherung, und sie gibt sich als solche zu erkennen.` : ""}
+      <br>Ein Auftrag ohne Knotenbindung läuft auf jedem Knoten für dessen eigene Gäste — er steht deshalb bei jedem.</div>
+  </div>`;
+}
 
-  return ausbaupanel("Sicherungsaufträge", "Stufe 2 · Stufe 4", `Aufträge, Umfang und Dauer stehen im Proxmox Backup Server
-    und in den <span class="mono">vzdump</span>-Berichten. Beides ist noch nicht angebunden: für PBS fehlt der Sammler
-    über die Aufgabenliste, für vzdump das Alarm-Postfach. Bis dahin bleibt diese Tabelle eine Absichtserklärung.`, tabelle);
+/* Der letzte Lauf mit seinem Ausgang. „Gelaufen" und „geglückt" sind
+   zweierlei, und in dieser Spalte steht beides zusammen. */
+function laufZelle(b) {
+  if (!b.zuletzt) return '<span class="faint">noch nie gelaufen</span>';
+  const ton = b.letzterStatus === "fehler" ? "crit" : b.letzterStatus === "warn" ? "warn" : "ok";
+  const wort = b.letzterStatus === "fehler" ? "fehlgeschlagen"
+    : b.letzterStatus === "warn" ? "mit Warnungen" : "erfolgreich";
+  return `<div><span style="color:var(--${ton})">${esc(fmtWhen(b.zuletzt))}</span></div>
+    <div class="t-sub">${wort}${b.quelle === "knoten" ? ' <span class="faint">· vom Knoten</span>' : ""}</div>`;
 }
 
 /* ============================================================

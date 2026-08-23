@@ -379,3 +379,23 @@ Der dritte Klick nimmt die Sortierung zurück statt eine dritte Richtung zu
 erfinden. Die Ordnung der Ansicht ist meist die nach Dringlichkeit, und das ist
 die einzige, die von selbst das Wichtige nach oben bringt — man muss zu ihr
 zurückfinden können.
+
+**Was eingerichtet ist und was gelaufen ist, sind zwei Auskünfte.** Bei
+Sicherungsaufträgen fällt das besonders auf: `/cluster/backup` nennt die
+Absicht — Zeitplan, Ziel, Umfang —, und nur die `vzdump`-Aufgaben sagen, ob
+heute Nacht etwas gesichert wurde. Beides steht nebeneinander in einer Zeile,
+und die drei Zeitpunkte stehen getrennt: „zuletzt gelaufen" beantwortet nicht,
+ob es geklappt hat, und „zuletzt erfolgreich" nicht, ob seither etwas
+schiefging. Ein Auftrag, der heute Nacht scheiterte und vorgestern glückte, ist
+etwas anderes als einer, der nie lief.
+
+Zusammenführen lassen sich die beiden nur, soweit Proxmox es zulässt: die
+Aufgabe trägt je nach Fassung die Kennung des Auftrags, je nach Fassung nicht.
+Steht sie da, gehören die Zeitpunkte dem Auftrag; sonst gelten die aller
+`vzdump`-Läufe des Knotens — und die Zeile schreibt „vom Knoten" dazu. Eine
+Zuordnung zu behaupten, die die Antwort nicht hergibt, wäre schlimmer als eine
+ungenaue, die sich zu erkennen gibt.
+
+Bewertet wird der **letzte** Lauf, nicht „ein Fehlschlag in den letzten 24
+Stunden". Ist danach einer geglückt, ist die Sache erledigt; eine Meldung, die
+trotzdem stehen bleibt, lernt man zu übergehen — und mit ihr die nächste.

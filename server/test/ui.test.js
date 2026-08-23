@@ -215,11 +215,14 @@ test("Beispiele stehen nur in den Bereichen ohne Anbindung, und zwar markiert", 
   sandbox.window.LeitstandUI.applyLive(zustand);
   const seiten = zeichneAlles(sandbox, ziele);
 
-  for (const ansicht of ["post", "vpn", "compute", "netz"])
+  for (const ansicht of ["post", "vpn", "netz"])
     assert.match(seiten[ansicht], />Beispiel</, `${ansicht} kennzeichnet sein Beispiel nicht`);
 
-  /* Die Ansichten, die aus Messwerten leben, dürfen kein Beispiel enthalten. */
-  for (const ansicht of ["lage", "sites", "links", "cfg", "verwaltung"])
+  /* Die Ansichten, die aus Messwerten leben, dürfen kein Beispiel enthalten.
+     „compute" steht seit den Sicherungsaufträgen dabei: was dort stand, war
+     das letzte Beispiel dieser Ansicht — jetzt liest sie die Aufträge aus
+     Proxmox und die Datastores aus PBS. */
+  for (const ansicht of ["lage", "sites", "compute", "links", "cfg", "verwaltung"])
     assert.ok(!/>Beispiel</.test(seiten[ansicht]), `${ansicht} zeigt ein Beispiel, obwohl es messen kann`);
 });
 
@@ -1585,4 +1588,64 @@ test("Der dritte Klick nimmt die Sortierung zurück", async () => {
   assert.equal(c, null);
   assert.deepEqual(d, { spalte: 3, richtung: 1 }, "eine andere Spalte fängt wieder aufsteigend an");
   assert.deepEqual(schluessel, ["t"]);
+});
+
+/* ============================================================
+   Sicherungsaufträge in der Oberfläche
+   ============================================================ */
+
+async function mitSicherungen(ab = []) {
+  const zustand = await echterZustand();
+  zustand.backups = ab.length ? ab : [
+    { host: "web", hostName: "web", node: "pve-hq-01", id: "backup-1a", name: "Nacht — alles",
+      aktiv: true, zeitplan: "02:00", ziel: "pbs-main", modus: "snapshot", umfang: "alle Gäste",
+      naechster: "2026-08-24T00:00:00.000Z", zuletzt: "2026-08-23T00:12:00.000Z", letzterStatus: "ok",
+      zuletztOk: "2026-08-23T00:12:00.000Z", zuletztFehler: "2026-08-21T00:31:00.000Z",
+      laeufe: 12, quelle: "auftrag", status: "ok" },
+    { host: "web", hostName: "web", node: "pve-hq-01", id: "backup-9f", name: "Wochenende",
+      aktiv: false, zeitplan: "sat 05:00", ziel: "nas", modus: "stop", umfang: "3 Gäste",
+      naechster: null, zuletzt: null, letzterStatus: null,
+      zuletztOk: null, zuletztFehler: null, laeufe: 0, quelle: "knoten", status: "idle" }
+  ];
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "compute";
+  ui.render();
+  return ziele.get("#wrap").innerHTML;
+}
+
+test("Jeder Sicherungsauftrag steht mit Zeitplan, Ziel und seinen drei Zeitpunkten da", async () => {
+  const html = await mitSicherungen();
+  assert.match(html, /Nacht — alles/);
+  assert.match(html, /alle Gäste/);
+  assert.match(html, /pbs-main/);
+  assert.match(html, /02:00/);
+  assert.match(html, /erfolgreich/);
+  assert.ok(!/undefined|NaN/.test(html));
+});
+
+test("Ein Auftrag, der nie lief, sagt das — statt eines Strichs", async () => {
+  const html = await mitSicherungen();
+  assert.match(html, /noch nie gelaufen/);
+  assert.match(html, /abgeschaltet/, "und ein abgeschalteter gibt sich als solcher zu erkennen");
+});
+
+/* Ein Fehlschlag von vorgestern verschwindet nicht, weil heute Nacht alles
+   klappte — er beantwortet eine andere Frage. */
+test("Der letzte Fehlschlag bleibt sichtbar, auch wenn danach einer glückte", async () => {
+  const html = await mitSicherungen();
+  assert.match(html, /21\.08\./, "der Zeitpunkt des Fehlschlags steht in seiner eigenen Spalte");
+});
+
+test("Wo die Zuordnung nur der Knoten hergibt, steht das dabei", async () => {
+  const html = await mitSicherungen([
+    { host: "web", hostName: "web", node: "pve-hq-01", id: "b", name: "Wochenende", aktiv: true,
+      zeitplan: "sat 05:00", ziel: "nas", umfang: "3 Gäste", naechster: null,
+      zuletzt: "2026-08-23T00:12:00.000Z", letzterStatus: "ok",
+      zuletztOk: "2026-08-23T00:12:00.000Z", zuletztFehler: null, laeufe: 4,
+      quelle: "knoten", status: "ok" }
+  ]);
+  assert.match(html, /vom Knoten/);
+  assert.match(html, /Auftragskennung/, "und darunter, warum das so ist");
 });
