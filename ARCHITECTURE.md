@@ -148,7 +148,7 @@ Punkt — steht in [TODO.md](TODO.md).
 | 1b | Verwaltung in der Oberfläche: Standorte, Systeme, Tunnel, Startseite, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
 | 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
 | 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** — inklusive Knotendetails (Kernel, Fassung, Ausstattung, ausstehende Pakete) und jedem Gast mit seiner Auslastung, in einer eigenen Ansicht *Virtualisierung* |
-| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), Peers und Handshake am Tunnel; Zustandstabelle, CARP und pfSense offen |
+| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **beide gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), Peers und Handshake am Tunnel. pfSense über das Paket `pfSense-pkg-API` und zusätzlich mit Gateways, Zustandstabelle und CARP; bei OPNsense fehlen genau diese drei noch |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
 | 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home und Portainer gebaut** — AdGuard zusätzlich mit einer echten Auflösung über UDP/53 als *wesentlicher* Prüfung; TrueNAS, Mailcow und Home Assistant offen — bislang nur Erreichbarkeit |
 | 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | Zeitreihen und Detailseite **gebaut** (eigene Ablage statt VictoriaMetrics, siehe unten); Wartungsfenster, Push und Totmannschalter offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
@@ -264,6 +264,33 @@ Paket auf einer ausgelasteten Leitung ist normal, und eine Schwelle dafür wäre
 geraten. Der Verbindungszustand kommt aus einem eigenen Endpunkt, den ältere
 Fassungen nicht kennen; dann bleibt er unbekannt und wird als Strich gezeigt,
 nicht als „up".
+
+**pfSense: ein Fremdpaket statt einer Shell.** pfSense CE hat keine
+Schnittstelle ab Werk, und es gab zwei Wege: SSH mit festen Lesebefehlen, oder
+das Paket `pfSense-pkg-API`. Gewählt ist das Paket — nicht weil es bequemer
+ist, sondern weil der andere Weg dem Leitstand Fähigkeiten gegeben hätte, die
+er nicht haben soll: einen SSH-Client im Abbild, einen privaten Schlüssel im
+Volume und das Auswerten von Textausgaben, die sich zwischen zwei Fassungen
+ändern dürfen. Der Preis ist ein Fremdpaket auf der Firewall; er ist
+sichtbar und widerrufbar, eine Shell im Überwachungsbehälter wäre es nicht.
+
+Dass das Paket in zwei Fassungen umläuft, die verschieden anmelden und unter
+verschiedenen Pfaden liegen, wird nicht zur Frage an den Betreiber gemacht:
+der Sammler probiert beide durch und nimmt, was antwortet — aber nur bei
+„gibt es nicht" (404). Bei 401 hilft ein anderer Pfad nicht, das ist eine
+Rechtefrage, und weiterzufragen erzeugt nur Last auf einem Gerät, das gerade
+ohnehin nein sagt.
+
+**Was von beiden Firewalls kommt, trägt dieselben Namen.** Die Oberfläche
+unterscheidet nicht zwischen OPNsense und pfSense; das tun die Sammler, und
+zwar so, dass hinterher dieselben Felder dastehen. Wo ein Hersteller etwas
+nicht liefert — Gateways bei OPNsense, der ZFS-Cache bei pfSense —, bleibt die
+Zeile weg statt leer dazustehen: ein „CARP: —" an einem Gerät, bei dem CARP
+gar nicht abgefragt wird, wäre eine Aussage über etwas, wonach niemand gefragt
+hat. Die Rechnung von Zählerständen auf Durchsatz steht deshalb auch nur
+einmal da (`collectors/durchsatz.js`) — zweimal wäre sie zweimal falsch.
+
+**Ein gestoppter Gast hat keine Auslastung.**
 
 **Ein gestoppter Gast hat keine Auslastung.** Proxmox meldet für ihn cpu 0 und
 mem 0 — das ist die Abwesenheit einer Messung. Als „0 %" angezeigt sähe eine

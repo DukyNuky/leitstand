@@ -16,6 +16,7 @@
 
 import { requestJson } from "../http.js";
 import { schwellenFuer } from "../inventory.js";
+import { ausZaehlern, NICHT_PHYSISCH, zahl } from "./durchsatz.js";
 
 export function authHeader(cred) {
   if (!cred) return null;
@@ -160,14 +161,8 @@ function hintFor(r) {
      Zeilen mit network „<Link#N>", die IP-Zeilen sind Teilmengen.
    ============================================================ */
 
-/* Zähler sind kumulativ. Durchsatz gibt es deshalb erst ab dem zweiten
-   Durchlauf — davor steht ein Strich, keine Null.
-
-   Der Schlüssel enthält die Adresse, nicht nur die Kennung: zeigt ein
-   System plötzlich woandershin, antwortet ein anderes Gerät mit ganz
-   anderen Zählerständen. Die Differenz dazwischen wäre kein Durchsatz,
-   sondern eine Zufallszahl. */
-const zaehlerstand = new Map();
+/* Aus den Zählerständen wird der Durchsatz gerechnet — dieselbe Rechnung
+   wie bei pfSense und deshalb in durchsatz.js, nicht hier. */
 const zaehlerSchluessel = host => host.id + "@" + baseUrl(host);
 
 export async function collectOpnsense(host, cred, settings) {
@@ -314,14 +309,13 @@ function schnittstellen(out, host, d, uebersichtRoh) {
     out.thrIn = null; out.thrOut = null; out.interfaces = null; return;
   }
 
-  const zusatz = schnittstellenUebersicht(uebersichtRoh);
   const physisch = [];
   for (const [schluessel, w] of Object.entries(stat)) {
     /* Nur die Zeilen auf Verbindungsebene tragen die Gesamtzähler; die
        Zeilen je IP-Netz sind Teilmengen davon. */
     if (!w || !String(w.network || "").startsWith("<Link#")) continue;
     const name = w.name || schluessel;
-    if (/^(lo|enc|pflog|pfsync|ipfw)/.test(name)) continue;
+    if (NICHT_PHYSISCH.test(name)) continue;
     const label = (String(schluessel).match(/^\[([^\]]+)\]/) || [, name])[1];
     physisch.push({
       name, label,
@@ -332,77 +326,10 @@ function schnittstellen(out, host, d, uebersichtRoh) {
       kollisionen: zahl(w["collisions"]) || 0
     });
   }
-  if (!physisch.length) { out.thrIn = null; out.thrOut = null; out.interfaces = null; return; }
 
-  const jetzt = Date.now();
-  const schluessel = zaehlerSchluessel(host);
-  const vorher = zaehlerstand.get(schluessel);
-  zaehlerstand.set(schluessel, {
-    t: jetzt,
-    je: Object.fromEntries(physisch.map(p => [p.name, {
-      rx: p.rx, tx: p.tx, rxPakete: p.rxPakete, txPakete: p.txPakete,
-      fehler: p.fehler, verworfen: p.verworfen
-    }]))
-  });
-
-  const sekunden = vorher ? (jetzt - vorher.t) / 1000 : 0;
-  /* Zuwachs eines Zählers seit der letzten Abfrage — null, solange es
-     keine letzte gibt, und null nach einem Zählerrücksetzer. */
-  const zuwachs = (name, feld, wert) => {
-    const alt = vorher?.je?.[name]?.[feld];
-    if (alt == null || wert == null || sekunden <= 0) return null;
-    const delta = wert - alt;
-    return delta < 0 ? null : delta;
-  };
-  const mbit = (name, feld, wert) => {
-    const delta = zuwachs(name, feld, wert);
-    return delta == null ? null : Math.round((delta * 8) / sekunden / 1000) / 1000;
-  };
-  const proSekunde = (name, feld, wert) => {
-    const delta = zuwachs(name, feld, wert);
-    return delta == null ? null : Math.round(delta / sekunden);
-  };
-
-  out.interfaces = physisch.map(p => {
-    const z = zusatz.get(p.name) || {};
-    return {
-      name: p.name,
-      label: p.label,
-      beschreibung: z.beschreibung || null,
-      link: z.link || null,                        /* "up" / "down" / null = unbekannt */
-      mtu: z.mtu ?? null,
-      in: mbit(p.name, "rx", p.rx),                /* Mbit/s herein */
-      out: mbit(p.name, "tx", p.tx),               /* Mbit/s hinaus */
-      inPps: proSekunde(p.name, "rxPakete", p.rxPakete),
-      outPps: proSekunde(p.name, "txPakete", p.txPakete),
-      rxBytes: p.rx, txBytes: p.tx,
-      fehler: p.fehler,
-      fehlerNeu: zuwachs(p.name, "fehler", p.fehler),
-      verworfen: p.verworfen,
-      verworfenNeu: zuwachs(p.name, "verworfen", p.verworfen),
-      kollisionen: p.kollisionen
-    };
-  });
-
-  /* Gibt es eine ausdrücklich als WAN beschriebene Schnittstelle, zählt
-     die — sonst die Summe über alles Physische. */
-  const wan = out.interfaces.find(i => /^wan/i.test(i.label));
-  const summe = f => {
-    const bekannt = out.interfaces.map(i => i[f]).filter(v => v != null);
-    return bekannt.length ? Math.round(bekannt.reduce((a, b) => a + b, 0) * 1000) / 1000 : null;
-  };
-  out.thrIn = wan ? wan.in : summe("in");
-  out.thrOut = wan ? wan.out : summe("out");
-  out.thrQuelle = wan ? wan.label : "alle Schnittstellen";
-
-  /* Zuwachs an Fehlern oder Verwürfen ist eine Notiz, keine Ampel: ein
-     einzelnes verworfenes Paket auf einer ausgelasteten Leitung ist
-     normal, und eine Schwelle dafür wäre geraten. Sichtbar gehört es
-     trotzdem — an einer schlechten Leitung wächst diese Zahl stetig. */
-  const auffaellig = out.interfaces.filter(i => (i.fehlerNeu || 0) + (i.verworfenNeu || 0) > 0);
-  out.ifNote = auffaellig.length
-    ? auffaellig.map(i => `${i.label}: ${(i.fehlerNeu || 0)} Fehler, ${(i.verworfenNeu || 0)} verworfen`).join(" · ")
-    : null;
+  /* Rechnen tut durchsatz.js — für pfSense gilt dieselbe Rechnung, und
+     zweimal wäre sie zweimal falsch. */
+  Object.assign(out, ausZaehlern(zaehlerSchluessel(host), physisch, schnittstellenUebersicht(uebersichtRoh)));
 }
 
 /* Die Schnittstellenübersicht ist zwischen den Fassungen unterschiedlich
@@ -489,8 +416,3 @@ function ampel(out, grenze) {
   if (hinweise.length) out.note = hinweise.join(" · ");
 }
 
-const zahl = v => {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};

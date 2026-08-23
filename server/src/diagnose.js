@@ -20,6 +20,7 @@ import { requestJson } from "./http.js";
 import * as Opn from "./collectors/opnsense.js";
 import * as Adg from "./collectors/adguard.js";
 import * as Ptn from "./collectors/portainer.js";
+import * as Pfs from "./collectors/pfsense.js";
 
 /* Sammler, die sich gleich verhalten: eine Kopfzeile zur Anmeldung, feste
    Pfade, JSON zurück. Für die gibt es einen gemeinsamen Weg (diagnoseEinfach)
@@ -34,6 +35,17 @@ const EINFACH = {
     modul: Ptn, name: "Portainer",
     fehlt: "Es ist kein API-Token hinterlegt. In Portainer oben rechts unter „My account“ → „Access tokens“ "
       + "einen erzeugen und unter Verwaltung → System bearbeiten eintragen."
+  },
+  /* pfSense mit `felder: true`: die Antwortgestalt des Pakets pfSense-pkg-API
+     hängt an dessen Fassung, und sie ist nirgends verbindlich beschrieben.
+     Der Sammler liest deshalb nachsichtig — und wenn ein Feld trotzdem fehlt,
+     steht hier, wie die Antwort dieses Geräts wirklich aussieht. Daran lässt
+     er sich nachziehen, statt zu raten. */
+  pfsense: {
+    modul: Pfs, name: "pfSense", felder: true,
+    fehlt: "Es ist kein API-Schlüssel hinterlegt. pfSense hat ab Werk keine Schnittstelle — gelesen wird über das "
+      + "Paket pfSense-pkg-API (System → Package Manager). Danach unter System → API einen Schlüssel erzeugen und "
+      + "unter Verwaltung → System bearbeiten eintragen."
   }
 };
 
@@ -185,7 +197,7 @@ async function diagnoseOpnsense(host, cred, bericht) {
    (Portainer). Eine fest eingetragene 1 wäre geraten — und bei einer
    Portainer-Installation, in der die erste Umgebung gelöscht wurde,
    schlicht falsch. */
-async function diagnoseEinfach(host, cred, bericht, { modul, name, fehlt }) {
+async function diagnoseEinfach(host, cred, bericht, { modul, name, fehlt, felder = false }) {
   bericht.ziel = modul.baseUrl(host);
   const kopf = modul.authHeader(cred);
   bericht.zugang = kopfForm(cred, kopf);
@@ -211,7 +223,9 @@ async function diagnoseEinfach(host, cred, bericht, { modul, name, fehlt }) {
       fehler: r.ok ? null : r.error || "unbekannter Fehler",
       antwort: r.ok ? null : kurzfassung(r.body),
       befund: r.ok ? modul.befund(r.pfad || wege[0], r.data) : null,
-      felder: null
+      /* Nur wo die Antwortgestalt unsicher ist — sonst bläht es den
+         Bericht auf, ohne eine Frage zu beantworten. */
+      felder: r.ok && felder ? gestalt(r.data) : null
     };
     /* Verglichen wird mit dem eingesetzten Pfad, nicht mit der Vorlage:
        sonst stünde bei jedem {umgebung} ein „antwortet unter …", das nur

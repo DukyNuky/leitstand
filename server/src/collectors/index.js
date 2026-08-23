@@ -7,6 +7,7 @@
 
 import { collectPve, collectPbs, collectPmg, TESTERS as PROXMOX_TESTERS } from "./proxmox.js";
 import { collectOpnsense, testConnection as testOpnsense } from "./opnsense.js";
+import { collectPfsense, testConnection as testPfsense } from "./pfsense.js";
 import { collectAdguard, testConnection as testAdguard } from "./adguard.js";
 import { collectPortainer, testConnection as testPortainer } from "./portainer.js";
 
@@ -25,6 +26,7 @@ export function makeCollectors(secrets) {
     pbs: wrap(collectPbs),
     pmg: wrap(collectPmg),
     opnsense: wrap(collectOpnsense),
+    pfsense: wrap(collectPfsense),
     adguard: wrap(collectAdguard),
     portainer: wrap(collectPortainer)
   };
@@ -33,6 +35,7 @@ export function makeCollectors(secrets) {
 export const TESTERS = {
   ...PROXMOX_TESTERS,
   opnsense: (h, c) => testOpnsense(h, c),
+  pfsense: (h, c) => testPfsense(h, c),
   adguard: (h, c) => testAdguard(h, c),
   portainer: (h, c) => testPortainer(h, c)
 };

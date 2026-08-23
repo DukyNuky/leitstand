@@ -51,7 +51,11 @@ export class Secrets {
   }
 }
 
-export const SECRET_FIELDS = new Set(["secret", "password", "token", "apiKey"]);
+/* Was nie im Klartext zurückgegeben wird. `key` steht mit dabei, weil er
+   je nach Gerät das Geheimnis *ist*: bei pfSense ist der API-Schlüssel
+   die ganze Anmeldung, bei OPNsense ihre Hälfte. Beides gehört nicht in
+   eine Antwort, die eine Browserseite anfordern kann. */
+export const SECRET_FIELDS = new Set(["secret", "password", "token", "apiKey", "key", "clientToken"]);
 function mask(v) {
   const s = String(v ?? "");
   if (!s) return "";

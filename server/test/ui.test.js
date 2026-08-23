@@ -1086,3 +1086,141 @@ test("Löst er nicht auf, steht der Befund im Klartext auf der Kachel", async ()
   assert.match(html, /Löst nicht auf/);
   assert.match(html, /keine Antwort über UDP\/53/);
 });
+
+/* ============================================================
+   pfSense: dieselbe Ansicht, mehr Zahlen
+
+   Der Sammler sorgt dafür, dass beide Firewall-Typen dieselben Feldnamen
+   liefern — die Oberfläche muss sie nicht auseinanderhalten. Was pfSense
+   zusätzlich hergibt (Gateways, Zustandstabelle, CARP), bekommt eigene
+   Zeilen; bei OPNsense bleiben sie weg statt leer dazustehen.
+   ============================================================ */
+function pfsenseMit(extra = {}) {
+  return {
+    id: "fw-02", name: "fw-02", type: "pfsense", site: "hq", role: "pfSense · Firewall",
+    status: "crit", ms: 9, hist: [9], monitored: true, checks: [], version: "2.7.2",
+    apiFassung: "v2", ram: 43, disk: 61, uptime: "3 T 20 h", load: "0.68, 0.41, 0.35",
+    states: 4210, statesMax: 98000, statesPct: 4, carp: "MASTER", carpWartung: false,
+    schwellen: { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 },
+    gateways: [
+      { name: "WAN_DHCP", status: "online", monitor: "1.1.1.1", quelle: "192.0.2.10", rtt: 8.4, stddev: 1.1, verlust: 0 },
+      { name: "LTE_BACKUP", status: "down", monitor: "8.8.8.8", quelle: "198.51.100.4", rtt: null, stddev: null, verlust: 100 }
+    ],
+    interfaces: [
+      { name: "igb1", label: "WAN", beschreibung: "WAN", link: "down", mtu: 1492,
+        in: 12.5, out: 3.25, inPps: 1400, outPps: 900,
+        rxBytes: 562_774_671_970, txBytes: 78_304_533_217,
+        fehler: 17, fehlerNeu: 0, verworfen: 0, verworfenNeu: 0, kollisionen: 0 }
+    ],
+    ...extra
+  };
+}
+
+test("Eine pfSense steht in derselben Tabelle wie eine OPNsense", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(pfsenseMit());
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Netzansicht");
+  assert.match(html, /fw-02/);
+  assert.match(html, /2\.7\.2/);
+  assert.match(html, /CARP MASTER/);
+  assert.match(html, /4210 \/ 98000/, "die Zustandstabelle als Verhältnis");
+  assert.match(html, /igb1/, "die Schnittstelle steht in derselben Tabelle wie bei OPNsense");
+});
+
+test("Gateways bekommen eine eigene Tabelle, der ausgefallene fällt auf", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(pfsenseMit());
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.match(html, /Gateways/);
+  assert.match(html, /WAN_DHCP/);
+  assert.match(html, /LTE_BACKUP/);
+  assert.match(html, /8\.4 ms/);
+  assert.match(html, /100 %/, "voller Verlust am ausgefallenen Uplink");
+  assert.match(html, /1 auffällig/);
+});
+
+/* Eine OPNsense liefert diese drei nicht. Eine Zeile „CARP: —" wäre dort
+   eine Aussage über etwas, wonach gar nicht gefragt wurde. */
+test("Bei OPNsense bleiben Gateways und CARP weg statt leer dazustehen", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(firewallMit([
+    { name: "vtnet0", label: "LAN", beschreibung: "LAN", link: "up", mtu: 1500,
+      in: 1, out: 1, inPps: 10, outPps: 10, rxBytes: 100, txBytes: 100,
+      fehler: 0, fehlerNeu: 0, verworfen: 0, verworfenNeu: 0, kollisionen: 0 }
+  ]));
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.equal(/<h3>Gateways<\/h3>/.test(html), false, "ohne gemeldete Gateways keine Gateway-Tabelle");
+  assert.match(html, /vtnet0/);
+});
+
+test("Die Detailseite zeigt für pfSense Zustandstabelle, CARP und Gateways", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(pfsenseMit());
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.openSystem("fw-02");
+  ui.state.detail.busy = false;
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert auf der Detailseite");
+  assert.match(html, /Zustandstabelle/);
+  assert.match(html, /MASTER/);
+  assert.match(html, /pfSense-pkg-API v2/, "woher die Zahlen kommen, gehört dazu");
+  assert.match(html, /Durchsatz je Schnittstelle/);
+});
+
+test("Das Formular kennt beide Anmeldewege des API-Pakets", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(pfsenseMit());
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  vm.runInContext("openForm('hosts','edit','fw-02')", sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /pfSense-pkg-API/);
+  assert.match(html, /data-cred="key"/);
+  assert.match(html, /data-cred="clientId"/);
+  /* Der Schlüssel ist bei pfSense die ganze Anmeldung — er darf nie
+     vorbelegt in einer Browserseite stehen. */
+  assert.match(html, /data-cred="key" type="password"[^>]*value=""/);
+});
+
+/* Die Typtabelle der Oberfläche ist eine Abschrift der im Dienst — und
+   eine Abschrift läuft auseinander. Genau das ist beim pfSense-Sammler
+   passiert: der Dienst konnte längst mehr, die Oberfläche bot die
+   Zugangsfelder nicht an, und zu sehen war nur, dass nichts ankommt. */
+test("Die Typen der Oberfläche stimmen mit denen des Dienstes überein", async () => {
+  const { sandbox } = ladeUi();
+  /* Aus der VM kommen Felder mit fremdem Prototyp — `assert/strict`
+     vergleicht den mit. Also über die Werte gehen, nicht über die Felder. */
+  const ui = [...vm.runInContext("HOST_TYPES", sandbox)].map(t => [...t]);
+  const { TYPES } = await import("../src/inventory.js");
+
+  assert.equal(ui.map(t => t[0]).sort().join(" "), Object.keys(TYPES).sort().join(" "), "dieselben Typen");
+  for (const [id, label, port, hatApi] of ui) {
+    assert.equal(label, TYPES[id].label, `Beschriftung von ${id}`);
+    assert.equal(port, TYPES[id].port, `Standardport von ${id}`);
+    assert.equal(hatApi, !!TYPES[id].api,
+      `„${id}“ hat im Dienst ${TYPES[id].api ? "einen" : "keinen"} Sammler — die Oberfläche sagt das Gegenteil`);
+  }
+});

@@ -66,15 +66,27 @@ sonst bleibt eine schleichende Config-Sync-Abweichung unsichtbar.
 
 | | |
 |---|---|
-| Zugang | CE hat keine offizielle REST-Schnittstelle. Zwei Wege: **(a)** SSH mit eigenem Schlüssel und `pfSsh.php playback` bzw. `pfctl -si`, `wg show all dump` — robust, versionsunabhängig; **(b)** Paket `pfSense-pkg-API` (Fremdprojekt), bequemer, aber zusätzliche Angriffsfläche |
-| Empfehlung | (a) für die Bestandsgeräte; der Prober braucht ohnehin SSH für `wg show` |
-| Kennzahlen | Version, Zustandstabelle, Interface-Zähler, WireGuard-Peers, Gateway-Status |
+> **Gebaut** — `server/src/collectors/pfsense.js`, über das Paket
+> `pfSense-pkg-API`. Damit fällt pfSense in dasselbe Muster wie alles andere:
+> eine Kopfzeile, feste Pfade, JSON — kein SSH, kein Auswerten von
+> Textausgaben, keine erhöhten Rechte im Behälter.
+
+| | |
+|---|---|
+| Zugang | CE hat keine Schnittstelle ab Werk. Gelesen wird über das Fremdpaket `pfSense-pkg-API`: **Fassung 2** meldet mit `X-API-Key` an und liegt unter `/api/v2/…`, **Fassung 1** mit `Authorization: <client-id> <token>` unter `/api/v1/…`. Der Sammler probiert beide durch und nimmt, was antwortet — eingetragen werden muss nur der Zugang |
+| Verworfener Weg | SSH mit `pfctl -si` und `wg show all dump`. Wäre versionsunabhängig, verlangte aber einen SSH-Client im Abbild, einen privaten Schlüssel im Volume und das Auswerten von Textausgaben. Der Dienst soll nur lesen und sonst nichts können |
+| Endpunkte | `/status/system`, `/system/version`, `/status/interfaces`, `/status/gateways`, `/firewall/states/size`, `/status/carp`, `/status/wireguard/peers` — je mit den Schreibweisen beider Paketfassungen |
+| Kennzahlen | Fassung und ob eine neuere bereitsteht, Laufzeit, Last, Speicher, Platte, Temperatur · **je Schnittstelle** dieselben Zahlen wie bei OPNsense, den Verbindungszustand liefert pfSense gleich mit · **Gateways** mit Zustand, Latenz, Schwankung und Verlust · **Zustandstabelle** belegt/maximal · **CARP**-Rolle und Wartungsmodus · WireGuard-Peers |
+| Ampel | Gateway `down` → rot · Zustandstabelle > 90 % → rot, > 80 % → gelb · Verlust ≥ 2 % oder Zustand `loss`/`delay` → gelb · Platte und RAM nach den Schwellwerten (je System überschreibbar) · CARP-Rolle und ausstehende Aktualisierung: **Notiz, keine Ampel** |
+| Fallstrick | Die Antwortfelder stammen aus den pfSense-Internas und sind nirgends verbindlich beschrieben. Jedes Feld kennt deshalb mehrere mögliche Namen; was nicht kommt, bleibt null. Die **Diagnose zeigt zu jedem Aufruf die tatsächlichen Feldnamen** — daran lässt sich der Sammler nachziehen, statt zu raten |
+| Fallstrick | Ob das Paket den WireGuard-**Handshake** führt, hängt an seiner Fassung. Führt es ihn nicht, stehen die Peers trotzdem da — aber ausdrücklich *ohne* Handshake-Alter. Ein Peer, über den nichts bekannt ist, sähe sonst genauso aus wie einer, der sich nie gemeldet hat, und daran hängt ein Tunnelzustand |
 | Meldet per Mail | `System → Advanced → Notifications`, zusätzlich das Paket *Notes/Status Email* für Gateway-Alarme |
 
 ## WireGuard — alle 7 Firewalls
 
 Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
-(`/api/wireguard/service/show` bzw. `wg show all dump`).
+(OPNsense: `/api/wireguard/service/show`, pfSense: `/status/wireguard/peers`
+über das API-Paket).
 
 | | |
 |---|---|
@@ -178,7 +190,7 @@ Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
 Proxmox VE/PMG       Benutzer leitstand@pve, Rolle PVEAuditor auf / mit Vererbung, Token ohne Ablauf
 Proxmox Backup       Benutzer leitstand@pbs, Rolle Audit auf / mit Propagate — auch für die Token-ID selbst
 OPNsense             System → Access → Users → leitstand, Gruppe mit Lesezugriff, API-Key erzeugen
-pfSense              eigener SSH-Schlüssel, Benutzer ohne Shell-Rechte darüber hinaus
+pfSense              Paket pfSense-pkg-API installieren, System → API → Keys, Benutzer nur mit Leserechten
 AdGuard              zusätzlicher Benutzer in AdGuardHome.yaml (users), Benutzer + Passwort eintragen
 Portainer            Benutzer leitstand, Rolle „read-only“ je Umgebung, Token unter My account → Access tokens
 TrueNAS              Credentials → API Keys

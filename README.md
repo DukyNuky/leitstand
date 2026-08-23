@@ -151,6 +151,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
 | **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, WireGuard-Peers mit Handshake-Alter — und **jede Schnittstelle einzeln**: Durchsatz ↓/↑, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand und Zuwachs), Verbindungszustand und MTU, mit Verlauf über Tage je Leitung |
+| **pfSense** | dasselbe, über das Paket `pfSense-pkg-API` (beide Fassungen werden gefunden) — und darüber hinaus **Gateways** mit Zustand, Latenz und Verlust, die **Zustandstabelle** und die **CARP**-Rolle. Ein ausgefallenes Gateway ist die Meldung, die von außen niemand sieht: die Firewall selbst antwortet dabei tadellos |
 | **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** und **ob er über UDP/53 wirklich auflöst** |
 | **Portainer** | Umgebungen erreichbar/gesamt, Stacks, Container laufend/gestoppt, `unhealthy`, Neustartschleifen und Exit 137 (Speichergrenze) — mit dem **Namen** des Containers, der klemmt |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
@@ -159,7 +160,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Schwellwerte je System** | Belegungsgrenzen gelten global — und dürfen an einem einzelnen System abweichen. Für den Host, der bekanntermaßen bei 93 % läuft, weil es nicht anders geht |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
-Alles andere (pfSense, TrueNAS, Mailcow, Home Assistant) wird bisher nur auf
+Alles andere (TrueNAS, Mailcow, Home Assistant) wird bisher nur auf
 Erreichbarkeit geprüft. Die Oberfläche zeigt für
 noch unbekannte Kennzahlen einen Strich — **nie einen erfundenen Wert.**
 
@@ -326,6 +327,14 @@ Die häufigsten Befunde:
 | `Kennung kommt in der Knotenliste nicht vor` | die Kennung muss dem Knotennamen im Cluster entsprechen |
 | `404` | falscher Port: VE 8006, Backup Server 8007, Mail Gateway 8006 |
 
+**pfSense** braucht zuerst das Paket `pfSense-pkg-API` (System → Package Manager);
+danach unter *System → API* einen Schlüssel erzeugen. Welche Fassung des Pakets
+läuft, findet der Leitstand selbst heraus — Fassung 2 meldet mit `X-API-Key` an,
+Fassung 1 mit Client-ID und Token. Die Antwortfelder des Pakets sind nirgends
+verbindlich beschrieben; die Diagnose zeigt deshalb zu jedem geglückten Aufruf
+die **tatsächlichen Feldnamen**. Fehlt danach eine Zahl in der Oberfläche, ist
+das der Bericht, an dem sich der Sammler nachziehen lässt.
+
 **OPNsense** meldet sich anders an: HTTP Basic mit API-Schlüssel und Secret, beide
 aus derselben Datei, die OPNsense unter *System → Access → Users* erzeugt. Die
 Diagnose kennt die Pfade in beiden Schreibweisen (`systemInformation` der
@@ -433,8 +442,9 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
 
 **Am Werkzeug:**
 
-6. OPNsense: Zustandstabelle, CARP-Rolle und HAProxy-Backends (die
-   Schnittstellen sind gebaut) — und ein Sammler für pfSense, für das es
-   bislang gar keinen gibt
+6. OPNsense: Zustandstabelle, CARP-Rolle, Gateway-Status und
+   HAProxy-Backends — Schnittstellen sind gebaut, und für die anderen drei
+   wartet die Oberfläche schon: bei pfSense werden dieselben Spalten
+   bereits gefüllt
 7. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
 8. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen

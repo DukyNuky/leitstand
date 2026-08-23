@@ -41,7 +41,7 @@ export const TYPES = {
   pbs:       { label: "Proxmox Backup Server",port: 8007, api: "proxmox",   zugang: "API-Token" },
   pmg:       { label: "Proxmox Mail Gateway", port: 8006, api: "proxmox",   zugang: "API-Token" },
   opnsense:  { label: "OPNsense",             port: 443,  api: "opnsense",  zugang: "API-Schlüssel und Secret" },
-  pfsense:   { label: "pfSense",              port: 443,  api: null },
+  pfsense:   { label: "pfSense",              port: 443,  api: "pfsense",   zugang: "API-Schlüssel (Paket pfSense-pkg-API)" },
   truenas:   { label: "TrueNAS SCALE",        port: 443,  api: null },
   mailcow:   { label: "Mailcow",              port: 443,  api: null },
   adguard:   { label: "AdGuard Home",         port: 443,  api: "adguard",   zugang: "Benutzer und Passwort" },

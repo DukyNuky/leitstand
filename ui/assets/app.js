@@ -952,7 +952,7 @@ function backupPanel() {
    ============================================================ */
 function viewNetz() {
   if (!state.hosts.length) return onboarding();
-  const fws = visibleHosts().filter(h => ["opnsense", "pfsense"].includes(h.type));
+  const fws = visibleHosts().filter(h => FIREWALL.has(h.type));
   const opn = fws.filter(f => f.type === "opnsense").length;
   const pf = fws.filter(f => f.type === "pfsense").length;
 
@@ -968,31 +968,79 @@ function viewNetz() {
     <div class="panel-body panel-body--flush tablewrap">
       <table class="t"><thead><tr>
         <th style="width:34px"></th><th>Gerät</th><th>Standort</th><th>Fassung</th>
-        <th>Speicher</th><th>Platte</th><th>Durchsatz</th><th>WG-Peers</th>
+        <th>Speicher</th><th>Platte</th><th>Zustandstabelle</th><th>Durchsatz</th><th>WG-Peers</th>
         <th>Zertifikat</th><th class="right">Antwortzeit</th></tr></thead><tbody>
       ${fws.length ? fws.map(f => `<tr data-sev="${f.status}" data-action="inspect" data-kind="host" data-id="${f.id}">
         <td class="sev">${dot(f.status)}</td>
-        <td><div class="mono">${esc(f.name)}</div><div class="t-sub">${esc(f.role)}</div></td>
+        <td><div class="mono">${esc(f.name)}</div><div class="t-sub">${esc(f.role)}${
+          f.carp ? ` · <span style="color:var(--${f.carpWartung ? "warn" : "faint"})">CARP ${esc(f.carp)}</span>` : ""}</div></td>
         <td>${chip("plain", siteShort(f.site))}</td>
         <td class="mono">${fassungsZelle(f)}</td>
-        <td style="min-width:120px">${f.ram != null ? meter("", f.ram, { text: f.ram + " %" }) : '<span class="faint">—</span>'}</td>
-        <td style="min-width:120px">${f.disk != null ? meter("", f.disk, { text: f.disk + " %", warn: 80, crit: 90 }) : '<span class="faint">—</span>'}</td>
+        <td style="min-width:120px">${f.ram != null ? meter("", f.ram, { text: f.ram + " %", warn: f.schwellen?.ram_warn, crit: f.schwellen?.ram_crit }) : '<span class="faint">—</span>'}</td>
+        <td style="min-width:120px">${f.disk != null ? meter("", f.disk, { text: f.disk + " %", warn: f.schwellen?.disk_warn, crit: f.schwellen?.disk_crit }) : '<span class="faint">—</span>'}</td>
+        <td style="min-width:110px">${f.statesPct != null
+          ? meter("", f.statesPct, { text: `${f.states} / ${f.statesMax}`, warn: 80, crit: 90 })
+          : '<span class="faint">—</span>'}</td>
         <td class="mono faint">${durchsatzZelle(f)}</td>
         <td class="mono">${wgZelle(f)}</td>
         <td>${certCell(f)}</td>
         <td class="right">${histCell(f)}</td>
-      </tr>`).join("") : '<tr><td colspan="10"><div class="empty">Keine Firewall in dieser Auswahl.</div></td></tr>'}
+      </tr>`).join("") : '<tr><td colspan="11"><div class="empty">Keine Firewall in dieser Auswahl.</div></td></tr>'}
       </tbody></table>
     </div>
     <div class="panel-note">${mitApi
-      ? `Zustandstabelle und CARP-Rolle fehlen noch — sie liegen hinter weiteren Endpunkten der Firewall-API.
-         Für pfSense gibt es bislang gar keinen Sammler; dort wird nur von außen gemessen.`
-      : `Für Kennzahlen braucht es einen API-Schlüssel: bei OPNsense unter
-         <span class="mono">System → Access → Users</span> erzeugen und hier unter <b>Verwaltung</b> hinterlegen.
-         Ohne ihn bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat.`}</div>
+      ? `Bei OPNsense fehlen noch Zustandstabelle und CARP-Rolle — sie liegen hinter weiteren Endpunkten;
+         bei pfSense stehen beide, weil das API-Paket sie mitliefert. Die Spalten bleiben dort leer, wo nichts
+         abgefragt wurde, statt eine Null zu zeigen.`
+      : `Für Kennzahlen braucht es einen API-Zugang: bei OPNsense unter
+         <span class="mono">System → Access → Users</span> einen Schlüssel erzeugen, bei pfSense zuerst das Paket
+         <span class="mono">pfSense-pkg-API</span> installieren. Beides dann unter <b>Verwaltung</b> hinterlegen.
+         Ohne bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat.`}</div>
   </div>`;
 
-  return firewalls + schnittstellenPanel(fws) + haproxyPanel();
+  return firewalls + gatewayPanel(fws) + schnittstellenPanel(fws) + haproxyPanel();
+}
+
+/* Die Gateways aller Firewalls, die welche melden.
+
+   Ein ausgefallener Uplink ist der Fall, bei dem die Firewall selbst
+   tadellos antwortet und trotzdem nichts mehr geht. Von außen ist das
+   nicht zu sehen — die Firewall sagt es einem, wenn man sie fragt. */
+function gatewayPanel(fws) {
+  const mit = fws.filter(f => (f.gateways || []).length);
+  if (!mit.length) return "";
+  const zeilen = mit.flatMap(f => f.gateways.map(g => ({ ...g, fw: f.name, fwId: f.id })));
+  const ampelVon = g => /down|offline/.test(g.status) ? "crit"
+    : /loss|delay|warn/.test(g.status) || (g.verlust ?? 0) >= 2 ? "warn"
+    : /online|up|none/.test(g.status) ? "ok" : "idle";
+  const kaputt = zeilen.filter(g => ampelVon(g) !== "ok").length;
+
+  return `<div class="panel">
+    <div class="panel-head"><h3>Gateways</h3>
+      <span class="hint">${zeilen.length} auf ${mit.length} Gerät(en)</span>
+      <div class="spacer"></div>
+      ${kaputt ? `<span class="chip chip--warn">${kaputt} auffällig</span>` : ""}
+      <span class="hint">von der Firewall gemessen, nicht von hier</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th><th>Gateway</th><th>Gerät</th><th>Zustand</th><th>Überwacht</th>
+        <th class="right">Latenz</th><th class="right">Verlust</th>
+      </tr></thead><tbody>
+      ${zeilen.map(g => `<tr data-sev="${ampelVon(g)}" data-action="inspect" data-kind="host" data-id="${esc(g.fwId)}">
+        <td class="sev">${dot(ampelVon(g))}</td>
+        <td><div class="mono">${esc(g.name)}</div>${g.quelle ? `<div class="t-sub mono">von ${esc(g.quelle)}</div>` : ""}</td>
+        <td class="mono faint">${esc(g.fw)}</td>
+        <td>${chip(ampelVon(g), g.status)}</td>
+        <td class="mono faint">${esc(nz(g.monitor))}</td>
+        <td class="right mono">${nz(g.rtt, " ms")}</td>
+        <td class="right mono" style="${(g.verlust ?? 0) >= 2 ? "color:var(--warn)" : ""}">${nz(g.verlust, " %")}</td>
+      </tr>`).join("")}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Diese Zahlen misst die Firewall selbst gegen ihre Monitor-Adresse — sie sagen etwas über
+      die Leitung <em>hinter</em> der Firewall, was der Leitstand von innen nie sehen könnte. Bislang liefert nur
+      pfSense sie; bei OPNsense liegt der Gateway-Status hinter einem Endpunkt, der noch nicht abgefragt wird.</div>
+  </div>`;
 }
 
 /* Alle Schnittstellen aller Firewalls in einer Tabelle.
@@ -1084,6 +1132,40 @@ function menge(n) {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${e[i]}`;
 }
 
+/* Beide Firewall-Typen werden gleich behandelt, wo sie dasselbe liefern.
+   Der Sammler sorgt dafür, dass die Feldnamen übereinstimmen — eine
+   Firewall bleibt eine Firewall, gleich von wem sie ist. */
+const FIREWALL = new Set(["opnsense", "pfsense"]);
+
+/* Gateways — das hat bislang nur pfSense.
+
+   Es ist die Angabe, die einen ausgefallenen Uplink am schnellsten
+   verrät, und sie sagt mehr als „erreichbar": „online mit 0,4 % Verlust"
+   ist etwas anderes als „down", und beides sieht von außen gleich aus,
+   solange die Firewall selbst antwortet. */
+function gatewayTabelle(h) {
+  const gws = h.gateways || [];
+  if (!gws.length) return "";
+  const ampelVon = g => /down|offline/.test(g.status) ? "crit"
+    : /loss|delay|warn/.test(g.status) || (g.verlust ?? 0) >= 2 ? "warn"
+    : /online|up|none/.test(g.status) ? "ok" : "idle";
+  return `<div class="panel-body panel-body--flush tablewrap">
+    <table class="t"><thead><tr>
+      <th style="width:34px"></th><th>Gateway</th><th>Zustand</th><th>Überwacht</th>
+      <th class="right">Latenz</th><th class="right">Schwankung</th><th class="right">Verlust</th>
+    </tr></thead><tbody>
+    ${gws.map(g => `<tr data-sev="${ampelVon(g)}">
+      <td class="sev">${dot(ampelVon(g))}</td>
+      <td><div class="mono">${esc(g.name)}</div>${g.quelle ? `<div class="t-sub mono">von ${esc(g.quelle)}</div>` : ""}</td>
+      <td>${chip(ampelVon(g), g.status)}${g.substatus && g.substatus !== "none" ? ` <span class="faint">${esc(g.substatus)}</span>` : ""}</td>
+      <td class="mono faint">${esc(nz(g.monitor))}</td>
+      <td class="right mono">${nz(g.rtt, " ms")}</td>
+      <td class="right mono faint">${nz(g.stddev, " ms")}</td>
+      <td class="right mono" style="${(g.verlust ?? 0) >= 2 ? "color:var(--warn)" : ""}">${nz(g.verlust, " %")}</td>
+    </tr>`).join("")}
+    </tbody></table></div>`;
+}
+
 /* Kurzfassung der tatsächlich gelaufenen Prüfungen — was übersprungen
    wurde, wird durchgestrichen, damit ICMP-losigkeit auffällt. */
 function checkList(h) {
@@ -1103,7 +1185,11 @@ function fassungsZelle(f) {
   if (!f.version) return '<span class="faint">—</span>';
   const marken = [];
   if (f.needsReboot) marken.push(chip("warn", "Neustart"));
-  if (f.updates) marken.push(chip("info", f.updates + " Updates"));
+  /* pfSense aktualisiert als Ganzes, OPNsense paketweise — „1 Updates"
+     wäre bei ersterem schlicht falsches Deutsch und bei zweiterem eine
+     Untertreibung. */
+  if (f.updates === 1) marken.push(chip("info", "1 Update"));
+  else if (f.updates) marken.push(chip("info", f.updates + " Updates"));
   if (f.majorUpgrade) marken.push(chip("info", "→ " + f.majorUpgrade));
   return `${esc(f.version)}${marken.length ? `<div class="row" style="gap:4px;margin-top:3px">${marken.join("")}</div>` : ""}`;
 }
@@ -2229,20 +2315,35 @@ function kennzahlenPanel(h) {
     </div>`;
   }
 
-  if (h.type === "opnsense" && (h.interfaces || h.disk != null)) {
+  if (FIREWALL.has(h.type) && (h.interfaces || h.disk != null || h.ram != null)) {
+    const pf = h.type === "pfsense";
     return `<div class="panel">
-      <div class="panel-head"><h3>Gerät im Einzelnen</h3><span class="hint">aus dem Diagnose-Zweig der OPNsense-API</span></div>
+      <div class="panel-head"><h3>Gerät im Einzelnen</h3>
+        <span class="hint">${pf ? `über das Paket pfSense-pkg-API${h.apiFassung ? " " + esc(h.apiFassung) : ""}`
+          : "aus dem Diagnose-Zweig der OPNsense-API"}</span></div>
       <div class="panel-body">${kv([
         ["Fassung", h.version ? `<span class="mono">${esc(h.version)}</span>${h.abi ? ` · ABI ${esc(h.abi)}` : ""}` : "—"],
         ["Betriebssystem", h.os ? `<span class="mono">${esc(h.os)}</span>` : "—"],
         ["Laufzeit", nz(h.uptime)],
         ["Last", h.load ? `<span class="mono">${esc(h.load)}</span>` : "—"],
         ["Arbeitsspeicher", h.ram != null ? `${h.ram} %${h.ramTotalMb ? ` von ${h.ramTotalMb} MB` : ""}${h.ramArcMb ? ` · ${h.ramArcMb} MB ZFS-Cache` : ""}` : "—"],
-        ["Aktualisierungen", h.updates == null ? "—" : h.updates ? `${h.updates} offen${h.majorUpgrade ? ` · Fassung ${esc(h.majorUpgrade)} verfügbar` : ""}` : "keine offen"],
-        ["Neustart nötig", h.needsReboot == null ? "—" : ja(!h.needsReboot, "nein", "ja")],
-        ["WireGuard", h.wgPeers == null ? "—" : `${h.wgPeers} Peer(s) auf ${nz(h.wgIfaces)} Schnittstelle(n)${h.wgStill ? `, ${h.wgStill} still` : ""}`],
+        h.tempC != null ? ["Temperatur", `${h.tempC} °C`] : null,
+        ["Aktualisierungen", h.updates == null ? "—"
+          : h.updates ? `${h.updates === 1 && pf ? "eine steht bereit" : h.updates + " offen"}${h.majorUpgrade ? ` · Fassung ${esc(h.majorUpgrade)}` : ""}`
+          : "keine offen"],
+        h.needsReboot == null ? null : ["Neustart nötig", ja(!h.needsReboot, "nein", "ja")],
+        /* Nur bei pfSense, weil OPNsense diese drei hier noch nicht liefert —
+           eine leere Zeile „CARP: —" an einem Gerät ohne CARP-Anbindung wäre
+           eine Behauptung über etwas, wonach gar nicht gefragt wurde. */
+        h.statesPct != null ? ["Zustandstabelle", `${h.states} von ${h.statesMax} belegt (${h.statesPct} %)`] : null,
+        h.carp ? ["CARP", `${esc(h.carp)}${h.carpWartung ? " · Wartungsmodus" : ""}`] : null,
+        ["WireGuard", h.wgPeers == null ? "—"
+          : `${h.wgPeers} Peer(s) auf ${nz(h.wgIfaces)} Schnittstelle(n)${h.wgStill ? `, ${h.wgStill} still` : ""}`
+            + (h.wgHandshakeUnbekannt ? ' <span style="color:var(--warn)">— ohne Handshake-Alter</span>' : "")],
         ["Schwellwerte", schwellenZeile(h)]
       ])}</div>
+      ${gatewayTabelle(h)}
+      ${h.wgNote ? `<div class="panel-note">${esc(h.wgNote)}</div>` : ""}
       <div class="panel-note">Durchsatz, Pakete und Fehler je Leitung stehen weiter oben unter
         <b>Durchsatz je Schnittstelle</b> — samt Verlauf über Tage.</div>
     </div>`;
@@ -3553,7 +3654,7 @@ window.LeitstandUI = { render, state, applyLive, go, openSystem };
 const HOST_TYPES = [
   ["pve", "Proxmox VE", 8006, true], ["pbs", "Proxmox Backup Server", 8007, true],
   ["pmg", "Proxmox Mail Gateway", 8006, true], ["opnsense", "OPNsense", 443, true],
-  ["pfsense", "pfSense", 443, false], ["truenas", "TrueNAS SCALE", 443, false],
+  ["pfsense", "pfSense", 443, true], ["truenas", "TrueNAS SCALE", 443, false],
   ["mailcow", "Mailcow", 443, false], ["adguard", "AdGuard Home", 443, true],
   ["portainer", "Portainer", 9443, true], ["hass", "Home Assistant", 8123, false],
   ["other", "Sonstiges", 443, false]
@@ -3589,9 +3690,26 @@ function zugangsFelder(type, cred, getippt) {
     ohne sie liefert Portainer eine <b>leere</b> Liste statt einer Fehlermeldung, und der Leitstand sähe null Container,
     wo Dutzende laufen.</p>`;
 
+  /* pfSense hat ab Werk keine Schnittstelle — gelesen wird über das Paket
+     pfSense-pkg-API. Dessen Fassung 2 meldet mit einem Schlüssel an,
+     Fassung 1 mit Client-ID und Token; beide sind im Feld anzutreffen,
+     deshalb stehen beide Wege hier. Ausgefüllt wird nur einer. */
+  if (type === "pfsense") return `
+    <div class="admin-grid">
+      ${inpc("key", "API-Schlüssel", cred, cred.key ? "hinterlegt — leer lassen, um ihn zu behalten" : "Paket v2: System → API → Keys", getippt)}
+      ${inpc("clientId", "Client-ID", cred, "nur bei Paket v1", getippt)}
+      ${inpc("clientToken", "Client-Token", cred, cred.clientToken ? "hinterlegt" : "nur bei Paket v1", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0">pfSense CE hat keine Schnittstelle ab Werk. Unter
+    <span class="mono">System → Package Manager</span> das Paket <span class="mono">pfSense-pkg-API</span>
+    installieren, danach unter <span class="mono">System → API</span> einen Schlüssel erzeugen. Der Benutzer dahinter
+    braucht nur Leserechte. Gelesen werden Systemzustand, Schnittstellenzähler, Gateways, Zustandstabelle, CARP und
+    WireGuard — <b>geschrieben wird nichts</b>. Welche Fassung des Pakets läuft, findet der Leitstand selbst heraus;
+    die Diagnose zeigt zu jedem Aufruf die tatsächlichen Feldnamen.</p>`;
+
   if (type === "opnsense") return `
     <div class="admin-grid">
-      ${inpc("key", "API-Schlüssel", cred, "der lange Wert aus der Schlüsseldatei", getippt)}
+      ${inpc("key", "API-Schlüssel", cred, cred.key ? "hinterlegt — leer lassen, um ihn zu behalten" : "der lange Wert aus der Schlüsseldatei", getippt)}
       ${inpc("secret", "Secret", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "der zweite Wert aus derselben Datei", getippt)}
     </div>
     <p class="admin-hint" style="margin:8px 0 0">In OPNsense unter
@@ -3941,7 +4059,10 @@ function verlaufNote() {
    (server/src/secrets.js). Sie kommen nur maskiert zurück; stünde die
    Maske im Feld, schriebe ein Speichern die Punkte als neues Geheimnis
    zurück. Also bleibt das Feld leer, und leer heißt „unverändert". */
-const GEHEIMFELDER = new Set(["secret", "password", "token", "apiKey"]);
+/* Dieselbe Liste wie in secrets.js: diese Felder werden nie vorbelegt,
+   sondern als leeres Passwortfeld gezeigt. Leer lassen heißt „behalten" —
+   der Dienst überschreibt nichts mit einer leeren Eingabe. */
+const GEHEIMFELDER = new Set(["secret", "password", "token", "apiKey", "key", "clientToken"]);
 
 function inpc(key, label, cred, ph, typed) {
   const geheim = GEHEIMFELDER.has(key);

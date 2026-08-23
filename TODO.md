@@ -108,13 +108,34 @@ gebaut.
       und `unavailable`, Automationen, Fassung. Nicht verfügbare Entitäten sind
       meist Information, keine Störung — gruppierte Ausfälle hinter einem
       Zigbee-Router sind die Ausnahme und der eigentliche Fund.
-- [ ] **2.6 pfSense** — kein offizielles REST. Weg (a) aus den Datenquellen:
-      SSH mit eigenem Schlüssel, `pfctl -si`, `wg show all dump`. Bringt
-      Zustandstabelle, Interface-Zähler, Gateways und die WireGuard-Peers, die
-      heute nur OPNsense liefert. Erst entscheiden, ob SSH aus dem Behälter
-      heraus in Ordnung geht.
+- [x] **2.6 pfSense** — gebaut:
+      [`server/src/collectors/pfsense.js`](server/src/collectors/pfsense.js).
+      **Entschieden gegen SSH**, für das Paket `pfSense-pkg-API`: der Weg über
+      SSH hätte einen Client im Abbild, einen privaten Schlüssel im Volume und
+      das Auswerten von Textausgaben verlangt — der Dienst soll nur lesen und
+      sonst nichts können. Mit dem Paket fällt pfSense in dasselbe Muster wie
+      alles andere: eine Kopfzeile, feste Pfade, JSON.
+      Beide Fassungen des Pakets werden gefunden (v2 mit `X-API-Key` unter
+      `/api/v2/…`, v1 mit `Authorization` unter `/api/v1/…`) — eingetragen
+      werden muss nur der Zugang.
+      Geliefert wird dasselbe wie bei OPNsense, plus drei Dinge, die OPNsense
+      hier noch nicht hat: **Gateways** mit Zustand, Latenz und Verlust,
+      die **Zustandstabelle** und die **CARP**-Rolle. Ampel: Gateway `down` →
+      rot, Zustandstabelle > 90 % → rot; CARP-Rolle und ausstehende
+      Aktualisierung bleiben Notizen.
+      **Vorbehalt:** die Antwortfelder des Pakets sind nirgends verbindlich
+      beschrieben. Jedes Feld kennt deshalb mehrere mögliche Namen, was nicht
+      kommt bleibt null, und die Diagnose zeigt zu jedem Aufruf die
+      tatsächlichen Feldnamen. Ein Test hält ausdrücklich fest, dass eine
+      unbekannte Antwortgestalt zu Strichen führt und nicht zum Absturz —
+      nachziehen lässt sich der Sammler dann gegen einen echten Bericht.
 - [ ] **2.7 OPNsense vervollständigen** — offen sind Zustandstabelle, CARP und
-      Gateway-Status. Der Sammler steht, es fehlen die Abrufe.
+      Gateway-Status. Der Sammler steht, es fehlen die Abrufe. Die Oberfläche
+      wartet schon darauf: Spalten und Tabellen dafür sind gebaut und werden
+      bei pfSense gefüllt — bei OPNsense bleiben sie weg, bis die Abrufe da
+      sind. Zu holen wären `/api/diagnostics/firewall/pf_states`,
+      `/api/diagnostics/interface/getGatewayStatus` (Schreibweise prüfen) und
+      der CARP-Zweig; die Feldnamen dann wie gehabt aus der Diagnose ablesen.
       **Erledigt davon:** die Schnittstellen. Je Leitung kommen Durchsatz in
       beide Richtungen, Pakete je Sekunde, Fehler, Verwürfe und Kollisionen;
       Verbindungszustand, Beschreibung und MTU aus

@@ -186,6 +186,15 @@ function hostView(h, st = {}, settings = {}) {
     thrIn: x.thrIn ?? null, thrOut: x.thrOut ?? null, thrQuelle: x.thrQuelle || null,
     interfaces: x.interfaces || null,
     wgPeers: x.wgPeers ?? null, wgIfaces: x.wgIfaces ?? null, wgStill: x.wgStill ?? null,
+    wgHandshakeUnbekannt: x.wgHandshakeUnbekannt ?? null, wgNote: x.wgNote || null,
+    /* pfSense — Gateways, Zustandstabelle und CARP kennt OPNsense hier
+       noch nicht; die Felder bleiben dort null und werden als Strich
+       gezeigt statt als Null. */
+    apiFassung: x.api || null,
+    gateways: x.gateways || null,
+    states: x.states ?? null, statesMax: x.statesMax ?? null, statesPct: x.statesPct ?? null,
+    carp: x.carp || null, carpWartung: x.carpWartung ?? null,
+    tempC: x.tempC ?? null,
     /* AdGuard Home */
     dnsQueries: x.dnsQueries ?? null, dnsBlocked: x.dnsBlocked ?? null, blockRate: x.blockRate ?? null,
     avgMs: x.avgMs ?? null, statsFenster: x.statsFenster || null,
