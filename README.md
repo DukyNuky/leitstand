@@ -150,8 +150,8 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version — dazu je Knoten Kernel, `pve-manager`-Fassung, Kerne und Modell, Last und **ausstehende Paketaktualisierungen mit Paketnamen**, und **jeder Gast einzeln** mit Zustand und Auslastung. Alles in einer eigenen Ansicht *Virtualisierung* |
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
-| **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, WireGuard-Peers mit Handshake-Alter — und **jede Schnittstelle einzeln**: Durchsatz ↓/↑, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand und Zuwachs), Verbindungszustand und MTU, mit Verlauf über Tage je Leitung |
-| **pfSense** | dasselbe, über das Paket `pfSense-pkg-API` (beide Fassungen werden gefunden) — und darüber hinaus **Gateways** mit Zustand, Latenz und Verlust, die **Zustandstabelle** und die **CARP**-Rolle. Ein ausgefallenes Gateway ist die Meldung, die von außen niemand sieht: die Firewall selbst antwortet dabei tadellos |
+| **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, WireGuard-Peers mit Handshake-Alter · **jede Schnittstelle einzeln**: Durchsatz ↓/↑, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand und Zuwachs), Verbindungszustand und MTU, mit Verlauf über Tage je Leitung · **Gateways** mit Zustand, Latenz und Verlust — die Meldung, die von außen niemand sieht, weil die Firewall dabei tadellos antwortet · **Zustandstabelle** und **CARP**-Rolle |
+| **pfSense** | dasselbe — **aber nur mit dem Fremdpaket `pfSense-pkg-API`**. Das steht nicht im Paketverzeichnis von pfSense und ist für neuere Fassungen nicht immer zu haben; ohne es bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat. Der Sammler ist gebaut und geprüft und wartet darauf, dass das Paket da ist |
 | **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** und **ob er über UDP/53 wirklich auflöst** |
 | **Portainer** | Umgebungen erreichbar/gesamt, Stacks, Container laufend/gestoppt, `unhealthy`, Neustartschleifen und Exit 137 (Speichergrenze) — mit dem **Namen** des Containers, der klemmt |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
@@ -327,13 +327,20 @@ Die häufigsten Befunde:
 | `Kennung kommt in der Knotenliste nicht vor` | die Kennung muss dem Knotennamen im Cluster entsprechen |
 | `404` | falscher Port: VE 8006, Backup Server 8007, Mail Gateway 8006 |
 
-**pfSense** braucht zuerst das Paket `pfSense-pkg-API` (System → Package Manager);
-danach unter *System → API* einen Schlüssel erzeugen. Welche Fassung des Pakets
-läuft, findet der Leitstand selbst heraus — Fassung 2 meldet mit `X-API-Key` an,
-Fassung 1 mit Client-ID und Token. Die Antwortfelder des Pakets sind nirgends
-verbindlich beschrieben; die Diagnose zeigt deshalb zu jedem geglückten Aufruf
-die **tatsächlichen Feldnamen**. Fehlt danach eine Zahl in der Oberfläche, ist
-das der Bericht, an dem sich der Sammler nachziehen lässt.
+**pfSense** braucht das Paket `pfSense-pkg-API` — und das ist der Haken: es steht
+**nicht** im Paketverzeichnis von pfSense, sondern ist ein Fremdprojekt, das von
+Hand aus dessen Veröffentlichungen installiert wird, und für neuere
+pfSense-Fassungen gibt es nicht immer eine passende. Wer es nicht hat, bekommt
+von pfSense weiterhin nur Erreichbarkeit, Antwortzeit und Zertifikat; das ist
+keine Fehleinrichtung, sondern der Stand der Dinge. Ist es vorhanden: unter
+*System → API* einen Schlüssel erzeugen. Welche Fassung des Pakets läuft, findet
+der Leitstand selbst heraus — Fassung 2 meldet mit `X-API-Key` an, Fassung 1 mit
+Client-ID und Token.
+
+Für **beide** Bauarten gilt: die Antwortfelder sind nirgends verbindlich
+beschrieben. Die Diagnose zeigt deshalb zu jedem geglückten Aufruf die
+**tatsächlichen Feldnamen**. Fehlt danach eine Zahl in der Oberfläche, ist das
+der Bericht, an dem sich der Sammler nachziehen lässt.
 
 **OPNsense** meldet sich anders an: HTTP Basic mit API-Schlüssel und Secret, beide
 aus derselben Datei, die OPNsense unter *System → Access → Users* erzeugt. Die
@@ -442,9 +449,9 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
 
 **Am Werkzeug:**
 
-6. OPNsense: Zustandstabelle, CARP-Rolle, Gateway-Status und
-   HAProxy-Backends — Schnittstellen sind gebaut, und für die anderen drei
-   wartet die Oberfläche schon: bei pfSense werden dieselben Spalten
-   bereits gefüllt
+6. OPNsense: die HAProxy-Backends — Schnittstellen, Gateways,
+   Zustandstabelle und CARP stehen; ein Dienst, der von außen erreichbar
+   aussieht, intern aber auf null Servern läuft, fällt sonst erst dem
+   Benutzer auf
 7. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
 8. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen

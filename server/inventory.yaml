@@ -118,12 +118,15 @@ hosts:
   # ---- Netz ---------------------------------------------------------------
   - { id: fw-01, type: opnsense, site: hq, ip: 10.10.0.1, url: "https://10.10.0.1",
       role: "OPNsense · Firewall & VPN" }
-  # pfSense hat ab Werk keine Schnittstelle. Gelesen wird über das Paket
-  # pfSense-pkg-API (System → Package Manager), danach unter System → API
-  # einen Schlüssel erzeugen und in der Verwaltung hinterlegen. Der
-  # Leitstand findet selbst heraus, ob Fassung 1 oder 2 des Pakets läuft.
-  # Er liefert dann dasselbe wie OPNsense — und zusätzlich Gateways,
-  # Zustandstabelle und CARP.
+  # pfSense hat ab Werk keine Schnittstelle. Gelesen werden kann nur über
+  # das Fremdpaket pfSense-pkg-API — und das steht NICHT im
+  # Paketverzeichnis von pfSense: es wird von Hand aus den
+  # Veröffentlichungen des Projekts installiert, und für neuere
+  # pfSense-Fassungen gibt es nicht immer eine passende. Ohne das Paket
+  # bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat.
+  # Ist es vorhanden: unter System → API einen Schlüssel erzeugen und in
+  # der Verwaltung hinterlegen; der Leitstand findet selbst heraus, welche
+  # Fassung des Pakets läuft, und liefert dann dasselbe wie OPNsense.
   - { id: fw-02, type: pfsense,  site: rz, ip: 10.30.0.1, url: "https://10.30.0.1",
       role: "pfSense · Firewall" }
 

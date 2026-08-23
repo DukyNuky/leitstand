@@ -1,4 +1,13 @@
-/* Aus Zählerständen wird Durchsatz — für jede Firewall dieselbe Rechnung.
+/* Was OPNsense und pfSense gemeinsam haben.
+
+   Zwei Hersteller, zwei Schnittstellen, aber dieselben Fragen: wie viel
+   fließt durch welche Leitung, steht das Gateway, ist der Link oben. Was
+   hier steht, gilt für beide — damit eine Zahl nicht an zwei Stellen
+   verschieden gerechnet wird und eine Firewall in der Oberfläche eine
+   Firewall bleibt, gleich von wem sie ist.
+
+   ---------------------------------------------------------------
+   Aus Zählerständen wird Durchsatz — für jede Firewall dieselbe Rechnung.
 
    OPNsense und pfSense liefern beide keine Bandbreite, sondern Zähler:
    Bytes und Pakete seit dem letzten Neustart des Geräts. Eine Rate
@@ -127,3 +136,43 @@ export const zahl = v => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+/* ---------- Messwerte mit Einheit am Text ----------
+   Beide Hersteller schreiben Latenz und Verlust als Zeichenkette mit
+   Einheit: „1.2 ms", „0.0 %", und wenn nichts gemessen wurde „~". Die
+   Zahl davor ist gemeint; kommt keine, ist es keine Messung und wird zu
+   null — „~" als 0 zu lesen hieße, eine tote Strecke als verlustfrei zu
+   melden. */
+export function messwert(v) {
+  if (v == null) return null;
+  const m = /-?\d+(\.\d+)?/.exec(String(v));
+  return m ? Number(m[0]) : null;
+}
+
+/* ---------- Verbindungszustand ----------
+   „up"/„down", manchmal ein Wahrheitswert, manchmal „no carrier". Was
+   sich nicht deuten lässt, bleibt unbekannt — und unbekannt ist nicht
+   „up". Eine Leitung, über die nichts bekannt ist, als stehend zu melden
+   wäre genau die Sorte Behauptung, gegen die dieses Werkzeug gebaut ist. */
+export function verbindung(v) {
+  if (v === true) return "up";
+  if (v === false) return "down";
+  if (v == null) return null;
+  const s = String(v).toLowerCase();
+  if (/^(up|active|online)/.test(s)) return "up";
+  if (/^(down|no ?carrier|inactive|offline)/.test(s)) return "down";
+  return null;
+}
+
+/* ---------- Gateways ----------
+   Wie ein Gateway-Zustand zu bewerten ist, ist bei beiden dasselbe — und
+   die Namen der Zustände sind es auch, bis auf einen: OPNsense schreibt
+   `none`, wenn ein Gateway steht und nicht überwacht wird. Das ist kein
+   Fehlen einer Auskunft, sondern die Auskunft „nichts zu beanstanden". */
+export function gatewayAmpel(g) {
+  const s = String(g?.status || "").toLowerCase();
+  if (/down|offline/.test(s)) return "crit";
+  if (/loss|delay|warn/.test(s) || (g?.verlust ?? 0) >= 2) return "warn";
+  if (/online|up|none|ok/.test(s)) return "ok";
+  return "idle";
+}

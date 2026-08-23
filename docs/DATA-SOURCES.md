@@ -53,10 +53,17 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 | | |
 |---|---|
 | Zugang | API Key/Secret je Gerät, eigener Benutzer mit lesenden Rechten (Basic-Auth über HTTPS) |
-| Endpunkte | `/api/core/firmware/status` (Version, ausstehende Updates), `/api/diagnostics/interface/get_interface_statistics` (ältere Fassungen: `getInterfaceStatistics`), `/api/interfaces/overview/export` (Verbindungszustand, Beschreibung, MTU — fehlt auf älteren Fassungen), `/api/diagnostics/firewall/pf_states`, `/api/wireguard/service/show`, HAProxy-Plugin für Backend-Zustände |
-| Kennzahlen | Version + Updatestand, Zustandstabelle, **je Schnittstelle** Durchsatz ↓/↑ in Mbit/s, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand *und* Zuwachs), Kollisionen, Verbindungszustand, MTU; CARP-Rolle, WireGuard-Peers mit Handshake-Alter |
+> **Gebaut** — `server/src/collectors/opnsense.js`. Seit der Ergänzung um
+> Gateways, Zustandstabelle und CARP ist die Anbindung vollständig bis auf die
+> HAProxy-Backends.
+
+| Endpunkte | `/api/core/firmware/status` (Version, ausstehende Updates), `/api/diagnostics/interface/get_interface_statistics` (ältere Fassungen: `getInterfaceStatistics`), `/api/interfaces/overview/export` (Verbindungszustand, Beschreibung, MTU — fehlt auf älteren Fassungen), `/api/routes/gateway/status`, `/api/diagnostics/firewall/pf_statistics/state`, `/api/diagnostics/interface/get_vip_status` (CARP), `/api/wireguard/service/show`, HAProxy-Plugin für Backend-Zustände |
+| Kennzahlen | Version + Updatestand, **je Schnittstelle** Durchsatz ↓/↑ in Mbit/s, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand *und* Zuwachs), Kollisionen, Verbindungszustand, MTU · **Gateways** mit Zustand, Latenz, Schwankung und Verlust · **Zustandstabelle** belegt/maximal · **CARP**-Rolle und Wartungsmodus · WireGuard-Peers mit Handshake-Alter |
 | Zähler, nicht Raten | Was hier zurückkommt, sind kumulative Zähler seit dem Neustart. Durchsatz gibt es erst aus der Differenz zweier Abfragen — davor ein Strich, keine Null; nach einem Zählerrücksetzer ebenso |
-| Ampel | Versionsabweichung im CARP-Paar → gelb · Zustandstabelle > 80 % → gelb · Backend ohne aktiven Server → rot |
+| Ampel | Gateway `down` → rot · Zustandstabelle > 90 % → rot, > 80 % → gelb · Verlust ≥ 2 % oder Zustand `loss`/`delay` → gelb · Platte und RAM nach den Schwellwerten (je System überschreibbar) · CARP-Rolle und ausstehende Aktualisierungen: **Notiz, keine Ampel** · Backend ohne aktiven Server → rot (offen) |
+| Fallstrick | OPNsense schreibt beim Gateway `status: "none"`, wenn es steht und **nicht überwacht** wird. Das ist die Auskunft „nichts zu beanstanden" und nicht das Fehlen einer — als unbekannt gelesen stünde die halbe Tabelle grau da |
+| Fallstrick | Latenz und Verlust kommen als Text mit Einheit; wo nichts gemessen wurde, steht `~`. Das wird zu null, nicht zu 0 — eine tote Strecke als verlustfrei zu melden wäre schlimmer als eine Lücke |
+| Fallstrick | Die Zahl der Zustandstabelle liegt je nach Fassung flach im Antwortobjekt oder in einem Unterobjekt. Gesucht wird deshalb nach Namen über bis zu drei Ebenen; was sich nicht finden lässt, bleibt null |
 | Meldet per Mail | `System → Settings → Notifications` (SMTP): Konfigurationsänderungen, ACME-Erneuerungen, CARP-Wechsel |
 
 Der HA-Verbund liefert zwei Sichten: MASTER und BACKUP werden getrennt abgefragt,
@@ -66,10 +73,18 @@ sonst bleibt eine schleichende Config-Sync-Abweichung unsichtbar.
 
 | | |
 |---|---|
-> **Gebaut** — `server/src/collectors/pfsense.js`, über das Paket
-> `pfSense-pkg-API`. Damit fällt pfSense in dasselbe Muster wie alles andere:
-> eine Kopfzeile, feste Pfade, JSON — kein SSH, kein Auswerten von
-> Textausgaben, keine erhöhten Rechte im Behälter.
+> **Gebaut, aber in der Praxis oft nicht nutzbar** —
+> `server/src/collectors/pfsense.js` liest über das Paket `pfSense-pkg-API`.
+> Das Paket steht **nicht** im Paketverzeichnis von pfSense: es ist ein
+> Fremdprojekt, wird von Hand aus dessen Veröffentlichungen installiert, und
+> für neuere pfSense-Fassungen gibt es nicht immer eine passende. Wer es nicht
+> hat, bekommt von pfSense weiterhin nur Erreichbarkeit, Antwortzeit und
+> Zertifikat.
+>
+> Der Sammler bleibt trotzdem stehen: er ist geprüft und kostet nichts,
+> solange keine Zugangsdaten hinterlegt sind. Der Weg über SSH bleibt
+> unabhängig davon verworfen — er hätte einen SSH-Client im Abbild und einen
+> privaten Schlüssel im Volume verlangt.
 
 | | |
 |---|---|
@@ -190,7 +205,7 @@ Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
 Proxmox VE/PMG       Benutzer leitstand@pve, Rolle PVEAuditor auf / mit Vererbung, Token ohne Ablauf
 Proxmox Backup       Benutzer leitstand@pbs, Rolle Audit auf / mit Propagate — auch für die Token-ID selbst
 OPNsense             System → Access → Users → leitstand, Gruppe mit Lesezugriff, API-Key erzeugen
-pfSense              Paket pfSense-pkg-API installieren, System → API → Keys, Benutzer nur mit Leserechten
+pfSense              nur mit dem Fremdpaket pfSense-pkg-API (nicht im Paketverzeichnis) — sonst nur Erreichbarkeit
 AdGuard              zusätzlicher Benutzer in AdGuardHome.yaml (users), Benutzer + Passwort eintragen
 Portainer            Benutzer leitstand, Rolle „read-only“ je Umgebung, Token unter My account → Access tokens
 TrueNAS              Credentials → API Keys

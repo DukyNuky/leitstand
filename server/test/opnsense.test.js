@@ -13,6 +13,7 @@ import { collectOpnsense, authHeader, baseUrl } from "../src/collectors/opnsense
 
 const KEY = "rCRAOZpe", SECRET = "streng-geheim";
 const CRED = { key: KEY, secret: SECRET };
+const GRENZE = { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 };
 
 /* Antworten wie vom echten Gerät. Was ein Test verändern will, geht als
    Abweichung hinein — der Rest bleibt so, wie er wirklich aussieht. */
@@ -96,6 +97,34 @@ function opnsense(ab = {}) {
         { device: "vtnet0", description: "LAN", status: "up", enabled: true, mtu: 1500 },
         { device: "vtnet1", description: "Uplink Glasfaser", status: "down", enabled: true, mtu: 1492 }
       ]);
+    }
+
+    if (p === "/api/routes/gateway/status") {
+      if (ab.gateways === false) return send(404, { message: "not found" });
+      if (ab.gateways === 403) return send(403, { message: "denied" });
+      /* OPNsense verpackt in `items` und schreibt Latenz und Verlust als
+         Text mit Einheit. `status: "none"` heißt: steht, wird nicht
+         überwacht — das ist kein Fehlen einer Auskunft. */
+      return send(200, { items: ab.gateways ?? [
+        { name: "WAN_GW", address: "192.0.2.1", status: "none", status_translated: "Online",
+          loss: "0.0 %", delay: "8.4 ms", stddev: "1.1 ms", monitor: "1.1.1.1" },
+        { name: "LTE_GW", address: "198.51.100.1", status: "none", status_translated: "Online",
+          loss: "0.2 %", delay: "38.0 ms", stddev: "9.4 ms", monitor: "8.8.8.8" }
+      ] });
+    }
+
+    if (p === "/api/diagnostics/firewall/pf_statistics/state") {
+      if (ab.states === false) return send(404, { message: "not found" });
+      /* Die Zahl liegt je nach Fassung flach oder in einem Unterobjekt. */
+      return send(200, ab.states ?? { state: { "current entries": 12_450, limit: 100_000 } });
+    }
+
+    if (p === "/api/diagnostics/interface/get_vip_status") {
+      if (ab.carp === false) return send(404, { message: "not found" });
+      return send(200, { rows: ab.carp ?? [
+        { interface: "vtnet1", vhid: "1", mode: "carp", status: "MASTER", status_txt: "MASTER" },
+        { interface: "vtnet0", vhid: "2", mode: "carp", status: "MASTER", status_txt: "MASTER" }
+      ] });
     }
 
     if (p === "/api/wireguard/service/show") {
@@ -484,5 +513,194 @@ test("Ein eigener Wert am Gerät hebt die Grenze nur dort", async () => {
       { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 });
     assert.equal(r.status, undefined, "84 % liegt unter 90 — kein Befund");
     assert.equal(r.schwellen.disk_warn, 90);
+  } finally { srv.close(); }
+});
+
+/* ============================================================
+   Gateways, Zustandstabelle und CARP
+
+   Die drei, die bislang nur pfSense lieferte. Sie beantworten Fragen, die
+   von außen niemand stellen kann: ob die Leitung *hinter* der Firewall
+   trägt, ob die Zustandstabelle vollläuft, und ob dieses Gerät im
+   CARP-Paar gerade trägt.
+   ============================================================ */
+
+test("Gateways kommen mit Zustand, Latenz und Verlust", async () => {
+  const { srv, host } = await an();
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    const wan = r.gateways.find(g => g.name === "WAN_GW");
+    assert.equal(wan.rtt, 8.4, "„8.4 ms“ wird zur Zahl");
+    assert.equal(wan.verlust, 0);
+    assert.equal(wan.substatus, "Online", "der Text für Menschen bleibt erhalten");
+    assert.equal(r.gateways.find(g => g.name === "LTE_GW").rtt, 38);
+  } finally { srv.close(); }
+});
+
+/* „~" heißt: nichts gemessen. Als 0 gelesen meldete eine tote Strecke
+   sich als verlustfrei. */
+test("Ein nicht gemessener Wert wird nicht zu null Millisekunden", async () => {
+  const { srv, host } = await an({ gateways: [
+    { name: "LTE_GW", address: "198.51.100.1", status: "down", loss: "~", delay: "~", stddev: "~" }
+  ] });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.gateways[0].rtt, null);
+    assert.equal(r.gateways[0].verlust, null, "„~“ ist keine Messung, auch nicht null Prozent");
+  } finally { srv.close(); }
+});
+
+test("Ein ausgefallenes Gateway ist rot — die Firewall antwortet dabei tadellos", async () => {
+  const { srv, host } = await an({ gateways: [
+    { name: "WAN_GW", address: "192.0.2.1", status: "none", loss: "0.0 %", delay: "8 ms" },
+    { name: "LTE_GW", address: "198.51.100.1", status: "down", status_translated: "Offline",
+      loss: "100.0 %", delay: "~" }
+  ] });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.status, "crit");
+    assert.match(r.note, /LTE_GW/);
+    assert.equal(r.gateways.find(g => g.name === "LTE_GW").verlust, 100);
+  } finally { srv.close(); }
+});
+
+/* OPNsense schreibt „none“, wenn ein Gateway steht und nicht überwacht
+   wird. Das als unbekannt zu lesen ließe die halbe Tabelle grau. */
+test("„none“ heißt in Ordnung, nicht unbekannt", async () => {
+  const { srv, host } = await an({ gateways: [
+    { name: "WAN_GW", address: "192.0.2.1", status: "none", loss: "0.0 %", delay: "8 ms" }
+  ] });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.status, undefined, "kein Befund");
+  } finally { srv.close(); }
+});
+
+test("Verlust ohne Ausfall ist eine Warnung", async () => {
+  const { srv, host } = await an({ gateways: [
+    { name: "WAN_GW", address: "192.0.2.1", status: "loss", loss: "6.0 %", delay: "12 ms" }
+  ] });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.status, "warn");
+    assert.match(r.note, /6 % Verlust/);
+  } finally { srv.close(); }
+});
+
+test("Kennt die Fassung den Endpunkt nicht, bleibt der Gateway-Zustand leer statt grün", async () => {
+  const { srv, host } = await an({ gateways: false });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.gateways, null);
+    assert.equal(r.gwFehler, undefined, "ein fehlender Endpunkt ist kein Befund");
+  } finally { srv.close(); }
+});
+
+test("Ein gesperrter Gateway-Zweig ist dagegen einer", async () => {
+  const { srv, host } = await an({ gateways: 403 });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.status, "warn");
+    assert.match(r.note, /403/);
+  } finally { srv.close(); }
+});
+
+/* ---------- Zustandstabelle ---------- */
+test("Die Zustandstabelle wird gefunden, auch wenn sie in einem Unterobjekt liegt", async () => {
+  const { srv, host } = await an();
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.states, 12450);
+    assert.equal(r.statesMax, 100000);
+    assert.equal(r.statesPct, 12);
+  } finally { srv.close(); }
+});
+
+test("Liegt sie flach im Antwortobjekt, wird sie ebenso gefunden", async () => {
+  const { srv, host } = await an({ states: { current_entries: 500, limit: 1000 } });
+  try {
+    assert.equal((await collectOpnsense(host, CRED, GRENZE)).statesPct, 50);
+  } finally { srv.close(); }
+});
+
+test("Eine volle Zustandstabelle ist ein eigener Befund", async () => {
+  const { srv, host } = await an({
+    states: { current_entries: 95_000, limit: 100_000 },
+    gateways: [{ name: "WAN_GW", status: "none", loss: "0.0 %" }]
+  });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.status, "crit");
+    assert.match(r.note, /Zustandstabelle zu 95 %/);
+  } finally { srv.close(); }
+});
+
+test("Fehlt der Endpunkt, bleibt die Zustandstabelle unbekannt statt leer", async () => {
+  const { srv, host } = await an({ states: false, gateways: [{ name: "W", status: "none", loss: "0.0 %" }] });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.states, null);
+    assert.equal(r.statesPct, null);
+    assert.equal(r.status, undefined, "unbekannt ist kein Befund");
+  } finally { srv.close(); }
+});
+
+/* ---------- CARP ---------- */
+test("Die CARP-Rolle wird gelesen, dreht die Ampel aber nicht", async () => {
+  const { srv, host } = await an({ gateways: [{ name: "W", status: "none", loss: "0.0 %" }] });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.carp, "MASTER");
+    assert.equal(r.carpWartung, false);
+    assert.equal(r.status, undefined, "eine Rolle ist kein Befund");
+    assert.match(r.note, /CARP MASTER/);
+  } finally { srv.close(); }
+});
+
+test("BACKUP wird als solches gemeldet, MASTER sticht", async () => {
+  const nur = await an({ carp: [{ interface: "vtnet1", mode: "carp", status: "BACKUP" }],
+    gateways: [{ name: "W", status: "none", loss: "0.0 %" }] });
+  try {
+    assert.equal((await collectOpnsense(nur.host, CRED, GRENZE)).carp, "BACKUP");
+  } finally { nur.srv.close(); }
+
+  const gemischt = await an({ carp: [
+    { interface: "vtnet1", mode: "carp", status: "BACKUP" },
+    { interface: "vtnet0", mode: "carp", status: "MASTER" }
+  ], gateways: [{ name: "W", status: "none", loss: "0.0 %" }] });
+  try {
+    assert.equal((await collectOpnsense(gemischt.host, CRED, GRENZE)).carp, "MASTER",
+      "trägt auch nur eine Adresse, trägt dieses Gerät");
+  } finally { gemischt.srv.close(); }
+});
+
+test("Der Wartungsmodus wird angesagt — dieses Gerät trägt absichtlich nicht", async () => {
+  const { srv, host } = await an({
+    carp: [{ interface: "vtnet1", mode: "carp", status: "MAINTENANCE" }],
+    gateways: [{ name: "W", status: "none", loss: "0.0 %" }]
+  });
+  try {
+    const r = await collectOpnsense(host, CRED, GRENZE);
+    assert.equal(r.carpWartung, true);
+    assert.match(r.note, /Wartungsmodus/);
+  } finally { srv.close(); }
+});
+
+test("Ohne CARP bleibt das Feld leer statt „nicht aktiv“ zu behaupten", async () => {
+  const { srv, host } = await an({ carp: false });
+  try {
+    assert.equal((await collectOpnsense(host, CRED, GRENZE)).carp, null);
+  } finally { srv.close(); }
+});
+
+/* Virtuelle Adressen gibt es auch ohne CARP — eine IP-Alias-Zeile ist
+   keine CARP-Rolle. */
+test("Eine virtuelle Adresse ohne CARP zählt nicht als Rolle", async () => {
+  const { srv, host } = await an({
+    carp: [{ interface: "vtnet1", mode: "ipalias", status: "" }],
+    gateways: [{ name: "W", status: "none", loss: "0.0 %" }]
+  });
+  try {
+    assert.equal((await collectOpnsense(host, CRED, GRENZE)).carp, null);
   } finally { srv.close(); }
 });

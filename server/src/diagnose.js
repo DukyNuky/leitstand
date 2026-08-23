@@ -44,8 +44,11 @@ const EINFACH = {
   pfsense: {
     modul: Pfs, name: "pfSense", felder: true,
     fehlt: "Es ist kein API-Schlüssel hinterlegt. pfSense hat ab Werk keine Schnittstelle — gelesen wird über das "
-      + "Paket pfSense-pkg-API (System → Package Manager). Danach unter System → API einen Schlüssel erzeugen und "
-      + "unter Verwaltung → System bearbeiten eintragen."
+      + "Fremdpaket pfSense-pkg-API, das NICHT im Paketverzeichnis von pfSense steht, sondern von Hand aus den "
+      + "Veröffentlichungen des Projekts installiert wird; für neuere pfSense-Fassungen gibt es nicht immer eine "
+      + "passende. Ist es vorhanden: unter System → API einen Schlüssel erzeugen und unter Verwaltung → System "
+      + "bearbeiten eintragen. Ohne das Paket bleibt es bei der reinen Erreichbarkeit — das ist keine Fehleinrichtung, "
+      + "sondern der Stand der Dinge bei pfSense."
   }
 };
 

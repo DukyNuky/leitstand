@@ -16,7 +16,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { collectPfsense, testConnection, authHeader, nutzlast, alsListe } from "../src/collectors/pfsense.js";
-import { vergiss } from "../src/collectors/durchsatz.js";
+import { vergiss } from "../src/collectors/firewall.js";
 
 const KEY = "pf-1a2b3c4d5e6f";
 const CRED = { key: KEY };
@@ -244,7 +244,7 @@ test("Loopback und Tunnelgeräte sind keine Leitungen", async () => {
   } finally { srv.close(); }
 });
 
-/* Dieselbe Rechnung wie bei OPNsense — sie steht in durchsatz.js und gilt
+/* Dieselbe Rechnung wie bei OPNsense — sie steht in firewall.js und gilt
    deshalb hier genauso: vor der zweiten Abfrage gibt es keinen Durchsatz. */
 test("Durchsatz gibt es erst ab dem zweiten Durchlauf", async () => {
   const { srv, host } = await an();

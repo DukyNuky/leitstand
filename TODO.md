@@ -108,8 +108,19 @@ gebaut.
       und `unavailable`, Automationen, Fassung. Nicht verfügbare Entitäten sind
       meist Information, keine Störung — gruppierte Ausfälle hinter einem
       Zigbee-Router sind die Ausnahme und der eigentliche Fund.
-- [x] **2.6 pfSense** — gebaut:
+- [~] **2.6 pfSense** — gebaut, in der Praxis aber meist nicht nutzbar:
       [`server/src/collectors/pfsense.js`](server/src/collectors/pfsense.js).
+      **Das Paket `pfSense-pkg-API` steht nicht im Paketverzeichnis von
+      pfSense** — es ist ein Fremdprojekt, wird von Hand aus dessen
+      Veröffentlichungen installiert, und für neuere pfSense-Fassungen gibt es
+      nicht immer eine passende. Wer es nicht hat, bekommt weiterhin nur
+      Erreichbarkeit. Der Sammler bleibt stehen: er ist geprüft und kostet
+      nichts, solange keine Zugangsdaten hinterlegt sind.
+      Bliebe als Weg nur SSH — und der ist bewusst verworfen, weil er einen
+      SSH-Client ins Abbild und einen privaten Schlüssel ins Volume brächte.
+      Wer pfSense wirklich auswerten will, hat damit zwei ehrliche
+      Möglichkeiten: das Paket auftreiben, oder auf OPNsense wechseln, das
+      eine Schnittstelle ab Werk hat.
       **Entschieden gegen SSH**, für das Paket `pfSense-pkg-API`: der Weg über
       SSH hätte einen Client im Abbild, einen privaten Schlüssel im Volume und
       das Auswerten von Textausgaben verlangt — der Dienst soll nur lesen und
@@ -129,13 +140,21 @@ gebaut.
       tatsächlichen Feldnamen. Ein Test hält ausdrücklich fest, dass eine
       unbekannte Antwortgestalt zu Strichen führt und nicht zum Absturz —
       nachziehen lässt sich der Sammler dann gegen einen echten Bericht.
-- [ ] **2.7 OPNsense vervollständigen** — offen sind Zustandstabelle, CARP und
-      Gateway-Status. Der Sammler steht, es fehlen die Abrufe. Die Oberfläche
-      wartet schon darauf: Spalten und Tabellen dafür sind gebaut und werden
-      bei pfSense gefüllt — bei OPNsense bleiben sie weg, bis die Abrufe da
-      sind. Zu holen wären `/api/diagnostics/firewall/pf_states`,
-      `/api/diagnostics/interface/getGatewayStatus` (Schreibweise prüfen) und
-      der CARP-Zweig; die Feldnamen dann wie gehabt aus der Diagnose ablesen.
+- [x] **2.7 OPNsense vervollständigen** — gebaut: **Gateways**
+      (`/api/routes/gateway/status`), **Zustandstabelle**
+      (`/api/diagnostics/firewall/pf_statistics/state`) und **CARP**
+      (`/api/diagnostics/interface/get_vip_status`, ältere Fassung
+      `getVipStatus`). Damit liefern beide Firewall-Bauarten dasselbe, unter
+      denselben Feldnamen, und die Oberfläche unterscheidet sie nicht mehr.
+      Ampel wie bei pfSense: Gateway `down` → rot, Zustandstabelle > 90 % →
+      rot und > 80 % → gelb, Verlust ab 2 % → gelb; CARP-Rolle bleibt eine
+      Notiz. Drei Eigenheiten stehen im Sammler beschrieben und je in einem
+      Test: `status: "none"` heißt bei OPNsense „steht, wird nicht überwacht"
+      und nicht „unbekannt"; `~` bei Latenz und Verlust heißt „nicht gemessen"
+      und wird zu null statt zu 0; und die Zahl der Zustandstabelle liegt je
+      nach Fassung flach oder in einem Unterobjekt, wird also über mehrere
+      Ebenen gesucht. **Offen bleiben allein die HAProxy-Backends** — die
+      hängen an einem eigenen Plugin.
       **Erledigt davon:** die Schnittstellen. Je Leitung kommen Durchsatz in
       beide Richtungen, Pakete je Sekunde, Fehler, Verwürfe und Kollisionen;
       Verbindungszustand, Beschreibung und MTU aus

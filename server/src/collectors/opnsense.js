@@ -16,7 +16,7 @@
 
 import { requestJson } from "../http.js";
 import { schwellenFuer } from "../inventory.js";
-import { ausZaehlern, NICHT_PHYSISCH, zahl } from "./durchsatz.js";
+import { ausZaehlern, NICHT_PHYSISCH, zahl, messwert, gatewayAmpel } from "./firewall.js";
 
 export function authHeader(cred) {
   if (!cred) return null;
@@ -74,6 +74,26 @@ export const PFADE = [
     optional: true,
     fehlendOk: "Diese Fassung kennt den Endpunkt nicht — dann fehlen Beschreibung und Verbindungszustand, "
       + "die Zähler und der Durchsatz kommen trotzdem"
+  },
+  {
+    pfad: "/api/routes/gateway/status",
+    zweck: "Gateways: Zustand, Latenz, Verlust — was die Firewall über die Leitung dahinter weiß",
+    optional: true,
+    fehlendOk: "Diese Fassung kennt den Endpunkt nicht — dann bleibt der Gateway-Zustand unbekannt"
+  },
+  {
+    pfad: "/api/diagnostics/firewall/pf_statistics/state",
+    alternativen: ["/api/diagnostics/firewall/pf_statistics", "/api/diagnostics/firewall/pfStatistics"],
+    zweck: "Zustandstabelle: belegt von wie vielen",
+    optional: true,
+    fehlendOk: "Diese Fassung führt die Zustandstabelle unter einem anderen Pfad — die Feldnamen unten helfen weiter"
+  },
+  {
+    pfad: "/api/diagnostics/interface/get_vip_status",
+    alternativen: ["/api/diagnostics/interface/getVipStatus"],
+    zweck: "CARP: Rolle je virtueller Adresse",
+    optional: true,
+    fehlendOk: "CARP ist auf diesem Gerät nicht eingerichtet"
   },
   {
     pfad: "/api/wireguard/service/show",
@@ -162,12 +182,12 @@ function hintFor(r) {
    ============================================================ */
 
 /* Aus den Zählerständen wird der Durchsatz gerechnet — dieselbe Rechnung
-   wie bei pfSense und deshalb in durchsatz.js, nicht hier. */
+   wie bei pfSense und deshalb in firewall.js, nicht hier. */
 const zaehlerSchluessel = host => host.id + "@" + baseUrl(host);
 
 export async function collectOpnsense(host, cred, settings) {
   const grenze = schwellenFuer(host, settings);
-  const [fw, sys, res, disk, ifs, uebersicht, wg, zeit] = await Promise.all([
+  const [fw, sys, res, disk, ifs, uebersicht, wg, zeit, gws, states, vips] = await Promise.all([
     api(host, cred, "/api/core/firmware/status"),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_information", "/api/diagnostics/system/systemInformation"]),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_resources", "/api/diagnostics/system/systemResources"]),
@@ -175,7 +195,11 @@ export async function collectOpnsense(host, cred, settings) {
     ersterTreffer(host, cred, ["/api/diagnostics/interface/get_interface_statistics", "/api/diagnostics/interface/getInterfaceStatistics"]),
     api(host, cred, "/api/interfaces/overview/export"),
     api(host, cred, "/api/wireguard/service/show"),
-    ersterTreffer(host, cred, ["/api/diagnostics/system/system_time", "/api/diagnostics/system/systemTime"])
+    ersterTreffer(host, cred, ["/api/diagnostics/system/system_time", "/api/diagnostics/system/systemTime"]),
+    api(host, cred, "/api/routes/gateway/status"),
+    ersterTreffer(host, cred, ["/api/diagnostics/firewall/pf_statistics/state",
+      "/api/diagnostics/firewall/pf_statistics", "/api/diagnostics/firewall/pfStatistics"]),
+    ersterTreffer(host, cred, ["/api/diagnostics/interface/get_vip_status", "/api/diagnostics/interface/getVipStatus"])
   ]);
 
   /* Die Firmware-Auskunft ist der Anker: kommt die nicht, stimmt am
@@ -189,6 +213,9 @@ export async function collectOpnsense(host, cred, settings) {
   laufzeit(out, sys.ok ? sys.data : null, zeit.ok ? zeit.data : null);
   schnittstellen(out, host, ifs.ok ? ifs.data : null, uebersicht.ok ? uebersicht.data : null);
   wireguard(out, wg.ok ? wg.data : null, wg.status);
+  gateways(out, gws);
+  zustandstabelle(out, states);
+  carp(out, vips);
 
   out.schwellen = grenze;
   ampel(out, grenze);
@@ -327,7 +354,7 @@ function schnittstellen(out, host, d, uebersichtRoh) {
     });
   }
 
-  /* Rechnen tut durchsatz.js — für pfSense gilt dieselbe Rechnung, und
+  /* Rechnen tut firewall.js — für pfSense gilt dieselbe Rechnung, und
      zweimal wäre sie zweimal falsch. */
   Object.assign(out, ausZaehlern(zaehlerSchluessel(host), physisch, schnittstellenUebersicht(uebersichtRoh)));
 }
@@ -392,12 +419,111 @@ function wireguard(out, d, status) {
   out.wgStill = out.peers.filter(p => p.handshake == null || p.handshake > 600).length;
 }
 
+/* ---------- Gateways ----------
+   `/api/routes/gateway/status` ist die Auskunft, die man von außen nie
+   bekommt: die Firewall misst gegen ihre Monitor-Adresse und weiß damit
+   etwas über die Leitung *hinter* sich. Ein Uplink kann tot sein, während
+   die Firewall selbst tadellos antwortet.
+
+   Eine Eigenheit, die hier zählt: OPNsense schreibt `none`, wenn ein
+   Gateway steht und nicht überwacht wird. Das ist kein Fehlen einer
+   Auskunft, sondern die Auskunft „nichts zu beanstanden" — als unbekannt
+   gelesen stünde die halbe Tabelle grau da. */
+function gateways(out, r) {
+  if (!r?.ok) {
+    out.gateways = null;
+    if (r?.status && r.status !== 404) out.gwFehler = `Gateway-Zustand nicht lesbar (${r.status})`;
+    return;
+  }
+  const rows = Array.isArray(r.data?.items) ? r.data.items
+    : Array.isArray(r.data?.rows) ? r.data.rows
+    : Array.isArray(r.data) ? r.data : null;
+  if (!rows) { out.gateways = null; return; }
+
+  out.gateways = rows.map(g => ({
+    name: g.name || g.gateway || "—",
+    /* `status_translated` ist der Text für Menschen („Online"), `status`
+       das Kürzel für die Bewertung. Bewertet wird das Kürzel. */
+    status: String(g.status ?? "").toLowerCase() || "unbekannt",
+    substatus: g.status_translated || null,
+    monitor: g.monitor || g.address || null,
+    quelle: g.address || null,
+    rtt: messwert(g.delay),
+    stddev: messwert(g.stddev),
+    verlust: messwert(g.loss)
+  }));
+}
+
+/* ---------- Zustandstabelle ----------
+   Läuft sie voll, bricht der Durchsatz ein, ohne dass eine Leitung
+   ausfällt — von außen sieht das aus wie ein kaputtes Netz, und es steht
+   nirgends sonst.
+
+   Die Gestalt schwankt zwischen den Fassungen: mal liegt die Zahl flach
+   im Antwortobjekt, mal in einem Unterobjekt. Gesucht wird deshalb nach
+   Namen, egal wie tief — und was sich nicht finden lässt, bleibt null. */
+function zustandstabelle(out, r) {
+  if (!r?.ok) { out.states = null; out.statesMax = null; out.statesPct = null; return; }
+  const jetzt = suche(r.data, ["current_entries", "current entries", "current", "entries", "states"]);
+  const max = suche(r.data, ["limit", "max_entries", "maximum", "state_limit", "states_limit"]);
+  out.states = jetzt;
+  out.statesMax = max;
+  out.statesPct = jetzt != null && max > 0 ? Math.round((jetzt / max) * 100) : null;
+}
+
+/* Einen Zahlenwert unter einem von mehreren Namen finden, gleich wie tief
+   er liegt. Drei Ebenen genügen — was tiefer steckt, ist keine Kennzahl
+   mehr, sondern eine Zufälligkeit der Verpackung. */
+function suche(d, namen, tiefe = 0) {
+  if (!d || typeof d !== "object" || tiefe > 3) return null;
+  for (const n of namen) {
+    const v = zahl(d[n]);
+    if (v != null) return v;
+  }
+  for (const v of Object.values(d)) {
+    if (v && typeof v === "object") {
+      const treffer = suche(v, namen, tiefe + 1);
+      if (treffer != null) return treffer;
+    }
+  }
+  return null;
+}
+
+/* ---------- CARP ----------
+   Gelesen wird der Zustand der virtuellen Adressen. MASTER sticht: läuft
+   auch nur eine Adresse als MASTER, trägt dieses Gerät gerade. */
+function carp(out, r) {
+  if (!r?.ok) { out.carp = null; out.carpWartung = null; return; }
+  const rows = Array.isArray(r.data?.rows) ? r.data.rows
+    : Array.isArray(r.data) ? r.data : null;
+  if (!rows?.length) { out.carp = null; out.carpWartung = null; return; }
+
+  const carpZeilen = rows.filter(x => String(x.mode || "carp").toLowerCase().includes("carp"));
+  if (!carpZeilen.length) { out.carp = null; out.carpWartung = null; return; }
+  const rollen = carpZeilen.map(x => String(x.status || x.status_txt || "").toUpperCase()).filter(Boolean);
+  out.carp = rollen.find(x => x === "MASTER") || rollen[0] || null;
+  /* Im Wartungsmodus meldet OPNsense die Adressen als „DISABLED“ oder
+     „MAINTENANCE“ — beides heißt: dieses Gerät trägt absichtlich nicht. */
+  out.carpWartung = rollen.some(x => /MAINT|DISABLED/.test(x));
+}
+
 /* ---------- Ampel ----------
    Nur was wirklich gemessen wurde, darf die Farbe bestimmen. Ein
    ausstehender Neustart oder eine neue Hauptfassung sind Hinweise, keine
    Störungen — sie stehen als Notiz da, ohne die Ampel zu drehen. */
 function ampel(out, grenze) {
   if (out.disk != null && out.disk >= grenze.disk_crit) { out.status = "crit"; out.note = `Platte zu ${out.disk} % belegt (kritisch ab ${grenze.disk_crit} %)`; return; }
+
+  /* Ein ausgefallenes Gateway ist die dringendste Aussage, die dieses
+     Gerät zu machen hat — und die einzige, die von außen niemand sieht:
+     die Firewall selbst antwortet dabei tadellos. Dieselbe Bewertung wie
+     bei pfSense, sie steht in firewall.js. */
+  const tot = (out.gateways || []).filter(g => gatewayAmpel(g) === "crit");
+  if (tot.length) {
+    out.status = "crit";
+    out.note = `Gateway ${tot.map(g => g.name).join(", ")} ist ausgefallen`;
+    return;
+  }
   if (out.ram != null && out.ram >= grenze.ram_warn) {
     /* Der ZFS-Cache zählt in dieser Zahl als belegt, ist aber jederzeit
        abzugeben — deshalb steht er dabei, statt die Ampel allein zu drehen. */
@@ -406,12 +532,32 @@ function ampel(out, grenze) {
     return;
   }
   if (out.disk != null && out.disk >= grenze.disk_warn) { out.status = "warn"; out.note = `Platte zu ${out.disk} % belegt`; return; }
+
+  /* Läuft die Zustandstabelle voll, bricht der Durchsatz ein, ohne dass
+     eine Leitung ausfällt. Von außen sieht das aus wie ein kaputtes Netz. */
+  if (out.statesPct != null && out.statesPct >= 90) {
+    out.status = "crit"; out.note = `Zustandstabelle zu ${out.statesPct} % belegt (${out.states} von ${out.statesMax})`; return;
+  }
+  if (out.statesPct != null && out.statesPct >= 80) {
+    out.status = "warn"; out.note = `Zustandstabelle zu ${out.statesPct} % belegt`; return;
+  }
+
+  const schwach = (out.gateways || []).filter(g => gatewayAmpel(g) === "warn");
+  if (schwach.length) {
+    out.status = "warn";
+    out.note = schwach.map(g => `${g.name}: ${g.status}${g.verlust != null ? `, ${g.verlust} % Verlust` : ""}`).join(" · ");
+    return;
+  }
   if (out.wgFehler) { out.status = "warn"; out.note = out.wgFehler; return; }
+  if (out.gwFehler) { out.status = "warn"; out.note = out.gwFehler; return; }
 
   const hinweise = [];
   if (out.needsReboot) hinweise.push("Neustart steht aus");
   if (out.updates) hinweise.push(`${out.updates} Aktualisierung(en)`);
   if (out.majorUpgrade) hinweise.push(`Fassung ${out.majorUpgrade} verfügbar`);
+  /* Eine CARP-Rolle ist ein Zustand, keine Störung — außer sie steht auf
+     Wartung, und dann will man wissen, dass sie es noch tut. */
+  if (out.carp) hinweise.push(`CARP ${out.carp}${out.carpWartung ? ", Wartungsmodus" : ""}`);
   if (out.ifNote) hinweise.push(out.ifNote);
   if (hinweise.length) out.note = hinweise.join(" · ");
 }

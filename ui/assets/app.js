@@ -989,9 +989,8 @@ function viewNetz() {
       </tbody></table>
     </div>
     <div class="panel-note">${mitApi
-      ? `Bei OPNsense fehlen noch Zustandstabelle und CARP-Rolle — sie liegen hinter weiteren Endpunkten;
-         bei pfSense stehen beide, weil das API-Paket sie mitliefert. Die Spalten bleiben dort leer, wo nichts
-         abgefragt wurde, statt eine Null zu zeigen.`
+      ? `Zustandstabelle, CARP-Rolle und Gateways liefern beide Bauarten. Was eine Fassung nicht kennt, bleibt leer,
+         statt eine Null zu zeigen — ein Endpunkt, den es nicht gibt, ist keine Messung von null.`
       : `Für Kennzahlen braucht es einen API-Zugang: bei OPNsense unter
          <span class="mono">System → Access → Users</span> einen Schlüssel erzeugen, bei pfSense zuerst das Paket
          <span class="mono">pfSense-pkg-API</span> installieren. Beides dann unter <b>Verwaltung</b> hinterlegen.
@@ -1038,8 +1037,9 @@ function gatewayPanel(fws) {
       </tbody></table>
     </div>
     <div class="panel-note">Diese Zahlen misst die Firewall selbst gegen ihre Monitor-Adresse — sie sagen etwas über
-      die Leitung <em>hinter</em> der Firewall, was der Leitstand von innen nie sehen könnte. Bislang liefert nur
-      pfSense sie; bei OPNsense liegt der Gateway-Status hinter einem Endpunkt, der noch nicht abgefragt wird.</div>
+      die Leitung <em>hinter</em> der Firewall, was der Leitstand von innen nie sehen könnte. Ein Gateway ohne
+      Überwachung meldet OPNsense als <span class="mono">none</span>; das heißt „steht, wird nicht gemessen" und ist
+      kein Befund. Wo <span class="mono">~</span> stünde, wurde nichts gemessen — dort bleibt ein Strich, keine Null.</div>
   </div>`;
 }
 
@@ -1137,7 +1137,7 @@ function menge(n) {
    Firewall bleibt eine Firewall, gleich von wem sie ist. */
 const FIREWALL = new Set(["opnsense", "pfsense"]);
 
-/* Gateways — das hat bislang nur pfSense.
+/* Gateways — von beiden Firewall-Typen.
 
    Es ist die Angabe, die einen ausgefallenen Uplink am schnellsten
    verrät, und sie sagt mehr als „erreichbar": „online mit 0,4 % Verlust"
@@ -2332,9 +2332,9 @@ function kennzahlenPanel(h) {
           : h.updates ? `${h.updates === 1 && pf ? "eine steht bereit" : h.updates + " offen"}${h.majorUpgrade ? ` · Fassung ${esc(h.majorUpgrade)}` : ""}`
           : "keine offen"],
         h.needsReboot == null ? null : ["Neustart nötig", ja(!h.needsReboot, "nein", "ja")],
-        /* Nur bei pfSense, weil OPNsense diese drei hier noch nicht liefert —
-           eine leere Zeile „CARP: —" an einem Gerät ohne CARP-Anbindung wäre
-           eine Behauptung über etwas, wonach gar nicht gefragt wurde. */
+        /* Nur wenn die Firewall sie auch gemeldet hat: eine Zeile „CARP: —"
+           an einem Gerät ohne CARP wäre eine Behauptung über etwas, wonach
+           gar nicht gefragt wurde. */
         h.statesPct != null ? ["Zustandstabelle", `${h.states} von ${h.statesMax} belegt (${h.statesPct} %)`] : null,
         h.carp ? ["CARP", `${esc(h.carp)}${h.carpWartung ? " · Wartungsmodus" : ""}`] : null,
         ["WireGuard", h.wgPeers == null ? "—"
@@ -3700,9 +3700,12 @@ function zugangsFelder(type, cred, getippt) {
       ${inpc("clientId", "Client-ID", cred, "nur bei Paket v1", getippt)}
       ${inpc("clientToken", "Client-Token", cred, cred.clientToken ? "hinterlegt" : "nur bei Paket v1", getippt)}
     </div>
-    <p class="admin-hint" style="margin:8px 0 0">pfSense CE hat keine Schnittstelle ab Werk. Unter
-    <span class="mono">System → Package Manager</span> das Paket <span class="mono">pfSense-pkg-API</span>
-    installieren, danach unter <span class="mono">System → API</span> einen Schlüssel erzeugen. Der Benutzer dahinter
+    <p class="admin-hint" style="margin:8px 0 0"><b>Zuerst prüfen, ob es das Paket für diese pfSense überhaupt
+    gibt.</b> <span class="mono">pfSense-pkg-API</span> ist ein Fremdprojekt und steht <b>nicht</b> im
+    Paketverzeichnis von pfSense — es wird von Hand aus den Veröffentlichungen des Projekts installiert, und für
+    neuere pfSense-Fassungen gibt es nicht immer eine passende. Ohne das Paket bleibt es bei Erreichbarkeit,
+    Antwortzeit und Zertifikat; diese Felder hier sind dann gegenstandslos.<br><br>
+    Ist es vorhanden: unter <span class="mono">System → API</span> einen Schlüssel erzeugen, der Benutzer dahinter
     braucht nur Leserechte. Gelesen werden Systemzustand, Schnittstellenzähler, Gateways, Zustandstabelle, CARP und
     WireGuard — <b>geschrieben wird nichts</b>. Welche Fassung des Pakets läuft, findet der Leitstand selbst heraus;
     die Diagnose zeigt zu jedem Aufruf die tatsächlichen Feldnamen.</p>`;

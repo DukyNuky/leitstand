@@ -148,7 +148,7 @@ Punkt — steht in [TODO.md](TODO.md).
 | 1b | Verwaltung in der Oberfläche: Standorte, Systeme, Tunnel, Startseite, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
 | 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
 | 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** — inklusive Knotendetails (Kernel, Fassung, Ausstattung, ausstehende Pakete) und jedem Gast mit seiner Auslastung, in einer eigenen Ansicht *Virtualisierung* |
-| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **beide gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), Peers und Handshake am Tunnel. pfSense über das Paket `pfSense-pkg-API` und zusätzlich mit Gateways, Zustandstabelle und CARP; bei OPNsense fehlen genau diese drei noch |
+| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense vollständig** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), **Gateways**, **Zustandstabelle**, **CARP**, Peers und Handshake am Tunnel; offen sind nur die HAProxy-Backends. pfSense liefert dasselbe, **aber nur mit dem Fremdpaket `pfSense-pkg-API`** — das nicht im Paketverzeichnis steht und für neuere Fassungen fehlt; ohne es bleibt es bei der Erreichbarkeit |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
 | 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home und Portainer gebaut** — AdGuard zusätzlich mit einer echten Auflösung über UDP/53 als *wesentlicher* Prüfung; TrueNAS, Mailcow und Home Assistant offen — bislang nur Erreichbarkeit |
 | 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | Zeitreihen und Detailseite **gebaut** (eigene Ablage statt VictoriaMetrics, siehe unten); Wartungsfenster, Push und Totmannschalter offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
@@ -265,14 +265,26 @@ geraten. Der Verbindungszustand kommt aus einem eigenen Endpunkt, den ältere
 Fassungen nicht kennen; dann bleibt er unbekannt und wird als Strich gezeigt,
 nicht als „up".
 
-**pfSense: ein Fremdpaket statt einer Shell.** pfSense CE hat keine
-Schnittstelle ab Werk, und es gab zwei Wege: SSH mit festen Lesebefehlen, oder
-das Paket `pfSense-pkg-API`. Gewählt ist das Paket — nicht weil es bequemer
-ist, sondern weil der andere Weg dem Leitstand Fähigkeiten gegeben hätte, die
-er nicht haben soll: einen SSH-Client im Abbild, einen privaten Schlüssel im
-Volume und das Auswerten von Textausgaben, die sich zwischen zwei Fassungen
-ändern dürfen. Der Preis ist ein Fremdpaket auf der Firewall; er ist
-sichtbar und widerrufbar, eine Shell im Überwachungsbehälter wäre es nicht.
+**pfSense: ein Fremdpaket statt einer Shell — und meist gar nichts.** pfSense
+CE hat keine Schnittstelle ab Werk, und es gab zwei Wege: SSH mit festen
+Lesebefehlen, oder das Paket `pfSense-pkg-API`. Gewählt ist das Paket — nicht
+weil es bequemer ist, sondern weil der andere Weg dem Leitstand Fähigkeiten
+gegeben hätte, die er nicht haben soll: einen SSH-Client im Abbild, einen
+privaten Schlüssel im Volume und das Auswerten von Textausgaben, die sich
+zwischen zwei Fassungen ändern dürfen.
+
+Nachtrag aus dem Betrieb: **das Paket ist meist nicht zu haben.** Es steht
+nicht im Paketverzeichnis von pfSense, wird von Hand aus den
+Veröffentlichungen des Projekts installiert, und für neuere pfSense-Fassungen
+gibt es nicht immer eine passende. Damit bleibt pfSense in der Praxis bei
+Erreichbarkeit, Antwortzeit und Zertifikat. Der Sammler steht trotzdem — er
+ist geprüft und kostet nichts, solange keine Zugangsdaten hinterlegt sind —,
+aber die Oberfläche sagt jetzt vorweg, dass zuerst zu prüfen ist, ob es das
+Paket überhaupt gibt. Eine Anleitung, die auf ein nicht vorhandenes Paket
+zeigt, ist schlimmer als keine: sie lässt einen suchen statt umplanen.
+
+Die ehrliche Auskunft lautet damit: wer eine Firewall wirklich auswerten will,
+nimmt OPNsense, das eine Schnittstelle ab Werk hat.
 
 Dass das Paket in zwei Fassungen umläuft, die verschieden anmelden und unter
 verschiedenen Pfaden liegen, wird nicht zur Frage an den Betreiber gemacht:

@@ -8,6 +8,18 @@
    Rechte im Behälter.
 
    ────────────────────────────────────────────────────────────
+   ZUR VERFÜGBARKEIT: Dieses Paket steht **nicht** im Paketverzeichnis von
+   pfSense. Es wird von Hand aus den Veröffentlichungen des Projekts
+   installiert, und für neuere pfSense-Fassungen gibt es nicht immer eine
+   passende. Wer es nicht hat, bekommt von pfSense weiterhin nur
+   Erreichbarkeit, Antwortzeit und Zertifikat — das ist keine
+   Fehleinrichtung, sondern der Stand der Dinge.
+
+   Dieser Sammler liegt für den Fall bereit, dass das Paket da ist. Der
+   Weg über SSH bleibt verworfen, und zwar unabhängig davon: er hätte dem
+   Leitstand einen SSH-Client im Abbild und einen privaten Schlüssel im
+   Volume gegeben, und beides soll er nicht haben (siehe ARCHITECTURE.md).
+   ────────────────────────────────────────────────────────────
    ZWEI VORBEHALTE, die hier festgehalten gehören:
 
    1. **Das Paket zählt zwei Fassungen**, und sie sprechen verschieden.
@@ -35,7 +47,7 @@
 
 import { requestJson } from "../http.js";
 import { schwellenFuer } from "../inventory.js";
-import { ausZaehlern, NICHT_PHYSISCH, zahl } from "./durchsatz.js";
+import { ausZaehlern, NICHT_PHYSISCH, zahl, messwert, verbindung, gatewayAmpel } from "./firewall.js";
 
 /* ---------- Zugang ----------
    v2: X-API-Key. v1: Authorization mit Client-ID und Token. Und weil das
@@ -150,8 +162,10 @@ export function hintFor(r) {
     return "Angemeldet, aber ohne Rechte: dem Benutzer fehlen die Privilegien für diesen Endpunkt. In pfSense unter "
       + "System → User Manager die Berechtigungen prüfen.";
   if (r.status === 404)
-    return "Erreicht, aber der Endpunkt fehlt. Entweder ist das Paket pfSense-pkg-API nicht installiert, oder die "
-      + "Oberfläche liegt hinter einem Reverse Proxy unter einem Unterpfad — der gehört dann mit in die Adresse.";
+    return "Erreicht, aber der Endpunkt fehlt. Am wahrscheinlichsten: das Paket pfSense-pkg-API ist nicht "
+      + "installiert — es steht nicht im Paketverzeichnis von pfSense und ist für neuere Fassungen nicht immer "
+      + "zu haben. Dann bleibt es bei der reinen Erreichbarkeit. Sonst prüfen, ob die Oberfläche hinter einem "
+      + "Reverse Proxy unter einem Unterpfad liegt — der gehört mit in die Adresse.";
   if (/abgewiesen/.test(r.error || ""))
     return "Port prüfen: die pfSense-Oberfläche läuft je nach Einrichtung auf 443 oder 80.";
   return null;
@@ -357,16 +371,6 @@ function schnittstellen(out, host, d) {
   Object.assign(out, ausZaehlern(zaehlerSchluessel(host), physisch));
 }
 
-function verbindung(v) {
-  if (v === true) return "up";
-  if (v === false) return "down";
-  if (v == null) return null;
-  const s = String(v).toLowerCase();
-  if (/^(up|active|online)/.test(s)) return "up";
-  if (/^(down|no carrier|inactive|offline)/.test(s)) return "down";
-  return null;
-}
-
 /* ---------- Gateways ----------
    Das kann OPNsense hier noch nicht, und es ist die Angabe, die einen
    ausgefallenen Uplink am schnellsten verrät: „online" mit 0,4 % Verlust
@@ -387,13 +391,6 @@ function gatewaysAus(d) {
     stddev: messwert(nimm(g, "stddev")),
     verlust: messwert(nimm(g, "loss", "packet_loss"))
   }));
-}
-
-/* „1.2ms", „0.0%", „~" — die Zahl davor, sonst null. */
-function messwert(v) {
-  if (v == null) return null;
-  const m = /-?\d+(\.\d+)?/.exec(String(v));
-  return m ? Number(m[0]) : null;
 }
 
 /* ---------- Zustandstabelle ----------
@@ -508,7 +505,7 @@ function ampel(out, grenze) {
   }
   /* Ein Gateway, das down ist, ist ein ausgefallener Uplink — das ist die
      dringendste Aussage, die dieses Gerät zu machen hat. */
-  const tot = (out.gateways || []).filter(g => /down|offline/.test(g.status));
+  const tot = (out.gateways || []).filter(g => gatewayAmpel(g) === "crit");
   if (tot.length) {
     out.status = "crit";
     out.note = `Gateway ${tot.map(g => g.name).join(", ")} ist ausgefallen`;
@@ -531,7 +528,7 @@ function ampel(out, grenze) {
   if (out.statesPct != null && out.statesPct >= 80) {
     out.status = "warn"; out.note = `Zustandstabelle zu ${out.statesPct} % belegt`; return;
   }
-  const schwach = (out.gateways || []).filter(g => /loss|delay|warn/.test(g.status) || (g.verlust ?? 0) >= 2);
+  const schwach = (out.gateways || []).filter(g => gatewayAmpel(g) === "warn");
   if (schwach.length) {
     out.status = "warn";
     out.note = schwach.map(g => `${g.name}: ${g.status}${g.verlust != null ? `, ${g.verlust} % Verlust` : ""}`).join(" · ");
