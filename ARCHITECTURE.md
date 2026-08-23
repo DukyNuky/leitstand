@@ -399,3 +399,22 @@ ungenaue, die sich zu erkennen gibt.
 Bewertet wird der **letzte** Lauf, nicht „ein Fehlschlag in den letzten 24
 Stunden". Ist danach einer geglückt, ist die Sache erledigt; eine Meldung, die
 trotzdem stehen bleibt, lernt man zu übergehen — und mit ihr die nächste.
+
+**Grün muss verdient sein.** Die Kurzlage ist die Seite, auf die sich jemand
+morgens im Vorbeigehen verlässt — sie beantwortet eine Frage, in einem Wort.
+Genau deshalb ist sie die gefährlichste Ansicht des Werkzeugs: „nichts leuchtet
+rot" ist nicht dasselbe wie „alles in Ordnung". Ein Zustandsstrom, der hängt,
+ein Bestand ohne ein einziges überwachtes System, ein Sammler ohne
+Zugangsdaten — jedes davon ergäbe eine Anzeige ohne rote Zeile.
+
+Der Befund kennt deshalb vier Ausgänge, und die Reihenfolge ist die Aussage:
+*kann* ich es wissen (Dienst da? Strom frisch? überhaupt etwas überwacht?),
+und erst dann: *weiß* ich es. Eine quittierte Störung macht die Fläche nicht
+grün — „quittiert" heißt, dass jemand hinsieht, nicht, dass es behoben ist.
+
+Und unter der Fläche steht, was in ihr nicht enthalten ist: wie viele Systeme
+ohne Zugangsdaten nur angepingt werden, wie viele von der Überwachung
+ausgenommen sind, ob ICMP übersprungen wird. Ohne diesen Absatz wäre das Grün
+eine Behauptung über Dinge, die gar nicht gemessen werden — der Fehler, an dem
+Überwachungen still scheitern. Ist wirklich keine Lücke da, steht auch das da;
+dann ist es eine Aussage und keine Auslassung.

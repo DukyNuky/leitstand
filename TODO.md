@@ -215,6 +215,16 @@ gebaut.
       rot, `WARNINGS` gelb, nie gelaufen eine Notiz. Damit ist das letzte
       Beispiel aus der Ansicht *Speicher & Sicherung* verschwunden.
 
+- [x] **2.13 Kurzlage für unterwegs** — gebaut. Eine Ansicht, die in einem
+      Wort sagt, ob etwas anliegt, und auf einem Telefon ohne Zoom lesbar
+      ist; ohne Ansicht in der Adresse ist sie auf schmalen Schirmen die
+      Startseite. Der Befund ist eine reine Funktion des Zustands und kennt
+      vier Ausgänge — „kein Stand", „Stand unklar", „nichts überwacht",
+      und erst dann eine Aussage über die Lage. Eine quittierte Störung
+      macht die Fläche nicht grün. Darunter steht, worüber das Grün
+      schweigt: Systeme ohne Zugangsdaten, ausgenommene Systeme,
+      abgeschaltetes oder übersprungenes ICMP.
+
 ---
 
 ## 3. Alarmierung — Push-Kanäle und Totmannschalter

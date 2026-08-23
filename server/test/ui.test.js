@@ -71,7 +71,7 @@ function ladeUi({ live = true } = {}) {
 function zeichneAlles(sandbox, ziele) {
   const ui = sandbox.window.LeitstandUI;
   const seiten = {};
-  for (const v of ["lage", "sites", "virt", "compute", "netz", "vpn", "dienste", "post", "links", "cfg", "verwaltung"]) {
+  for (const v of ["kurz", "lage", "sites", "virt", "compute", "netz", "vpn", "dienste", "post", "links", "cfg", "verwaltung"]) {
     ui.state.view = v;
     ui.render();
     seiten[v] = ziele.get("#wrap").innerHTML + ziele.get("#top").innerHTML + ziele.get("#rail-nav").innerHTML;
@@ -1648,4 +1648,126 @@ test("Wo die Zuordnung nur der Knoten hergibt, steht das dabei", async () => {
   ]);
   assert.match(html, /vom Knoten/);
   assert.match(html, /Auftragskennung/, "und darunter, warum das so ist");
+});
+
+/* ============================================================
+   Kurzlage
+
+   Die eine Ansicht, auf die sich jemand morgens im Vorbeigehen verlässt.
+   Grün ist hier eine Behauptung — geprüft wird deshalb vor allem, wann
+   sie NICHT gemacht werden darf.
+   ============================================================ */
+
+function kurzlage(anpassen = () => {}, zustand) {
+  const { sandbox, ziele } = ladeUi();
+  const st = zustand;
+  sandbox.window.LeitstandUI.applyLive(st);
+  const ui = sandbox.window.LeitstandUI;
+  anpassen(ui, sandbox);
+  ui.state.view = "kurz";
+  ui.render();
+  return { html: ziele.get("#wrap").innerHTML + ziele.get("#top").innerHTML, sandbox, ui };
+}
+
+test("Ist alles in Ordnung, sagt die Kurzlage genau das", async () => {
+  const zustand = await echterZustand();
+  /* Der Testbestand misst gegen unerreichbare Adressen — für diesen Fall
+     wird daraus ein gesunder Stand gemacht. Geprüft wird die Aussage, nicht
+     der Prober. */
+  zustand.incidents = [];
+  for (const h of zustand.hosts) h.status = "ok";
+  for (const t of zustand.tunnels) t.status = "ok";
+  const { html } = kurzlage(() => {}, zustand);
+  assert.match(html, /Passt alles/);
+  assert.ok(!/undefined|NaN/.test(html));
+});
+
+test("Eine Störung macht aus Grün eine Zahl und nennt die erste", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [
+    { id: "INC-1", sev: "crit", host: "fw", site: "rz", title: "fw nicht erreichbar", ack: false, ageMin: 12, count: 3 },
+    { id: "INC-2", sev: "warn", host: "web", site: "hq", title: "langsame Antwort", ack: false, ageMin: 4, count: 1 }
+  ];
+  const { html } = kurzlage(() => {}, zustand);
+  assert.match(html, /Eine Störung/);
+  assert.match(html, /fw nicht erreichbar/);
+  assert.match(html, /seit 12 min/);
+});
+
+/* „Quittiert" heißt, dass jemand hinsieht — nicht, dass es behoben ist.
+   Eine grüne Fläche darüber wäre die gefährlichste Anzeige des Werkzeugs. */
+test("Eine quittierte Störung macht die Fläche nicht grün", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [{ id: "INC-1", sev: "crit", host: "fw", site: "rz", title: "fw nicht erreichbar", ack: true, ageMin: 90, count: 9 }];
+  const { html } = kurzlage(() => {}, zustand);
+  assert.ok(!/Passt alles/.test(html));
+  assert.match(html, /Eine Störung/);
+  assert.match(html, /quittiert/);
+});
+
+/* Der gefährlichste Zustand ist nicht Rot, sondern Grün ohne Grundlage. */
+test("Hängt der Zustandsstrom, ist der Stand unklar und nicht in Ordnung", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [];
+  for (const h of zustand.hosts) h.status = "ok";
+  const { html } = kurzlage((ui, sandbox) => { sandbox.window.LEITSTAND.stale = true; }, zustand);
+  assert.match(html, /Stand unklar/);
+  assert.ok(!/Passt alles/.test(html));
+});
+
+/* Ohne Dienst zeigt die Oberfläche ohnehin ihre Offline-Seite — geprüft
+   wird deshalb der Befund selbst, damit er auch dann nichts behauptet. */
+test("Ohne Dienst behauptet der Befund gar nichts", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [];
+  const { sandbox } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  sandbox.window.LEITSTAND.live = false;
+  const b = JSON.parse(vm.runInContext("JSON.stringify(kurzBefund())", sandbox));
+  assert.equal(b.ton, "idle");
+  assert.match(b.wort, /Kein Stand/);
+});
+
+/* Grün ist nur so viel wert wie das, worüber es schweigt. */
+test("Unter der Fläche steht, was in ihr nicht enthalten ist", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [];
+  for (const h of zustand.hosts) h.status = "ok";
+  zustand.integrations = [
+    { name: "OPNsense", type: "opnsense", targets: 2, mitZugang: 0, unterstuetzt: true, status: "idle", method: "", every: "15 s", note: "" },
+    { name: "TrueNAS SCALE", type: "truenas", targets: 1, mitZugang: 0, unterstuetzt: false, status: "idle", method: "", every: "15 s", note: "" }
+  ];
+  const { html } = kurzlage(() => {}, zustand);
+  assert.match(html, /ohne hinterlegte Zugangsdaten/);
+  assert.match(html, /noch keinen\s*\n?\s*Sammler|keinen Sammler/);
+  assert.match(html, /von der Überwachung ausgenommen/, "das Laborsystem im Bestand steht mit dabei");
+});
+
+/* Abgeschaltetes ICMP ist eine solche Lücke: reine Ping-Ziele werden dann
+   gar nicht geprüft, und der Testbestand hat es abgeschaltet. */
+test("Abgeschaltetes ICMP steht als Lücke da", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [];
+  const { html } = kurzlage(() => {}, zustand);
+  assert.match(html, /ICMP ist abgeschaltet/);
+});
+
+test("Ist wirklich nichts offen, sagt der Absatz auch das", async () => {
+  const zustand = await echterZustand();
+  zustand.incidents = [];
+  zustand.integrations = [{ name: "OPNsense", type: "opnsense", targets: 1, mitZugang: 1, unterstuetzt: true, status: "ok", method: "", every: "15 s", note: "" }];
+  zustand.hosts = zustand.hosts.filter(h => h.monitored !== false).map(h => ({ ...h, status: "ok" }));
+  zustand.meta.runtime = { ...zustand.meta.runtime, icmp: { configured: true, working: true, note: "läuft" } };
+  const { html } = kurzlage(() => {}, zustand);
+  assert.match(html, /Jedes angelegte System wird geprüft/);
+});
+
+/* Auf einem Telefon zählt, was fehlt: Suchfeld und Tastenkürzel sind dort
+   Zierrat und nehmen die halbe Kopfzeile. */
+test("Die Kurzlage trägt keine Suchleiste und keinen Kürzelknopf", async () => {
+  const zustand = await echterZustand();
+  const { html } = kurzlage(() => {}, zustand);
+  assert.ok(!/id="q"/.test(html));
+  assert.ok(!/Nur Probleme/.test(html));
+  assert.match(html, /data-action="site"/, "der Standortfilter bleibt");
 });

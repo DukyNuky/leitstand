@@ -472,6 +472,56 @@ pre.raw {
   .nav-label, .rail-foot { display: none; }
 }
 
+/* ---------- Kurzlage ----------
+   Eine Fläche, die man aus einem Meter Entfernung lesen kann, und
+   Schaltflächen, die man mit dem Daumen trifft. Alles hier ist auf ein
+   Telefon hin gebaut; auf einem Schirm sieht es aus wie eine große,
+   ruhige Karte, und das ist kein Nachteil. */
+.kurz { display: flex; flex-direction: column; gap: 14px; max-width: 720px; }
+.kurz-karte {
+  border-radius: var(--r); padding: 30px 20px; text-align: center;
+  border: 1px solid var(--line-2); background: var(--panel);
+}
+.kurz-karte[data-tone="ok"]   { border-color: var(--ok);   background: var(--ok-bg); }
+.kurz-karte[data-tone="warn"] { border-color: var(--warn); background: var(--warn-bg); }
+.kurz-karte[data-tone="crit"] { border-color: var(--crit); background: var(--crit-bg); }
+.kurz-karte[data-tone="idle"] { border-color: var(--line-2); background: var(--idle-bg); }
+.kurz-wort { font-family: var(--f-display); font-size: 34px; font-weight: 700; letter-spacing: -.01em; line-height: 1.1; }
+.kurz-karte[data-tone="ok"]   .kurz-wort { color: var(--ok); }
+.kurz-karte[data-tone="warn"] .kurz-wort { color: var(--warn); }
+.kurz-karte[data-tone="crit"] .kurz-wort { color: var(--crit); }
+.kurz-karte[data-tone="idle"] .kurz-wort { color: var(--dim); }
+.kurz-satz { margin-top: 9px; font-size: 14px; color: var(--dim); }
+
+.kurz-zeile {
+  display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left;
+  padding: 14px; background: none; border: 0; border-bottom: 1px solid var(--line);
+  color: var(--text); cursor: pointer; font: inherit;
+}
+.kurz-zeile:last-child { border-bottom: 0; }
+.kurz-zeile:hover { background: var(--panel-3); }
+.kurz-titel { display: block; font-size: 14px; font-weight: 500; }
+.kurz-sub { display: block; margin-top: 2px; font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); }
+
+.kurz-kacheln { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.kurz-kachel {
+  display: flex; flex-direction: column; gap: 2px; padding: 16px 14px; text-align: left;
+  background: var(--panel); border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--r);
+  cursor: pointer; color: var(--text); font: inherit;
+}
+.kurz-kachel[data-tone="ok"]   { border-left-color: var(--ok); }
+.kurz-kachel[data-tone="warn"] { border-left-color: var(--warn); }
+.kurz-kachel[data-tone="crit"] { border-left-color: var(--crit); }
+.kurz-kachel[data-tone="idle"] { border-left-color: var(--idle); }
+.kurz-kachel b { font-family: var(--f-mono); font-size: 24px; font-weight: 600; }
+.kurz-kachel-k { font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.kurz-kachel-s { font-size: 11.5px; color: var(--faint); }
+
+@media (max-width: 520px) {
+  .kurz-wort { font-size: 28px; }
+  .kurz-kachel b { font-size: 21px; }
+}
+
 /* ---------- Verwaltung ---------- */
 .bar[data-tone="idle"] > i { background: var(--idle); }
 .admin-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px 14px; }

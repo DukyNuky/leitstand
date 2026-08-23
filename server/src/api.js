@@ -476,6 +476,12 @@ function integrationViews(inv, secrets, engine) {
       method: !supported ? "nur Erreichbarkeit (Prüfung ohne Zugang)"
         : e.withCred ? (t.zugang || "API-Token") : `${t.zugang || "API-Token"} — noch nicht hinterlegt`,
       targets: e.targets,
+      /* Wie viele davon einen Zugang haben und ob es für den Typ
+         überhaupt einen Sammler gibt — die Kurzlage rechnet daraus aus,
+         worüber ihre grüne Fläche schweigt. Als Zahl, nicht als Satz:
+         einen Satz müsste sie zerlegen, und das ginge einmal schief. */
+      mitZugang: e.withCred,
+      unterstuetzt: supported,
       every: `${inv.settings.interval} s`,
       status: e.errors ? "warn" : (supported && !e.withCred) ? "idle" : "ok",
       note: e.errors ? `${e.errors} System(e) melden einen Fehler beim Abruf`

@@ -143,6 +143,10 @@ const ICON = {
 };
 
 const VIEWS = [
+  /* Ganz oben, weil sie die Frage beantwortet, mit der man das Werkzeug
+     überhaupt aufmacht — und weil sie auf einem Telefon die einzige ist,
+     die man im Gehen lesen kann. */
+  { id:"kurz",    label:"Kurzlage",     icon:"lage",    group:"Übersicht" },
   { id:"lage",    label:"Lagebild",     icon:"lage",    group:"Übersicht" },
   { id:"sites",   label:"Standorte",    icon:"sites",   group:"Übersicht" },
   /* „Compute" hieß früher alles, was Rechenlast trägt — Proxmox, Speicher
@@ -370,16 +374,162 @@ function renderTopbar() {
         <button data-action="site" data-site="all" aria-pressed="${state.site === "all"}">Alle</button>
         ${SITES.map(s => `<button data-action="site" data-site="${s.id}" aria-pressed="${state.site === s.id}" title="${esc(s.name)}">${esc(s.short)}</button>`).join("")}
       </div>
+      ${state.view === "kurz" ? "" : `
       <button class="btn" data-action="toggle-problems" aria-pressed="${state.onlyProblems}">
         ${dot(state.onlyProblems ? "warn" : "idle")} Nur Probleme
       </button>
       <div class="search">${ICON.search}<input id="q" placeholder="Host, IP, Dienst…" value="${esc(state.q)}" aria-label="Suchen"></div>
-      <button class="btn" data-action="palette">⌘K</button>
+      <button class="btn" data-action="palette">⌘K</button>`}
       <button class="btn" data-action="theme" title="Hell/Dunkel umschalten">◐</button>
       <span class="mono faint" style="font-size:11px" title="Zeitpunkt des letzten Durchlaufs im Dienst — nicht die Uhr dieses Browsers">${esc(letzterLauf())}</span>
     </div>
-    ${renderAlarmstrip()}
+    ${state.view === "kurz" ? "" : renderAlarmstrip()}
   </div>`;
+}
+
+/* ============================================================
+   Ansicht: Kurzlage
+
+   Eine Antwort auf eine einzige Frage, groß genug, um sie im Vorbeigehen
+   auf einem Telefon zu lesen: passt alles?
+
+   Grün ist hier eine Behauptung, und sie muss verdient sein. „Alles in
+   Ordnung" ist deshalb nicht dasselbe wie „nichts leuchtet rot": ein
+   Zustandsstrom, der hängt, ein Bestand ohne ein einziges überwachtes
+   System, ein Sammler ohne Zugangsdaten — jedes davon ergäbe eine Anzeige
+   ohne rote Zeile, und sie wäre gelogen. Der Befund kennt deshalb den
+   Zustand „unklar", und unter der Fläche steht, was in ihr nicht
+   enthalten ist. Wer sich morgens auf ein grünes Feld verlässt, muss
+   wissen, worüber es schweigt.
+
+   Eine quittierte Störung macht die Fläche nicht grün. „Quittiert" heißt,
+   dass jemand hinsieht — nicht, dass es behoben ist. */
+function viewKurz() {
+  const b = kurzBefund();
+  const offen = state.incidents.filter(i => inSite(i) && i.sev !== "info");
+
+  return `<div class="kurz">
+    <div class="kurz-karte" data-tone="${b.ton}">
+      <div class="kurz-wort">${esc(b.wort)}</div>
+      <div class="kurz-satz">${esc(b.satz)}</div>
+    </div>
+
+    ${offen.length ? `<div class="panel">
+      <div class="panel-head"><h3>Was ansteht</h3><span class="hint">${offen.length} offen</span></div>
+      <div class="panel-body panel-body--flush">
+        ${offen.map(i => `<button class="kurz-zeile" data-sev="${i.sev}"
+          ${i.host ? `data-action="system" data-id="${esc(i.host)}"` : `data-action="view" data-view="lage"`}>
+          ${dot(i.sev)}
+          <span style="min-width:0">
+            <span class="kurz-titel">${esc(i.title)}</span>
+            <span class="kurz-sub">${esc(i.host || siteName(i.site) || "—")}${
+              i.ageMin != null ? " · seit " + esc(ago(i.ageMin)).replace(/^vor /, "") : ""}${
+              i.ack ? " · quittiert" : ""}</span>
+          </span></button>`).join("")}
+      </div>
+    </div>` : ""}
+
+    <div class="kurz-kacheln">${kurzKacheln().map(k => `
+      <button class="kurz-kachel" data-tone="${k.ton}" data-action="view" data-view="${k.go}">
+        <span class="kurz-kachel-k">${esc(k.k)}</span>
+        <b>${esc(k.v)}</b>
+        <span class="kurz-kachel-s">${esc(k.s)}</span>
+      </button>`).join("")}</div>
+
+    <div class="panel">
+      <div class="panel-head"><h3>Worüber das Feld schweigt</h3><span class="hint">damit Grün etwas wert ist</span></div>
+      <div class="panel-body col" style="gap:8px">
+        ${kurzLuecken().map(l => `<div class="row" style="gap:9px;align-items:flex-start">
+          ${dot(l.ton)}<span style="font-size:13.5px">${l.text}</span></div>`).join("")}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* Der Befund selbst — eine reine Funktion des Zustands, damit sich genau
+   das prüfen lässt, worauf sich jemand morgens verlässt. Die Reihenfolge
+   ist die Aussage: erst kann ich es überhaupt wissen, dann weiß ich es. */
+function kurzBefund() {
+  const L = window.LEITSTAND || {};
+  const ueberwacht = state.hosts.filter(h => h.monitored !== false);
+  const offen = state.incidents.filter(i => inSite(i) && i.sev !== "info");
+  const crit = offen.filter(i => i.sev === "crit");
+  const warn = offen.filter(i => i.sev === "warn");
+  const quittiert = offen.filter(i => i.ack).length;
+
+  if (state.connecting) return { ton: "idle", wort: "Verbinde …", satz: "Der Stand wird gerade geholt." };
+  if (!LIVE()) return { ton: "idle", wort: "Kein Stand",
+    satz: state.offline ? `Der Dienst antwortet nicht: ${state.offline}` : "Der Dienst antwortet nicht — hier stünde sonst der letzte Durchlauf." };
+  if (L.stale) return { ton: "warn", wort: "Stand unklar",
+    satz: `Die Verbindung hängt. Die Werte sind vom ${fmtWhen(L.lastRun) || "letzten Durchlauf"} und werden nicht mehr aufgefrischt.` };
+  if (!ueberwacht.length) return { ton: "idle", wort: "Nichts überwacht",
+    satz: state.hosts.length
+      ? "Jedes angelegte System ist von der Überwachung ausgenommen."
+      : "Es ist noch kein System angelegt." };
+
+  const nachsatz = quittiert ? ` ${quittiert} davon quittiert.` : "";
+  if (crit.length) return { ton: "crit",
+    wort: crit.length === 1 ? "Eine Störung" : `${crit.length} Störungen`,
+    satz: `${crit[0].title}.${nachsatz}` };
+  if (warn.length) return { ton: "warn",
+    wort: warn.length === 1 ? "Eine Warnung" : `${warn.length} Warnungen`,
+    satz: `${warn[0].title}.${nachsatz}` };
+
+  const tun = state.tunnels.filter(t => inSite({ site: t.a }) || inSite({ site: t.b }));
+  return { ton: "ok", wort: "Passt alles",
+    satz: `${ueberwacht.length} ${ueberwacht.length === 1 ? "System" : "Systeme"}`
+      + (tun.length ? `, ${tun.length} ${tun.length === 1 ? "Tunnel" : "Tunnel"}` : "")
+      + ` — geprüft ${letzterLauf()}.` };
+}
+
+/* Vier Zahlen, mehr nicht. Was hier steht, muss man nicht lesen, um zu
+   wissen, ob etwas anliegt — dafür ist die Fläche darüber da. */
+function kurzKacheln() {
+  const ueberwacht = state.hosts.filter(h => h.monitored !== false && inSite(h));
+  const hostsOk = ueberwacht.filter(h => h.status === "ok").length;
+  const tun = state.tunnels.filter(t => state.site === "all" || t.a === state.site || t.b === state.site);
+  const tunOk = tun.filter(t => t.status === "ok").length;
+  const bk = BACKUPS.filter(x => x.aktiv);
+  const bkOk = bk.filter(x => x.status === "ok").length;
+  const certWarn = CERTS.filter(c => c.bewertet !== false && c.days <= (thr("tls_warn_days") ?? 30)).length;
+
+  return [
+    { k: "Systeme", v: ueberwacht.length ? `${hostsOk}/${ueberwacht.length}` : "—", s: "antworten",
+      ton: !ueberwacht.length ? "idle" : hostsOk === ueberwacht.length ? "ok" : "warn", go: "sites" },
+    { k: "Tunnel", v: tun.length ? `${tunOk}/${tun.length}` : "—", s: tun.length ? "tragen" : "keiner angelegt",
+      ton: !tun.length ? "idle" : tunOk === tun.length ? "ok" : "warn", go: "vpn" },
+    { k: "Sicherungen", v: bk.length ? `${bkOk}/${bk.length}` : "—", s: bk.length ? "zuletzt geglückt" : "kein Auftrag gelesen",
+      ton: !bk.length ? "idle" : bkOk === bk.length ? "ok" : "warn", go: "compute" },
+    { k: "Zertifikate", v: CERTS.length ? String(certWarn) : "—", s: CERTS.length ? "laufen bald ab" : "keines gelesen",
+      ton: !CERTS.length ? "idle" : certWarn ? "warn" : "ok", go: "dienste" }
+  ];
+}
+
+/* Was die grüne Fläche nicht enthält. Ohne diesen Absatz wäre sie eine
+   Behauptung über Dinge, die gar nicht gemessen werden — und das ist der
+   Fehler, an dem Überwachungen still scheitern. */
+function kurzLuecken() {
+  const out = [];
+  const ohneZugang = INTEGRATIONS.filter(i => i.unterstuetzt).reduce((a, i) => a + Math.max(0, (i.targets || 0) - (i.mitZugang || 0)), 0);
+  const ohneSammler = INTEGRATIONS.filter(i => !i.unterstuetzt).reduce((a, i) => a + (i.targets || 0), 0);
+  const aus = state.hosts.filter(h => h.monitored === false).length;
+  const icmp = state.runtime?.icmp;
+
+  if (ohneZugang) out.push({ ton: "warn", text: `<b>${ohneZugang}</b> System(e) ohne hinterlegte Zugangsdaten — dort wird
+    nur die Erreichbarkeit geprüft, nicht, was drinnen los ist.` });
+  if (ohneSammler) out.push({ ton: "idle", text: `<b>${ohneSammler}</b> System(e) eines Typs, für den es noch keinen
+    Sammler gibt — auch dort zählt nur die Erreichbarkeit.` });
+  if (aus) out.push({ ton: "idle", text: `<b>${aus}</b> System(e) sind von der Überwachung ausgenommen und tauchen in
+    keiner Zahl auf.` });
+  if (icmp && icmp.configured && icmp.working === false)
+    out.push({ ton: "warn", text: `ICMP wird übersprungen (${esc(icmp.note || "")}) — geprüft wird nur, was einen
+      offenen Port hat.` });
+  if (icmp && !icmp.configured)
+    out.push({ ton: "idle", text: `ICMP ist abgeschaltet — reine Ping-Ziele werden nicht geprüft.` });
+
+  if (!out.length) out.push({ ton: "ok", text: `Nichts. Jedes angelegte System wird geprüft, und für jeden Typ mit
+    Sammler sind Zugangsdaten hinterlegt.` });
+  return out;
 }
 
 /* ============================================================
@@ -3072,7 +3222,7 @@ function checkNow() {
 /* ============================================================
    Zeichnen & Verdrahten
    ============================================================ */
-const RENDERERS = { lage:viewLage, sites:viewSites, virt:viewVirt, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
+const RENDERERS = { kurz:viewKurz, lage:viewLage, sites:viewSites, virt:viewVirt, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
   dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung,
   /* Keine Schaltfläche in der Leiste: diese Seite gehört immer zu einem
      bestimmten Gegenstand und wird über #/system/<kennung> erreicht. */
@@ -3537,6 +3687,14 @@ document.addEventListener("keydown", ev => {
 });
 
 /* #/compute  oder  #/system/pve-01 */
+/* Schmal genug, dass eine Tabelle mit acht Spalten keine Freude mehr
+   macht. Kein Browser? Dann nicht schmal — im Zweifel die reichere
+   Ansicht, sie verschweigt nichts. */
+function schmalerSchirm() {
+  try { return !!window.matchMedia && window.matchMedia("(max-width: 700px)").matches; }
+  catch { return false; }
+}
+
 function ausAdresse() {
   const roh = String(location.hash || "").replace(/^#\/?/, "");
   const [view, ...rest] = roh.split("/");
@@ -3675,6 +3833,12 @@ function markSource() {
 (() => {
   const { view, arg } = ausAdresse();
   if (RENDERERS[view]) state.view = view;
+  /* Ohne Ansicht in der Adresse entscheidet der Schirm: auf einem Telefon
+     ist die Kurzlage die einzige Seite, die man im Gehen lesen kann; auf
+     einem Schirm bleibt es beim Lagebild. Nur die Vorauswahl hängt daran —
+     erreichbar sind beide von überall, und ein Lesezeichen mit Ansicht
+     sticht diese Regel. */
+  else if (schmalerSchirm()) state.view = "kurz";
   /* Eine Detailseite ist verlinkbar: geladen wird sie erst, wenn der
      Dienst antwortet — vorher gäbe es nichts zu zeigen. */
   if (view === "system" && arg) state.detail = { id: arg, tage: 1, daten: null, busy: true, error: null, geladen: 0 };
