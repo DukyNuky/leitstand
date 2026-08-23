@@ -13,6 +13,18 @@ export const DEFAULTS = {
   interval: 15, timeout: 4, history: 120, fail_threshold: 3,
   slow_ms: 800, tls_warn_days: 30, tls_crit_days: 14,
   icmp: true, listen: 8080, bind: "0.0.0.0",
+  /* Belegungsschwellen für Platten, Speicher und Arbeitsspeicher. Sie
+     galten bislang als Zahlen im Sammler; hier stehen sie, weil sie eine
+     Betriebsentscheidung sind und keine Eigenschaft des Herstellers.
+
+     Ein voller Speicher ist nicht überall dasselbe: ein Proxmox-Host, der
+     seit Jahren bei 93 % läuft, weil es nicht anders geht, ist kein
+     Notfall — eine jede Nacht wiederkehrende rote Ampel dagegen bringt
+     eine Überwachung um ihren Zweck, weil man sie zu ignorieren lernt.
+     Deshalb lassen sich diese vier Werte **je System** überschreiben
+     (`schwellen:` am Eintrag, siehe `schwellenFuer`). */
+  disk_warn: 80, disk_crit: 90,
+  ram_warn: 85, ram_crit: 95,
   /* Zeitreihen: ein Punkt je Takt (Sekunden), aufbewahrt über so viele
      Tage. Beides kostet Platz auf dem Volume — siehe verlauf.js. */
   verlauf_takt: 60, verlauf_tage: 30,
@@ -94,11 +106,47 @@ export function normalize(doc) {
   return { settings, sites, hosts, tunnels, links };
 }
 
+/* ---------- Schwellwerte je System ----------
+
+   Am Eintrag darf `schwellen:` stehen und einzelne der globalen Werte
+   überschreiben:
+
+     - { id: pve-01, type: pve, …, schwellen: { disk_warn: 93, disk_crit: 97 } }
+
+   Angegeben wird nur, was abweicht — der Rest kommt weiter aus den
+   Einstellungen. Ein leeres Objekt wird entfernt statt als `schwellen: {}`
+   in die Datei geschrieben. */
+export const SCHWELLNAMEN = ["disk_warn", "disk_crit", "ram_warn", "ram_crit"];
+
+export function normalizeSchwellen(s) {
+  if (!s || typeof s !== "object" || Array.isArray(s)) return null;
+  const out = {};
+  for (const k of SCHWELLNAMEN) {
+    if (s[k] === null || s[k] === undefined || s[k] === "") continue;
+    const n = Number(s[k]);
+    if (Number.isFinite(n)) out[k] = Math.round(n);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/* Die Werte, die für dieses System tatsächlich gelten: die globalen, von
+   den eigenen überschrieben. Sammler und Oberfläche fragen beide hier —
+   sonst zeigte die Oberfläche eine Zahl an, nach der gar nicht gemessen
+   wird. */
+export function schwellenFuer(host, settings = {}) {
+  const out = {};
+  for (const k of SCHWELLNAMEN) out[k] = settings[k] ?? DEFAULTS[k];
+  for (const k of SCHWELLNAMEN) if (host?.schwellen?.[k] != null) out[k] = host.schwellen[k];
+  return out;
+}
+
 export function normalizeHost(h) {
   const host = { ...h, id: String(h.id) };
   host.name = host.name || host.id;
   host.type = host.type || "other";
   host.monitor = host.monitor !== false;
+  const schwellen = normalizeSchwellen(host.schwellen);
+  if (schwellen) host.schwellen = schwellen; else delete host.schwellen;
   if (!host.url && host.ip) {
     const port = TYPES[host.type]?.port ?? 443;
     host.url = `https://${host.ip}${port === 443 ? "" : ":" + port}`;
@@ -150,8 +198,23 @@ export function defaultChecks(host) {
       if (u.protocol === "https:") checks.push({ kind: "tls", port });
     }
   }
+  for (const c of typChecks(host)) checks.push(c);
   if (!checks.length) checks.push({ kind: "icmp" });
   return checks;
+}
+
+/* Prüfungen, die sich aus dem Typ ergeben und nicht aus der Adresse.
+
+   Bislang genau eine: ein DNS-Filter wird nicht daran gemessen, ob seine
+   Weboberfläche antwortet. Ein AdGuard mit gestorbenem Resolver hat 443
+   weiter offen und sähe aus wie immer — während im Netz nichts mehr
+   aufgelöst wird. Gefragt wird deshalb über UDP/53 mit einer echten
+   Auflösung (siehe `dnsCheck` in probe.js), und weil ohne DNS praktisch
+   alles stillsteht, gilt diese Prüfung als **wesentlich**: ihr Ausfall
+   ist eine Störung, nicht ein Teilausfall neben einem grünen Port. */
+export function typChecks(host) {
+  if (host.type === "adguard") return [{ kind: "dns", port: 53, wesentlich: true }];
+  return [];
 }
 
 /* ---------- Verknüpfungen der Startseite ----------
@@ -183,9 +246,27 @@ export function validate(inv) {
     if (!siteIds.has(h.site)) errs.push(`System ${h.id}: Standort „${h.site}“ ist nicht angelegt.`);
     if (!h.ip && !h.url) errs.push(`System ${h.id}: weder ip noch url — nichts zu prüfen.`);
     if (h.url) { try { new URL(h.url); } catch { errs.push(`System ${h.id}: url „${h.url}“ ist keine gültige Adresse.`); } }
+    /* Eigene Schwellwerte dürfen fehlen, aber nicht unsinnig sein: eine
+       Warnung oberhalb der kritischen Grenze wäre nie zu sehen, und ein
+       Prozentwert jenseits von 100 nie zu erreichen. Beides sähe aus wie
+       „überwacht" und wäre es nicht. */
+    for (const k of SCHWELLNAMEN) {
+      const v = h.schwellen?.[k];
+      if (v == null) continue;
+      if (!(v >= 1 && v <= 100)) errs.push(`System ${h.id}: Schwellwert ${k} muss zwischen 1 und 100 liegen.`);
+    }
+    for (const paar of [["disk_warn", "disk_crit"], ["ram_warn", "ram_crit"]]) {
+      const w = h.schwellen?.[paar[0]], c = h.schwellen?.[paar[1]];
+      if (w != null && c != null && w > c)
+        errs.push(`System ${h.id}: ${paar[0]} (${w}) liegt über ${paar[1]} (${c}) — die Warnung käme nie.`);
+    }
     for (const c of h.checks || []) {
       if (!["tcp", "tls", "http", "dns", "icmp"].includes(c.kind)) errs.push(`System ${h.id}: unbekannte Prüfung „${c.kind}“.`);
       if (["tcp", "tls"].includes(c.kind) && !(c.port > 0 && c.port < 65536)) errs.push(`System ${h.id}: Prüfung ${c.kind} braucht einen gültigen Port.`);
+      /* Bei DNS ist der Port freiwillig — ohne Angabe wird 53 gefragt. Steht
+         aber einer da, muss er taugen. */
+      if (c.kind === "dns" && c.port != null && !(c.port > 0 && c.port < 65536)) errs.push(`System ${h.id}: Prüfung dns hat keinen gültigen Port.`);
+      if (c.kind === "dns" && c.proto && !["udp", "tcp"].includes(c.proto)) errs.push(`System ${h.id}: Prüfung dns kennt nur „udp“ und „tcp“, nicht „${c.proto}“.`);
     }
   }
   for (const t of inv.tunnels) {

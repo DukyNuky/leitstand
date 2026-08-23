@@ -35,7 +35,7 @@ export class Engine {
     for (const h of this.inv.hosts) {
       this.hosts.set(h.id, {
         id: h.id, status: h.monitor === false ? "idle" : "unknown",
-        ms: null, hist: [], fails: 0, lastSeen: null, lastRun: null,
+        ms: null, hist: [], fails: 0, wfails: 0, lastSeen: null, lastRun: null,
         checks: [], note: null, extra: {}, tls: null
       });
     }
@@ -127,6 +127,18 @@ export class Engine {
         cpu: zahl(x.cpu), ram: zahl(x.ram), disk: zahl(x.disk),
         in: zahl(x.thrIn), out: zahl(x.thrOut)
       }, jetzt);
+
+      /* Je Schnittstelle eine eigene Reihe. Am System steht nur der
+         Durchsatz der WAN-Seite; die Frage „auf welcher Leitung war das
+         heute Nacht?" beantwortet nur eine Reihe je Schnittstelle.
+         Gegenstandsart „i", Kennung `system|schnittstelle` — damit passt
+         es ohne Sonderfall in dieselbe Ablage. Kosten: eine Zeile je
+         Schnittstelle und Takt, rund 60 Byte. */
+      for (const ifc of x.interfaces || []) {
+        if (!ifc?.name) continue;
+        if (!Number.isFinite(ifc.in) && !Number.isFinite(ifc.out)) continue;
+        this.verlauf.notiere("i", `${h.id}|${ifc.name}`, { in: zahl(ifc.in), out: zahl(ifc.out) }, jetzt);
+      }
     }
     for (const t of this.inv.tunnels) {
       const st = this.tunnels.get(t.id);
@@ -210,6 +222,14 @@ export class Engine {
     if (reach) { st.lastSeen = st.lastRun; st.fails = 0; }
     else if (hard.length) st.fails++;
 
+    /* Manche Prüfungen sind nicht eine von mehreren, sondern der Dienst
+       selbst — die DNS-Auflösung eines Resolvers etwa. Fällt sie aus,
+       ist das kein Teilausfall neben einem offenen Port, sondern ein
+       Ausfall. Gezählt wird getrennt, damit dafür dieselbe Zurückhaltung
+       gilt wie bei „gar nicht erreichbar": erst die Wiederholung ist Rot. */
+    const wesentlich = failed.filter(r => r.wesentlich);
+    st.wfails = wesentlich.length ? (st.wfails || 0) + 1 : 0;
+
     /* TLS-Restlaufzeit merken — speist die Zertifikatsliste */
     const tlsRes = results.find(r => r.kind === "tls" && r.ok && r.extra);
     st.tls = tlsRes ? { ...tlsRes.extra, port: tlsRes.port } : null;
@@ -218,7 +238,7 @@ export class Engine {
     const collector = this.collectors[h.type];
     if (collector && reach) {
       try {
-        const extra = await collector(h);
+        const extra = await collector(h, this.inv.settings);
         if (extra) { st.extra = extra; if (extra.error) st.extra.error = extra.error; }
       } catch (e) { st.extra = { ...st.extra, error: e.message }; }
     }
@@ -230,6 +250,11 @@ export class Engine {
       status = st.fails >= (s.fail_threshold || 3) ? "crit" : "warn";
       note = `${failed[0].kind.toUpperCase()}: ${failed[0].detail}` +
              (status === "warn" ? ` (${st.fails}. Fehlschlag)` : ` — seit ${st.fails} Durchläufen`);
+    } else if (wesentlich.length) {
+      const w = wesentlich[0];
+      status = st.wfails >= (s.fail_threshold || 3) ? "crit" : "warn";
+      note = `${w.kind.toUpperCase()}${w.port ? "/" + w.port : ""}: ${w.detail}`
+        + (status === "warn" ? ` (${st.wfails}. Fehlschlag)` : ` — seit ${st.wfails} Durchläufen`);
     } else if (failed.length) {
       status = "warn";
       note = `Teilausfall: ${failed.map(f => `${f.kind}${f.port ? "/" + f.port : ""} ${f.detail}`).join(", ")}`;
@@ -256,8 +281,12 @@ export class Engine {
     if (st.ms != null) push(st.hist, st.ms, s.history || 120);
 
     this.#reconcile(h.id, h.site, status, note, {
-      title: !reach ? `${h.name || h.id} nicht erreichbar` : (note || "Zustand auffällig"),
-      rule: !reach ? "host.unreachable" : st.tls && st.tls.days <= (s.tls_warn_days ?? 30) ? "tls.expiry" : "host.degraded",
+      title: !reach ? `${h.name || h.id} nicht erreichbar`
+        : wesentlich.length ? `${h.name || h.id}: ${wesentlich[0].kind.toUpperCase()} antwortet nicht`
+        : (note || "Zustand auffällig"),
+      rule: !reach ? "host.unreachable"
+        : wesentlich.length ? `dienst.${wesentlich[0].kind}`
+        : st.tls && st.tls.days <= (s.tls_warn_days ?? 30) ? "tls.expiry" : "host.degraded",
       detail: results.map(r => `${r.kind}${r.port ? "/" + r.port : ""}: ${r.skipped ? "übersprungen" : r.ok ? "ok" : "FEHLER"} ${r.detail || ""}`).join("\n")
     });
   }

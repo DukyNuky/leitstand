@@ -39,6 +39,13 @@ settings:
   slow_ms: 800          # Antwortzeit, ab der es Gelb gibt
   tls_warn_days: 30
   tls_crit_days: 14
+  # Belegung in Prozent. Gilt für Proxmox-Speicher, PBS-Datastores und die
+  # Platte einer Firewall. Einzelne Systeme dürfen abweichen — siehe
+  # `schwellen:` bei pve-01 weiter unten.
+  disk_warn: 80
+  disk_crit: 90
+  ram_warn: 85
+  ram_crit: 95
   icmp: true            # auf false, wenn ping fehlt oder ICMP geblockt ist
   listen: 8080
   bind: 0.0.0.0
@@ -75,8 +82,17 @@ hosts:
   # Cluster-Quorum und Version. Die Kennung muss dem Knotennamen im Cluster
   # entsprechen. Token anlegen: Datacenter → Permissions → API Tokens,
   # Rolle PVEAuditor auf / mit Vererbung. Nur lesend.
+  #
+  # `schwellen:` überschreibt einzelne Werte aus den Einstellungen — nur für
+  # dieses System. Der Anlass ist alltäglich: ein Host läuft seit Jahren bei
+  # 93 % Belegung, weil mehr Platte nicht drin ist. Mit der globalen Grenze
+  # leuchtet er jede Nacht rot, und eine Ampel, die immer rot ist, hat man
+  # nach zwei Wochen abtrainiert. Was nicht dasteht, kommt weiter von oben.
+  # Pflegen lässt sich das auch in der Oberfläche: Verwaltung → System
+  # bearbeiten → Schwellwerte.
   - { id: pve-01, type: pve, site: hq, ip: 10.10.1.11, url: "https://10.10.1.11:8006",
-      role: "Proxmox VE · Cluster-Node" }
+      role: "Proxmox VE · Cluster-Node",
+      schwellen: { disk_warn: 93, disk_crit: 97 } }
 
   # ---- Sicherung ----------------------------------------------------------
   # Proxmox Backup Server: Datastore-Belegung und fehlgeschlagene Aufträge.
@@ -110,14 +126,19 @@ hosts:
       role: "TrueNAS SCALE" }
 
   # ---- Dienste ------------------------------------------------------------
-  # AdGuard mit ausdrücklicher DNS-Prüfung: es wird wirklich aufgelöst,
-  # nicht nur der Port geöffnet. Ein DNS-Dienst, der annimmt aber nicht
-  # antwortet, fiele sonst nicht auf.
+  # AdGuard bekommt von Haus aus eine echte Auflösung über UDP/53 — ohne
+  # dass sie hier stehen müsste. Ein DNS-Dienst, der annimmt und nicht
+  # antwortet, fiele sonst nicht auf: sein Port 443 bleibt offen, seine
+  # Oberfläche kommt, und im Netz löst nichts mehr auf. Diese Prüfung gilt
+  # als *wesentlich*: fällt sie aus, ist das eine Störung und kein
+  # Teilausfall neben einem grünen Port.
+  #
+  # Wer einen anderen Prüfnamen will (etwa weil example.com auf einer
+  # Filterliste steht), trägt die Prüfliste ausdrücklich ein:
+  #   checks: [ { kind: icmp }, { kind: tcp, port: 443 },
+  #             { kind: dns, port: 53, query: "example.org", wesentlich: true } ]
   - { id: adguard-01, type: adguard, site: hq, ip: 10.10.3.10, url: "https://10.10.3.10",
-      role: "AdGuard Home · DNS-Filter",
-      checks: [ { kind: icmp },
-                { kind: tcp, port: 443 },
-                { kind: dns, port: 53, query: "example.org" } ] }
+      role: "AdGuard Home · DNS-Filter" }
 
   - { id: portainer-01, type: portainer, site: hq, ip: 10.10.5.10, url: "https://10.10.5.10:9443",
       role: "Portainer CE" }

@@ -115,6 +115,14 @@ gebaut.
       heraus in Ordnung geht.
 - [ ] **2.7 OPNsense vervollständigen** — offen sind Zustandstabelle, CARP und
       Gateway-Status. Der Sammler steht, es fehlen die Abrufe.
+      **Erledigt davon:** die Schnittstellen. Je Leitung kommen Durchsatz in
+      beide Richtungen, Pakete je Sekunde, Fehler, Verwürfe und Kollisionen;
+      Verbindungszustand, Beschreibung und MTU aus
+      `/api/interfaces/overview/export`, sofern die Fassung ihn kennt. Jede
+      Leitung bekommt eine eigene Zeitreihe (`k:"i"`, siehe ARCHITECTURE.md) und
+      auf der Systemseite ein eigenes Diagramm. Fehler und Verwürfe werden als
+      Stand **und** als Zuwachs seit dem letzten Durchlauf geführt — nur der
+      Zuwachs ist eine Nachricht, und eine Ampel machen sie bewusst nicht.
 
 ---
 

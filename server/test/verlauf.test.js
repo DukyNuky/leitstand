@@ -188,3 +188,80 @@ test("Der Dienst schreibt Messwerte und gibt sie über /api/verlauf zurück", as
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* ============================================================
+   Reihen je Schnittstelle
+
+   Am System steht nur der Durchsatz der WAN-Seite. Die Frage „auf welcher
+   Leitung war das heute Nacht?" beantwortet erst eine Reihe je
+   Schnittstelle — abgelegt unter `system|schnittstelle`, damit sie ohne
+   Sonderfall in dieselbe Ablage passt.
+   ============================================================ */
+
+test("Eine Schnittstelle bekommt eine eigene Reihe und mischt sich nicht ein", () => {
+  const dir = tmp();
+  const v = new Verlauf(dir, { takt: 60, tage: 30 });
+  v.notiere("h", "fw-01", { ms: 4, in: 12, out: 3 }, T0);
+  v.notiere("i", "fw-01|vtnet0", { in: 8, out: 1 }, T0);
+  v.notiere("i", "fw-01|vtnet1", { in: 4, out: 2 }, T0);
+  v.schliesse();
+
+  const system = v.reihe("fw-01", { tage: 1, art: "h", jetzt: T0 });
+  assert.equal(system.length, 1);
+  assert.equal(system[0].in, 12, "die Reihe des Systems bleibt die Summe der WAN-Seite");
+
+  const lan = v.reihe("fw-01|vtnet0", { tage: 1, art: "i", jetzt: T0 });
+  assert.equal(lan.length, 1);
+  assert.equal(lan[0].in, 8);
+  assert.equal(lan[0].out, 1);
+
+  /* Die Kennungen sind verschieden genug, dass die Vorprüfung auf den
+     Text nicht die falsche Zeile durchlässt. */
+  const wan = v.reihe("fw-01|vtnet1", { tage: 1, art: "i", jetzt: T0 });
+  assert.equal(wan[0].in, 4);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("Zu einer Schnittstelle wird keine Ampel behauptet", () => {
+  const dir = tmp();
+  const v = new Verlauf(dir, { takt: 60, tage: 30 });
+  v.notiere("i", "fw-01|vtnet0", { in: 8, out: 1 }, T0);
+  v.schliesse();
+  const p = v.reihe("fw-01|vtnet0", { tage: 1, art: "i", jetzt: T0 })[0];
+  assert.equal("st" in p, false, "eine Leitung hat keinen Zustand, nur einen Durchsatz");
+  assert.deepEqual(belegteReihen([p]).map(r => r.key), ["in", "out"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("Der Dienst gibt auch die Reihe einer einzelnen Schnittstelle heraus", async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "inventory.yaml"), BESTAND);
+  const srv = createServer({
+    inventory: path.join(dir, "inventory.yaml"),
+    secrets: path.join(dir, "secrets.json"),
+    state: path.join(dir, "incidents.json")
+  });
+  await new Promise(r => srv.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    srv.verlauf.notiere("i", "still|vtnet1", { in: 42.5, out: 3.25 });
+    srv.verlauf.schliesse();
+
+    const r = await fetch(`${base}/api/verlauf/${encodeURIComponent("still|vtnet1")}?tage=1`);
+    assert.equal(r.status, 200);
+    const b = await r.json();
+    assert.equal(b.art, "interface");
+    assert.match(b.name, /still · vtnet1/, "der Name nennt beides — Gerät und Leitung");
+    assert.equal(b.punkte.length, 1);
+    assert.equal(b.punkte[0].in, 42.5);
+    assert.deepEqual(b.reihen.map(x => x.key), ["in", "out"]);
+
+    /* Zu einem System, das es nicht gibt, wird auch keine Leitung erfunden. */
+    const weg = await fetch(`${base}/api/verlauf/${encodeURIComponent("gibtsnicht|eth0")}`);
+    assert.equal(weg.status, 404);
+  } finally {
+    srv.engine.stop();
+    srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

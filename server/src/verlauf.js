@@ -324,8 +324,8 @@ Eine Datei je Tag, eine Zeile je Messpunkt, JSON pro Zeile (NDJSON):
 | Feld  | Bedeutung |
 |-------|-----------|
 | t     | Zeitpunkt, Sekunden seit 1970 (UTC), Beginn des Taktes |
-| k     | \`h\` = System, \`t\` = Tunnel |
-| id    | Kennung aus dem Bestand |
+| k     | \`h\` = System, \`t\` = Tunnel, \`i\` = Schnittstelle |
+| id    | Kennung aus dem Bestand; bei \`i\` \`system|schnittstelle\` |
 | ms    | Antwortzeit, Mittel über den Takt |
 | min/max/n | Kleinst-, Größtwert und Anzahl der Messungen im Takt |
 | cpu, ram, disk | Auslastung in Prozent, Mittel über den Takt |

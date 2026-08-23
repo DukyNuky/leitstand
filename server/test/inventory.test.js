@@ -332,3 +332,102 @@ test("Der mitgelieferte Beispielbestand hält sich an die Vierstelligkeit", () =
   for (const s of inv.sites)
     assert.equal(Inv.pruefeKuerzel(s.short), null, `Standort ${s.id}: ${s.short}`);
 });
+
+/* ============================================================
+   Prüfungen, die sich aus dem Typ ergeben
+   ============================================================ */
+
+/* Ein DNS-Filter wird nicht daran gemessen, ob seine Weboberfläche
+   antwortet. Ohne diese Vorgabe müsste jeder Bestand die Prüfung von Hand
+   eintragen — und wer sie vergisst, hat einen AdGuard, der grün leuchtet
+   und nichts mehr auflöst. */
+test("AdGuard bekommt von Haus aus eine echte Auflösung über UDP/53", () => {
+  const h = Inv.normalizeHost({ id: "dns-01", type: "adguard", site: "hq", ip: "10.0.0.5" });
+  const dns = h.checks.find(c => c.kind === "dns");
+  assert.ok(dns, "eine DNS-Prüfung gehört dazu");
+  assert.equal(dns.port, 53);
+  assert.equal(dns.wesentlich, true, "ihr Ausfall ist eine Störung, kein Teilausfall");
+});
+
+test("Andere Typen bekommen keine DNS-Prüfung angehängt", () => {
+  const h = Inv.normalizeHost({ id: "pve-01", type: "pve", site: "hq", ip: "10.0.0.11" });
+  assert.equal(h.checks.some(c => c.kind === "dns"), false);
+});
+
+test("Eine eigene Prüfliste sticht die Vorgabe", () => {
+  const h = Inv.normalizeHost({ id: "dns-01", type: "adguard", site: "hq", ip: "10.0.0.5",
+    checks: [{ kind: "icmp" }] });
+  assert.deepEqual(h.checks, [{ kind: "icmp" }]);
+});
+
+/* Die abgeleiteten Prüfungen dürfen nicht in die Datei — sonst friert ein
+   einmaliges Speichern die heutige Vorgabe für immer ein. */
+test("Die abgeleitete DNS-Prüfung wird nicht mitgeschrieben", () => {
+  const file = tmp();
+  Inv.save(file, Inv.normalize({
+    settings: { icmp: false },
+    sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "dns-01", type: "adguard", site: "hq", ip: "10.0.0.5" }],
+    tunnels: [], links: []
+  }));
+  assert.equal(/kind: dns/.test(fs.readFileSync(file, "utf8")), false);
+  assert.ok(Inv.load(file).hosts[0].checks.some(c => c.kind === "dns"), "beim Lesen ist sie wieder da");
+});
+
+/* ============================================================
+   Schwellwerte je System
+   ============================================================ */
+
+test("Ohne eigene Werte gelten die aus den Einstellungen", () => {
+  const s = Inv.schwellenFuer({ id: "a" }, { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 });
+  assert.deepEqual(s, { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 });
+});
+
+/* Der Anlass: ein Host, der bekanntermaßen bei 93 % läuft. Er soll seine
+   eigene Grenze bekommen, ohne dass sie für alle aufgeweicht wird. */
+test("Eigene Werte überschreiben einzeln, nicht alle", () => {
+  const s = Inv.schwellenFuer({ schwellen: { disk_warn: 93, disk_crit: 97 } },
+    { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 });
+  assert.equal(s.disk_warn, 93);
+  assert.equal(s.disk_crit, 97);
+  assert.equal(s.ram_warn, 85, "was nicht gesetzt ist, kommt weiter von oben");
+});
+
+test("Ein leeres Schwellen-Objekt wird entfernt statt geschrieben", () => {
+  const h = Inv.normalizeHost({ id: "a", type: "pve", site: "hq", ip: "10.0.0.1", schwellen: {} });
+  assert.equal("schwellen" in h, false);
+  const leer = Inv.normalizeHost({ id: "a", type: "pve", site: "hq", ip: "10.0.0.1", schwellen: null });
+  assert.equal("schwellen" in leer, false);
+});
+
+test("Zahlen als Zeichenketten werden angenommen — aus einem Formular kommen sie so", () => {
+  const h = Inv.normalizeHost({ id: "a", type: "pve", site: "hq", ip: "10.0.0.1", schwellen: { disk_warn: "93" } });
+  assert.deepEqual(h.schwellen, { disk_warn: 93 });
+});
+
+test("Eine Warnung oberhalb der kritischen Grenze wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({
+    settings: {}, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "a", type: "pve", site: "hq", ip: "10.0.0.1", schwellen: { disk_warn: 97, disk_crit: 90 } }],
+    tunnels: [], links: []
+  }), /liegt über/);
+});
+
+test("Ein Prozentwert jenseits von 100 wäre nie zu erreichen und wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({
+    settings: {}, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "a", type: "pve", site: "hq", ip: "10.0.0.1", schwellen: { disk_crit: 120 } }],
+    tunnels: [], links: []
+  }), /zwischen 1 und 100/);
+});
+
+test("Eigene Schwellwerte überleben Schreiben und Lesen", () => {
+  const file = tmp();
+  Inv.save(file, Inv.normalize({
+    settings: { icmp: false },
+    sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "pve-01", type: "pve", site: "hq", ip: "10.0.0.11", schwellen: { disk_warn: 93, disk_crit: 97 } }],
+    tunnels: [], links: []
+  }));
+  assert.deepEqual(Inv.load(file).hosts[0].schwellen, { disk_warn: 93, disk_crit: 97 });
+});

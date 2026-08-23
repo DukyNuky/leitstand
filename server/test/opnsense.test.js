@@ -67,18 +67,35 @@ function opnsense(ab = {}) {
     if (p === "/api/diagnostics/interface/get_interface_statistics") {
       runde++;
       const zu = n => (ab.ruecksetzen && runde > 1 ? 0 : n + (runde - 1) * 1_500_000);
+      /* Pakete wachsen mit, Fehler nur, wenn der Test es will — der
+         Zuwachs an Fehlern ist die eigentliche Nachricht, der Stand nicht. */
+      const pak = n => n + (runde - 1) * 1_000;
+      const fehler = n => n + (ab.fehlerWachsen ? (runde - 1) * 3 : 0);
       return send(200, { statistics: {
         "[LAN] (vtnet0) / bc:24:11:e9:8c:61": { name: "vtnet0", network: "<Link#1>",
           "received-bytes": zu(81_386_215_378), "sent-bytes": zu(557_996_298_083),
-          "received-errors": 0, "send-errors": 0 },
+          "received-packets": pak(120_000_000), "sent-packets": pak(140_000_000),
+          "received-errors": 0, "send-errors": 0, "dropped-packets": 0, collisions: 0 },
         "[LAN] (vtnet0) / 192.168.0.254": { name: "vtnet0", network: "192.168.0.0/24",
           "received-bytes": 305_715_533, "sent-bytes": 0 },
         "[WAN] (vtnet1) / bc:24:11:43:3a:26": { name: "vtnet1", network: "<Link#2>",
           "received-bytes": zu(562_774_671_970), "sent-bytes": zu(78_304_533_217),
-          "received-errors": 0, "send-errors": 0 },
+          "received-packets": pak(400_000_000), "sent-packets": pak(300_000_000),
+          "received-errors": fehler(17), "send-errors": 0,
+          "dropped-packets": fehler(4), collisions: 0 },
         "[Loopback] (lo0) / lo0": { name: "lo0", network: "<Link#3>",
           "received-bytes": 536_125_847, "sent-bytes": 536_125_847 }
       } });
+    }
+
+    if (p === "/api/interfaces/overview/export") {
+      /* Ältere Fassungen kennen diesen Endpunkt nicht — dann fehlen
+         Zustand und Beschreibung, die Zähler kommen trotzdem. */
+      if (ab.uebersicht === false) return send(404, { message: "not found" });
+      return send(200, ab.uebersicht ?? [
+        { device: "vtnet0", description: "LAN", status: "up", enabled: true, mtu: 1500 },
+        { device: "vtnet1", description: "Uplink Glasfaser", status: "down", enabled: true, mtu: 1492 }
+      ]);
     }
 
     if (p === "/api/wireguard/service/show") {
@@ -352,5 +369,120 @@ test("Jeder Peer trägt seinen öffentlichen Schlüssel", async () => {
     const r = await collectOpnsense(host, CRED);
     assert.equal(r.peers.find(p => p.name === "WG-Schweiz").key, "Aqujl");
     assert.equal(r.peers.find(p => p.name === "laptop").key, "Bbcd");
+  } finally { srv.close(); }
+});
+
+/* ============================================================
+   Schnittstellen im Einzelnen
+
+   Bisher wurde aus den Zählern eine einzige Zahl gemacht: der Durchsatz
+   der WAN-Seite. Die beantwortet „wie viel geht durch das Haus?" — nicht
+   „durch welche Leitung". Dafür braucht es jede Schnittstelle einzeln,
+   mit Paketen, Fehlern und Verwürfen.
+   ============================================================ */
+
+test("Je Schnittstelle kommen Rate, Pakete und Zählerstände", async () => {
+  const { srv, host } = await an();
+  try {
+    await collectOpnsense(host, CRED);
+    await new Promise(r => setTimeout(r, 300));
+    const r = await collectOpnsense(host, CRED);
+
+    const wan = r.interfaces.find(i => i.label === "WAN");
+    assert.ok(wan.in > 0 && wan.out > 0, "Durchsatz in beide Richtungen");
+    assert.ok(wan.inPps > 0, "Pakete je Sekunde ebenso aus der Differenz");
+    assert.equal(wan.rxBytes > 0, true, "der Zählerstand selbst bleibt erhalten");
+    assert.equal(wan.fehler, 17, "Fehler sind ein Stand, kein Zuwachs");
+    assert.equal(wan.verworfen, 4);
+    assert.equal(wan.kollisionen, 0);
+  } finally { srv.close(); }
+});
+
+/* Ein Stand von 17 Fehlern kann drei Monate alt sein. Was zählt, ist der
+   Zuwachs seit dem letzten Durchlauf. */
+test("Neue Fehler werden vom alten Stand getrennt geführt", async () => {
+  const { srv, host } = await an({ fehlerWachsen: true });
+  try {
+    const erst = await collectOpnsense(host, CRED);
+    assert.equal(erst.interfaces.find(i => i.label === "WAN").fehlerNeu, null,
+      "vor dem zweiten Durchlauf gibt es keinen Zuwachs, auch nicht null");
+
+    await new Promise(r => setTimeout(r, 200));
+    const dann = await collectOpnsense(host, CRED);
+    const wan = dann.interfaces.find(i => i.label === "WAN");
+    assert.equal(wan.fehlerNeu, 3);
+    assert.equal(wan.verworfenNeu, 3);
+    assert.match(dann.note, /WAN: 3 Fehler, 3 verworfen/, "das gehört als Notiz an das Gerät");
+  } finally { srv.close(); }
+});
+
+/* Und trotzdem: eine Ampel machen sie nicht. Ein verworfenes Paket auf
+   einer ausgelasteten Leitung ist normal, und eine Schwelle dafür wäre
+   geraten — geratene Schwellen erzeugen Fehlalarme, und Fehlalarme
+   bringen eine Überwachung um ihren Zweck. */
+test("Neue Fehler drehen die Ampel nicht", async () => {
+  const { srv, host } = await an({ fehlerWachsen: true });
+  try {
+    await collectOpnsense(host, CRED);
+    await new Promise(r => setTimeout(r, 200));
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.status, undefined);
+  } finally { srv.close(); }
+});
+
+/* Die Zähler sagen nichts über den Link: eine tote Leitung zählt einfach
+   nicht weiter, und das sieht aus wie Ruhe. */
+test("Der Verbindungszustand kommt aus der Schnittstellenübersicht", async () => {
+  const { srv, host } = await an();
+  try {
+    const r = await collectOpnsense(host, CRED);
+    const wan = r.interfaces.find(i => i.label === "WAN");
+    assert.equal(wan.link, "down");
+    assert.equal(wan.beschreibung, "Uplink Glasfaser");
+    assert.equal(wan.mtu, 1492);
+    assert.equal(r.interfaces.find(i => i.label === "LAN").link, "up");
+  } finally { srv.close(); }
+});
+
+test("Kennt die Fassung den Endpunkt nicht, bleibt der Zustand unbekannt statt „up“", async () => {
+  const { srv, host } = await an({ uebersicht: false });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    const wan = r.interfaces.find(i => i.label === "WAN");
+    assert.equal(wan.link, null, "unbekannt ist nicht „up“");
+    assert.equal(wan.beschreibung, null);
+    assert.ok(r.interfaces.length, "die Zähler kommen trotzdem");
+  } finally { srv.close(); }
+});
+
+/* Die Übersicht kommt zwischen den Fassungen unterschiedlich verpackt. */
+test("Die Übersicht wird als Liste, als rows und als Abbildung gelesen", async () => {
+  const eintrag = { device: "vtnet1", description: "WAN", status: "up", mtu: 1500 };
+  for (const gestalt of [[eintrag], { rows: [eintrag] }, { wan: eintrag }]) {
+    const { srv, host } = await an({ uebersicht: gestalt });
+    try {
+      const r = await collectOpnsense(host, CRED);
+      assert.equal(r.interfaces.find(i => i.name === "vtnet1").link, "up");
+    } finally { srv.close(); }
+  }
+});
+
+/* ---------- Schwellwerte ---------- */
+test("Die Platte folgt den Grenzen aus den Einstellungen", async () => {
+  const { srv, host } = await an({ devices: [{ device: "z", type: "zfs", used_pct: 84, mountpoint: "/" }] });
+  try {
+    const streng = await collectOpnsense(host, CRED, { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 });
+    assert.equal(streng.status, "warn");
+    assert.match(streng.note, /84 %/);
+  } finally { srv.close(); }
+});
+
+test("Ein eigener Wert am Gerät hebt die Grenze nur dort", async () => {
+  const { srv, host } = await an({ devices: [{ device: "z", type: "zfs", used_pct: 84, mountpoint: "/" }] });
+  try {
+    const r = await collectOpnsense({ ...host, schwellen: { disk_warn: 90, disk_crit: 95 } }, CRED,
+      { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 });
+    assert.equal(r.status, undefined, "84 % liegt unter 90 — kein Befund");
+    assert.equal(r.schwellen.disk_warn, 90);
   } finally { srv.close(); }
 });

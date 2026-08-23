@@ -13,9 +13,11 @@ prüfen — insbesondere bei OPNsense-Plugins ändern sie sich zwischen Releases
 | | |
 |---|---|
 | Zugang | API-Token, Rolle `PVEAuditor` (nur lesen), `Authorization: PVEAPIToken=leitstand@pve!ro=<uuid>` |
-| Endpunkte | `/api2/json/cluster/resources?type=vm`, `/api2/json/nodes/{node}/status`, `/api2/json/nodes/{node}/storage`, `/api2/json/cluster/status` (Quorum) |
-| Kennzahlen | CPU, RAM, Speicher je Storage, Laufzeit, Gästezahl, Version, Cluster-Quorum |
-| Ampel | RAM > 85 % über 15 min → gelb · Storage > 90 % → rot · Knoten ohne Quorum → rot |
+| Endpunkte | `/api2/json/cluster/resources`, `/api2/json/nodes/{node}/status`, `/api2/json/nodes/{node}/apt/update`, `/api2/json/cluster/status` (Quorum) |
+| Kennzahlen | CPU, RAM, Speicher je Storage, Laufzeit, Cluster-Quorum · **je Knoten** Kernel, `pve-manager`-Fassung, Kerne/Sockel/Modell, Last, Wurzeldateisystem, Auslagerung, ausstehende Pakete mit Paketnamen · **je Gast** Name, VMID, Art, Zustand, CPU, RAM, Platte, Kerne, Laufzeit, Tags |
+| Ampel | RAM ab `ram_warn` gelb, ab `ram_crit` rot · Storage ab `disk_warn`/`disk_crit` · Knoten ohne Quorum → rot · ausstehende Pakete: **Notiz, keine Ampel** |
+| Schwellwerte | global in den Einstellungen, je System über `schwellen:` überschreibbar — für Hosts, die bekanntermaßen voll laufen |
+| Rechte | Der Paketstand hängt an `Sys.Audit` auf `/nodes/{node}`. Fehlt es, meldet der Sammler „unbekannt" statt „keine offen" — eine ruhige Null wäre hier die gefährlichere Auskunft |
 | Meldet per Mail | `Datacenter → Notifications`: SMTP-Ziel `leitstand` anlegen, vzdump-Berichte und Fencing-Ereignisse dorthin |
 
 Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eines.
@@ -51,8 +53,9 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 | | |
 |---|---|
 | Zugang | API Key/Secret je Gerät, eigener Benutzer mit lesenden Rechten (Basic-Auth über HTTPS) |
-| Endpunkte | `/api/core/firmware/status` (Version, ausstehende Updates), `/api/diagnostics/interface/getInterfaceStatistics`, `/api/diagnostics/firewall/pf_states`, `/api/wireguard/service/show`, HAProxy-Plugin für Backend-Zustände |
-| Kennzahlen | Version + Updatestand, Zustandstabelle, Durchsatz je Interface, CARP-Rolle, WireGuard-Peers mit Handshake-Alter |
+| Endpunkte | `/api/core/firmware/status` (Version, ausstehende Updates), `/api/diagnostics/interface/get_interface_statistics` (ältere Fassungen: `getInterfaceStatistics`), `/api/interfaces/overview/export` (Verbindungszustand, Beschreibung, MTU — fehlt auf älteren Fassungen), `/api/diagnostics/firewall/pf_states`, `/api/wireguard/service/show`, HAProxy-Plugin für Backend-Zustände |
+| Kennzahlen | Version + Updatestand, Zustandstabelle, **je Schnittstelle** Durchsatz ↓/↑ in Mbit/s, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand *und* Zuwachs), Kollisionen, Verbindungszustand, MTU; CARP-Rolle, WireGuard-Peers mit Handshake-Alter |
+| Zähler, nicht Raten | Was hier zurückkommt, sind kumulative Zähler seit dem Neustart. Durchsatz gibt es erst aus der Differenz zweier Abfragen — davor ein Strich, keine Null; nach einem Zählerrücksetzer ebenso |
 | Ampel | Versionsabweichung im CARP-Paar → gelb · Zustandstabelle > 80 % → gelb · Backend ohne aktiven Server → rot |
 | Meldet per Mail | `System → Settings → Notifications` (SMTP): Konfigurationsänderungen, ACME-Erneuerungen, CARP-Wechsel |
 
@@ -91,7 +94,10 @@ Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
 | Zugang | HTTP Basic-Auth, Benutzer und Passwort der Oberfläche |
 | Endpunkte | `/control/status`, `/control/stats`, `/control/filtering/status`, `/control/dns_info` |
 | Kennzahlen | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl, Upstreams, Fassung |
-| Ampel | DNS-Dienst steht → rot · Schutz oder Filterung abgeschaltet → gelb · Ø Bearbeitungszeit > 100 ms → gelb |
+| Ohne Zugangsdaten | **Auflösung über UDP/53** — eine echte DNS-Anfrage an das System selbst, ohne API und ohne Passwort. Wird jedem AdGuard-Eintrag von Haus aus mitgegeben und gilt als *wesentlich*: ihr Ausfall ist eine Störung, kein Teilausfall neben einem grünen Port |
+| Ampel | DNS-Dienst steht → rot · **UDP/53 antwortet nicht → nach `fail_threshold` Durchläufen rot** · Schutz oder Filterung abgeschaltet → gelb · Ø Bearbeitungszeit > 100 ms → gelb |
+| Warum nicht `dns.Resolver` | Der Systemauflöser fällt bei zugemachtem UDP still auf TCP zurück und meldet Erfolg — während im Netz kein Gerät mehr auflöst. Gefragt wird deshalb mit einem selbst gebauten Paket. Kommt über UDP nichts, wird einmal TCP versucht, nicht als Rückfall, sondern als Befund: „über TCP antwortet er, UDP/53 kommt nicht durch" |
+| Fallstrick | Steht der Prüfname selbst auf einer Filterliste, antwortet AdGuard mit NOERROR und null Sätzen. Das gilt nicht als aufgelöst — „er antwortet" ist nicht „er löst auf" —, und der wahrscheinlichste Grund steht in der Meldung. Ein anderer Name geht über `checks: [{ kind: dns, query: … }]` |
 | Nicht abrufbar | **Upstream-Fehler** — die API führt dafür keine Zahl, weder im Zustand noch in der Statistik. Steht deshalb nirgends, statt geschätzt zu werden |
 | Fallstrick | Das Statistikfenster ist einstellbar (24 h bis 90 Tage). Der Sammler summiert bei stündlichen Eimern die letzten 24 und benennt sonst den tatsächlichen Zeitraum — „Anfragen 24 h" an eine Zahl über 90 Tage zu schreiben wäre schlicht falsch |
 | Fallstrick | `avg_processing_time` kommt je nach Fassung in Sekunden (dokumentiert) oder Millisekunden. Umgedeutet wird nur, was als Sekunde absurd wäre (> 5 s je Anfrage) |
@@ -160,7 +166,8 @@ Nicht jedes System liefert alles. Der Leitstand bringt eigene Prober mit:
 1. **Erreichbarkeit** — ICMP und TCP-Port im eingestellten Takt, drei Fehlschläge bis rot
 2. **TLS** — Restlaufzeit jedes HTTPS-Ziels, eigensignierte Zertifikate werden erkannt und nicht abgelehnt
 3. **Tunnelgüte** — TCP/ICMP auf die Gegenstelle im Transfernetz, also durch den Tunnel hindurch
-4. **DNS** — Auflösungstest gegen die AdGuard-Instanzen
+4. **DNS** — echte Auflösung über UDP/53 gegen die AdGuard-Instanzen; jedem
+   AdGuard-Eintrag von Haus aus mitgegeben, ohne Zugangsdaten
 
 Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
 übersprungen statt als Ausfall gewertet; die TCP-Prüfung trägt dann allein.

@@ -98,6 +98,18 @@ Störung, Zähler statt neuer Zeile.
 Schwellwerte stehen in der Oberfläche unter *Einstellungen → Schwellwerte* und
 gehören in eine Konfigurationsdatei, nicht in den Code.
 
+**Und sie dürfen je System abweichen.** Ein Host, der seit Jahren bei 93 %
+Belegung läuft, weil mehr Platte nicht drin ist, ist kein Notfall — mit der
+globalen Grenze leuchtet er trotzdem jede Nacht rot. Eine Ampel, die immer rot
+ist, hat man nach zwei Wochen abtrainiert; damit ist nicht nur dieser Host
+unüberwacht, sondern die Ansicht insgesamt entwertet. Deshalb trägt ein Eintrag
+im Bestand optional `schwellen:` und überschreibt einzelne der vier Werte
+(`disk_warn`, `disk_crit`, `ram_warn`, `ram_crit`); was nicht dasteht, kommt
+weiter aus den Einstellungen. Pflegen lässt sich das in der Oberfläche unter
+*Verwaltung → System bearbeiten → Schwellwerte*, und welche Systeme abweichen,
+steht unter *Einstellungen* mit Namen — eine Ausnahme, die niemand mehr findet,
+ist eine stillgelegte Überwachung.
+
 ## Alarm-Postfach
 
 Adresse `alarm@…`, hinter dem bestehenden Proxmox Mail Gateway — Spam wird nie
@@ -135,10 +147,10 @@ Punkt — steht in [TODO.md](TODO.md).
 | 1 | Bestand als YAML, ICMP/TCP/TLS-Prober, Startseite mit Ampeln | **gebaut** |
 | 1b | Verwaltung in der Oberfläche: Standorte, Systeme, Tunnel, Startseite, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
 | 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
-| 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** |
-| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, Durchsatz, Peers und Handshake am Tunnel; Zustandstabelle, CARP und pfSense offen |
+| 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** — inklusive Knotendetails (Kernel, Fassung, Ausstattung, ausstehende Pakete) und jedem Gast mit seiner Auslastung, in einer eigenen Ansicht *Virtualisierung* |
+| 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense gebaut** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), Peers und Handshake am Tunnel; Zustandstabelle, CARP und pfSense offen |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
-| 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home und Portainer gebaut**; TrueNAS, Mailcow und Home Assistant offen — bislang nur Erreichbarkeit |
+| 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home und Portainer gebaut** — AdGuard zusätzlich mit einer echten Auflösung über UDP/53 als *wesentlicher* Prüfung; TrueNAS, Mailcow und Home Assistant offen — bislang nur Erreichbarkeit |
 | 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | Zeitreihen und Detailseite **gebaut** (eigene Ablage statt VictoriaMetrics, siehe unten); Wartungsfenster, Push und Totmannschalter offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
 
 ### Zeitreihen: eine Datei je Tag statt einer Datenbank
@@ -150,6 +162,7 @@ Messpunkt als JSON:
 ```
 /data/verlauf/2026-08-21.jsonl
 {"t":1755765600,"k":"h","id":"pve-01","ms":12,"min":10,"max":41,"n":4,"cpu":3.5,"ram":61,"st":"ok"}
+{"t":1755765600,"k":"i","id":"fw-01|vtnet1","in":42.5,"out":3.2}
 ```
 
 Der Grund ist derselbe wie beim Bestand als YAML: ein weiterer Container, ein
@@ -158,6 +171,13 @@ diesem Netz einbringen. Anhängen braucht keine Sperre, ein abgeschnittener
 Schreibvorgang kostet eine Zeile statt der Datei, und auslesen lässt sich das
 mit `grep` und `jq`. Kommt VictoriaMetrics später doch, ist dies das Format,
 aus dem sie befüllt wird — es geht nichts verloren.
+
+Es gibt drei Gegenstandsarten: `h` für ein System, `t` für einen Tunnel und
+`i` für **eine einzelne Schnittstelle** einer Firewall (Kennung
+`system|schnittstelle`). Die letzte ist dazugekommen, weil am System nur der
+Durchsatz der WAN-Seite steht — die Frage „auf welcher Leitung war das heute
+Nacht?" beantwortet erst eine Reihe je Leitung. Eine Firewall mit vier
+Schnittstellen kostet damit rund 0,25 MB je Tag mehr.
 
 Verdichtet wird auf einen Punkt je Minute (`verlauf_takt`). Was innerhalb
 dieser Minute gemessen wurde, bleibt trotzdem erhalten: Mittel-, Kleinst- und
@@ -215,3 +235,38 @@ Weboberfläche ausliefert.
 **Erreichbar, aber Abruf scheitert.** Ein System, das antwortet, dessen API-Zugang
 aber abgelehnt wird, geht auf Gelb statt still ohne Kennzahlen dazustehen. Ein
 falsch gesetztes Token ist sonst monatelang unsichtbar.
+
+**Wesentliche Prüfungen: der Dienst, nicht seine Oberfläche.** Eine Prüfung darf
+`wesentlich: true` tragen. Dann ist ihr Ausfall kein „Teilausfall, gelb" neben
+einem grünen Port, sondern eine Störung wie ein toter Host — mit derselben
+Zurückhaltung, erst nach `fail_threshold` Fehlschlägen. Bislang gibt es genau
+einen Fall dafür, und der ist der Grund für die Regel: **AdGuard Home** bekommt
+von Haus aus eine DNS-Auflösung über **UDP/53**. Ein Resolver, dessen Dienst
+gestorben ist, hält seine Oberfläche weiter offen; wer nur den Port misst, sieht
+Grün, während im Netz nichts mehr auflöst.
+
+Gefragt wird mit einem selbst gebauten DNS-Paket statt über `dns.Resolver`, und
+zwar aus einem Grund: der Systemauflöser fällt bei zugemachtem UDP still auf TCP
+zurück und meldet Erfolg — während kein Gerät im Netz das täte. Kommt über UDP
+gar nichts, wird deshalb einmal TCP versucht, nicht als Rückfall, sondern als
+Befund: „über TCP antwortet er, UDP/53 kommt nicht durch" ist eine ganz andere
+Suche als „der Dienst ist weg". Ebenso wenig gilt als aufgelöst, wer mit NOERROR
+und null Antworten zurückkommt — das liefert ein Filter, der den Prüfnamen
+blockt, und „er antwortet" ist nicht „er löst auf".
+
+**Schnittstellen: Zähler sind keine Bandbreite.** OPNsense liefert Bytes und
+Pakete seit dem letzten Neustart. Ein Durchsatz entsteht erst aus der Differenz
+zweier Abfragen — vor der zweiten steht deshalb ein Strich und keine Null, und
+nach einem Zählerrücksetzer ebenfalls. Fehler und Verwürfe werden doppelt
+geführt: der Stand (kann Monate alt sein) und der Zuwachs seit dem letzten
+Durchlauf (das ist die Nachricht). Eine Ampel machen sie nicht — ein verworfenes
+Paket auf einer ausgelasteten Leitung ist normal, und eine Schwelle dafür wäre
+geraten. Der Verbindungszustand kommt aus einem eigenen Endpunkt, den ältere
+Fassungen nicht kennen; dann bleibt er unbekannt und wird als Strich gezeigt,
+nicht als „up".
+
+**Ein gestoppter Gast hat keine Auslastung.** Proxmox meldet für ihn cpu 0 und
+mem 0 — das ist die Abwesenheit einer Messung. Als „0 %" angezeigt sähe eine
+ausgeschaltete Maschine aus wie eine, die sich langweilt. Ebenso bleibt die
+Plattenbelegung einer VM leer: der Wirt kennt sie nicht und schreibt 0 hin. Bei
+Containern ist dieselbe Zahl echt.

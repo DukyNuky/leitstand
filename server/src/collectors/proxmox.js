@@ -8,6 +8,7 @@
    beziehungsweise DatastoreAudit. */
 
 import { requestJson } from "../http.js";
+import { schwellenFuer } from "../inventory.js";
 
 const PREFIX = { pve: "PVEAPIToken", pbs: "PBSAPIToken", pmg: "PMGAPIToken" };
 const DEFAULT_PORT = { pve: 8006, pbs: 8007, pmg: 8006 };
@@ -102,7 +103,8 @@ function hintFor(r) {
 }
 
 /* ---------- Proxmox VE ---------- */
-export async function collectPve(host, cred) {
+export async function collectPve(host, cred, settings) {
+  const grenze = schwellenFuer(host, settings);
   const [nodesRes, verRes, resRes, clusterRes] = await Promise.all([
     api(host, "pve", cred, "/nodes"),
     api(host, "pve", cred, "/version"),
@@ -122,8 +124,21 @@ export async function collectPve(host, cred) {
     ram: me.maxmem ? pct(me.mem / me.maxmem) : null,
     disk: me.maxdisk ? pct(me.disk / me.maxdisk) : null,
     uptime: me.uptime ? days(me.uptime) : null,
+    uptimeSeconds: Number.isFinite(me.uptime) ? me.uptime : null,
+    nodeStatus: me.status || null,
     online: me.status === "online"
   };
+
+  /* Kernel, Paketstand und die Ausstattung des Knotens hängen unter
+     /nodes/{name} — die lassen sich erst fragen, wenn der Name feststeht.
+     Beide dürfen fehlschlagen, ohne den Rest mitzunehmen: sie sind
+     Auskunft, nicht Messung. */
+  const [statusRes, aptRes] = await Promise.all([
+    api(host, "pve", cred, `/nodes/${encodeURIComponent(me.node)}/status`),
+    api(host, "pve", cred, `/nodes/${encodeURIComponent(me.node)}/apt/update`)
+  ]);
+  knotenstatus(out, statusRes.ok ? statusRes.data?.data : null);
+  pakete(out, aptRes);
 
   /* Gäste und Speicher stehen in der Bestandsliste. Sie kann fehlschlagen
      oder — was häufiger vorkommt — mit 200 und leerem Inhalt antworten:
@@ -153,10 +168,20 @@ export async function collectPve(host, cred) {
         + " — dem Token fehlen Leserechte. " + RECHTEHINWEIS;
     } else {
       const guests = bestand.filter(r => r.type === "qemu" || r.type === "lxc");
-      out.vms = bestand.filter(r => r.type === "qemu").length;
-      out.lxc = bestand.filter(r => r.type === "lxc").length;
-      out.running = guests.filter(r => r.status === "running").length;
-      out.stopped = guests.filter(r => r.status !== "running" && r.template !== 1).length;
+      /* Vorlagen bleiben aus allen Zählungen heraus und werden getrennt
+         geführt. Sonst ergäbe „3 VMs, 2 laufen, 1 gestoppt" eine Rechnung,
+         die nicht aufgeht — und eine Anzeige, die nicht aufgeht, glaubt
+         man beim nächsten Mal auch nicht mehr. */
+      const echte = guests.filter(r => r.template !== 1);
+      out.vms = echte.filter(r => r.type === "qemu").length;
+      out.lxc = echte.filter(r => r.type === "lxc").length;
+      out.running = echte.filter(r => r.status === "running").length;
+      out.stopped = echte.filter(r => r.status !== "running").length;
+      out.templates = guests.length - echte.length;
+      /* Nicht nur zählen, sondern benennen: „14 VMs" beantwortet keine
+         Frage, die man mitten in der Nacht hat. Vorlagen bleiben draußen —
+         sie laufen nie und stünden für immer als „gestoppt" in der Liste. */
+      out.guests = echte.map(gast).sort(sortiereGaeste);
 
       const storages = bestand.filter(r => r.type === "storage" && r.maxdisk);
       out.storages = storages.map(s => ({ name: s.storage, used: pct(s.disk / s.maxdisk) }));
@@ -171,10 +196,21 @@ export async function collectPve(host, cred) {
 
   /* Ein echter Befund sticht den Hinweis auf fehlende Rechte — kein Quorum
      oder ein volles Laufwerk ist das dringendere Problem. */
+  /* Die Grenzen stehen in den Einstellungen und dürfen am System
+     überschrieben sein — ein Host, der bekanntermaßen bei 93 % läuft, soll
+     nicht jede Nacht rot leuchten. Welche Zahl gerade galt, steht mit in
+     der Notiz, damit man die Meldung ohne Nachschlagen einordnen kann. */
+  out.schwellen = grenze;
   if (out.cluster && out.quorum === false) { out.status = "crit"; out.note = "Knoten hat kein Quorum"; }
-  else if (fullest && fullest.used >= 90) { out.status = "crit"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
-  else if (out.ram != null && out.ram >= 85) { out.status = "warn"; out.note = `RAM-Auslastung ${out.ram} %`; }
-  else if (fullest && fullest.used >= 80) { out.status = "warn"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
+  else if (fullest && fullest.used >= grenze.disk_crit) { out.status = "crit"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt (kritisch ab ${grenze.disk_crit} %)`; }
+  else if (out.ram != null && out.ram >= grenze.ram_crit) { out.status = "crit"; out.note = `RAM-Auslastung ${out.ram} % (kritisch ab ${grenze.ram_crit} %)`; }
+  else if (out.ram != null && out.ram >= grenze.ram_warn) { out.status = "warn"; out.note = `RAM-Auslastung ${out.ram} %`; }
+  else if (fullest && fullest.used >= grenze.disk_warn) { out.status = "warn"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
+  /* Ausstehende Pakete sind ein Hinweis, keine Störung — sie stehen als
+     Notiz da und drehen die Ampel nicht. Dieselbe Zurückhaltung wie bei
+     OPNsense: wer nachts geweckt wird, soll wissen, dass etwas kaputt ist,
+     nicht dass etwas älter ist. */
+  else if (!out.note && out.updates) out.note = `${out.updates} Paketaktualisierung(en) stehen aus`;
   return out;
 }
 
@@ -182,6 +218,104 @@ export async function collectPve(host, cred) {
    angezeigt statt als Zahl, der man glaubt. */
 function unbekannt(out) {
   out.vms = null; out.lxc = null; out.running = null; out.stopped = null; out.storages = null;
+  out.guests = null; out.templates = null;
+}
+
+/* ---------- Ein Gast ----------
+
+   Zwei Stellen, an denen Proxmox eine Null liefert, die keine Messung ist:
+
+   1. Ein gestoppter Gast steht mit cpu 0 und mem 0 in der Bestandsliste.
+      Als „0 % CPU" angezeigt sähe eine ausgeschaltete Maschine aus wie
+      eine, die sich langweilt. Deshalb: läuft sie nicht, gibt es hier
+      keine Auslastung, sondern einen Strich.
+
+   2. Bei virtuellen Maschinen kennt der Wirt die Belegung *im* Gast nicht —
+      `disk` ist dort 0, solange kein Gastagent Auskunft gibt. Bei
+      Containern ist die Zahl echt. Eine 0 wird deshalb als „weiß ich
+      nicht" gelesen und nicht als „leer". */
+function gast(g) {
+  const laeuft = g.status === "running";
+  return {
+    vmid: g.vmid ?? null,
+    name: g.name || (g.vmid != null ? String(g.vmid) : "—"),
+    typ: g.type,                                  /* qemu = VM, lxc = Container */
+    status: g.status || null,
+    node: g.node || null,
+    lock: g.lock || null,
+    tags: g.tags || null,
+    cores: zahl(g.maxcpu),
+    cpu: laeuft ? pct(g.cpu) : null,
+    ram: laeuft && g.maxmem ? pct(g.mem / g.maxmem) : null,
+    ramMb: laeuft && Number.isFinite(g.mem) ? Math.round(g.mem / 1048576) : null,
+    ramMaxMb: Number.isFinite(g.maxmem) ? Math.round(g.maxmem / 1048576) : null,
+    disk: laeuft && g.maxdisk && g.disk ? pct(g.disk / g.maxdisk) : null,
+    diskMaxGb: Number.isFinite(g.maxdisk) && g.maxdisk ? Math.round(g.maxdisk / 1073741824) : null,
+    uptime: laeuft && Number.isFinite(g.uptime) ? g.uptime : null
+  };
+}
+
+/* Laufendes zuerst, darin das Belastete oben — wonach man sucht, steht
+   dann ohne Blättern da. Gestopptes danach, alphabetisch. */
+function sortiereGaeste(a, b) {
+  const laufA = a.status === "running", laufB = b.status === "running";
+  if (laufA !== laufB) return laufA ? -1 : 1;
+  if (laufA && (a.cpu ?? -1) !== (b.cpu ?? -1)) return (b.cpu ?? -1) - (a.cpu ?? -1);
+  return String(a.name).localeCompare(String(b.name), "de");
+}
+
+/* ---------- Knotenauskunft ----------
+   Aus /nodes/{name}/status: was auf dem Blech läuft und womit. Der
+   Kernelstring ist die volle Bauzeile („Linux 6.8.12-4-pve #1 SMP …") —
+   davon ist genau ein Feld interessant. */
+function knotenstatus(out, d) {
+  if (!d) return;
+  out.kernel = kurzKernel(d.kversion);
+  /* „pve-manager/8.3.2/abc" — die Fassung steht schon in out.version,
+     hier bleibt die vollständige Zeile für die Detailseite. */
+  out.pveVersion = d.pveversion || null;
+  out.cores = zahl(d.cpuinfo?.cpus);
+  out.sockets = zahl(d.cpuinfo?.sockets);
+  out.cpuModel = d.cpuinfo?.model || null;
+  const last = Array.isArray(d.loadavg) ? Number(d.loadavg[0]) : NaN;
+  out.load1 = Number.isFinite(last) ? last : null;
+  out.rootUsed = d.rootfs?.total ? pct(d.rootfs.used / d.rootfs.total) : null;
+  /* Auslagerung ohne Vorrat ist 0 von 0 — dann gibt es dazu nichts zu sagen. */
+  out.swap = d.swap?.total ? pct(d.swap.used / d.swap.total) : null;
+}
+
+function kurzKernel(v) {
+  if (!v) return null;
+  const m = /(\d+\.\d+[\w.+-]*)/.exec(String(v));
+  return m ? m[1] : String(v);
+}
+
+/* ---------- Ausstehende Pakete ----------
+   /nodes/{name}/apt/update listet, was `apt list --upgradable` zeigen
+   würde. Wichtig: es steht dort nur, was der letzte Listenabgleich auf
+   dem Knoten hergab — eine leere Liste heißt „nichts bekannt", nicht
+   „garantiert aktuell". Das steht so auch in der Oberfläche.
+
+   Bewusst nicht gezählt: welche davon Sicherheitsaktualisierungen sind.
+   Die Einträge tragen dafür kein verlässliches Feld, und eine geratene
+   Zahl wäre schlimmer als keine. */
+function pakete(out, r) {
+  if (!r.ok) {
+    out.updates = null;
+    out.updatesNote = r.status === 403
+      ? "Paketstand nicht lesbar — dem Token fehlt Sys.Audit auf diesem Knoten"
+      : r.error;
+    return;
+  }
+  const liste = Array.isArray(r.data?.data) ? r.data.data : [];
+  out.updates = liste.length;
+  out.updatesNote = null;
+  out.updateListe = liste.slice(0, 20).map(p => ({
+    paket: p.Package || "—",
+    von: p.OldVersion || null,
+    auf: p.Version || null,
+    titel: p.Title || null
+  }));
 }
 
 function pickNode(nodes, host) {
@@ -191,7 +325,8 @@ function pickNode(nodes, host) {
 }
 
 /* ---------- Proxmox Backup Server ---------- */
-export async function collectPbs(host, cred) {
+export async function collectPbs(host, cred, settings) {
+  const grenze = schwellenFuer(host, settings);
   const [useRes, taskRes, verRes] = await Promise.all([
     api(host, "pbs", cred, "/status/datastore-usage"),
     api(host, "pbs", cred, "/nodes/localhost/tasks?limit=60&errors=1"),
@@ -203,7 +338,7 @@ export async function collectPbs(host, cred) {
     name: d.store,
     used: d.total ? pct(d.used / d.total) : null
   }));
-  const out = { version: verRes.ok ? verRes.data?.data?.version : null, datastores: stores.length, stores };
+  const out = { version: verRes.ok ? verRes.data?.data?.version : null, datastores: stores.length, stores, schwellen: grenze };
   const fullest = stores.filter(s => s.used != null).sort((a, b) => b.used - a.used)[0];
   out.used = fullest ? fullest.used : null;
 
@@ -214,7 +349,8 @@ export async function collectPbs(host, cred) {
     const f = failed[0];
     out.status = "crit";
     out.note = `${failed.length} fehlgeschlagene Aufgabe(n) in 24 h — zuletzt ${f.worker_type || "Job"} ${f.worker_id || ""}`.trim();
-  } else if (fullest && fullest.used >= 85) { out.status = "warn"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt`; }
+  } else if (fullest && fullest.used >= grenze.disk_crit) { out.status = "crit"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt (kritisch ab ${grenze.disk_crit} %)`; }
+  else if (fullest && fullest.used >= grenze.disk_warn) { out.status = "warn"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt`; }
   const ok = tasks.find(t => t.status === "OK" && t.endtime);
   out.lastGood = ok ? new Date(ok.endtime * 1000).toISOString() : null;
   return out;
@@ -239,6 +375,11 @@ export async function collectPmg(host, cred) {
 
 const pct = f => (Number.isFinite(f) ? Math.round(f * 100) : null);
 const days = s => `${Math.floor(s / 86400)} T`;
+const zahl = v => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 
 /* ---------- Registrierung für den Kern ---------- */
 export function makeCollectors(secrets) {

@@ -15,6 +15,7 @@
    die tatsächlichen Felder gebaut — nicht gegen Vermutungen. */
 
 import { requestJson } from "../http.js";
+import { schwellenFuer } from "../inventory.js";
 
 export function authHeader(cred) {
   if (!cred) return null;
@@ -63,8 +64,15 @@ export const PFADE = [
   {
     pfad: "/api/diagnostics/interface/get_interface_statistics",
     alternativen: ["/api/diagnostics/interface/getInterfaceStatistics"],
-    zweck: "Durchsatz je Schnittstelle",
+    zweck: "Zähler je Schnittstelle — daraus Durchsatz, Pakete, Fehler und Verwürfe",
     optional: true
+  },
+  {
+    pfad: "/api/interfaces/overview/export",
+    zweck: "Schnittstellen: Beschreibung, Verbindungszustand, MTU — die Zähler sagen nichts über einen toten Link",
+    optional: true,
+    fehlendOk: "Diese Fassung kennt den Endpunkt nicht — dann fehlen Beschreibung und Verbindungszustand, "
+      + "die Zähler und der Durchsatz kommen trotzdem"
   },
   {
     pfad: "/api/wireguard/service/show",
@@ -162,13 +170,15 @@ function hintFor(r) {
 const zaehlerstand = new Map();
 const zaehlerSchluessel = host => host.id + "@" + baseUrl(host);
 
-export async function collectOpnsense(host, cred) {
-  const [fw, sys, res, disk, ifs, wg, zeit] = await Promise.all([
+export async function collectOpnsense(host, cred, settings) {
+  const grenze = schwellenFuer(host, settings);
+  const [fw, sys, res, disk, ifs, uebersicht, wg, zeit] = await Promise.all([
     api(host, cred, "/api/core/firmware/status"),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_information", "/api/diagnostics/system/systemInformation"]),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_resources", "/api/diagnostics/system/systemResources"]),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_disk", "/api/diagnostics/system/systemDisk"]),
     ersterTreffer(host, cred, ["/api/diagnostics/interface/get_interface_statistics", "/api/diagnostics/interface/getInterfaceStatistics"]),
+    api(host, cred, "/api/interfaces/overview/export"),
     api(host, cred, "/api/wireguard/service/show"),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_time", "/api/diagnostics/system/systemTime"])
   ]);
@@ -182,10 +192,11 @@ export async function collectOpnsense(host, cred) {
   speicher(out, res.ok ? res.data : null);
   platte(out, disk.ok ? disk.data : null);
   laufzeit(out, sys.ok ? sys.data : null, zeit.ok ? zeit.data : null);
-  durchsatz(out, host, ifs.ok ? ifs.data : null);
+  schnittstellen(out, host, ifs.ok ? ifs.data : null, uebersicht.ok ? uebersicht.data : null);
   wireguard(out, wg.ok ? wg.data : null, wg.status);
 
-  ampel(out);
+  out.schwellen = grenze;
+  ampel(out, grenze);
   return out;
 }
 
@@ -274,14 +285,40 @@ function dauer(s) {
   return `${min} min`;
 }
 
-/* ---------- Durchsatz ---------- */
-function durchsatz(out, host, d) {
-  const stat = d?.statistics;
-  if (!stat || typeof stat !== "object") { out.thrIn = null; out.thrOut = null; return; }
+/* ---------- Schnittstellen ----------
 
+   Was OPNsense hier liefert, sind **Zählerstände** — Bytes und Pakete seit
+   dem letzten Neustart, wie `netstat -ib`. Eine Bandbreite steht nirgends
+   und lässt sich nur aus der Differenz zweier Abfragen errechnen. Daraus
+   folgen zwei Dinge, die hier Arbeit machen:
+
+   - Vor dem zweiten Durchlauf gibt es keinen Durchsatz. Dort steht dann
+     ein Strich, keine Null — eine Null läse sich wie „nichts los".
+   - Läuft der Zähler zurück, hat das Gerät neu gestartet (oder es
+     antwortet ein anderes). Aus so einer Differenz einen Durchsatz zu
+     rechnen ergäbe eine große Zufallszahl, also gibt es auch dann nichts.
+
+   Ebenfalls aus den Zählern: Fehler, Verwürfe und Kollisionen. Die sind
+   kumulativ und über Monate gewachsen — interessant ist, was **seit dem
+   letzten Durchlauf** dazugekommen ist. Beides wird geführt: der Stand
+   und der Zuwachs.
+
+   Was die Zähler dagegen nicht sagen: ob die Leitung überhaupt steht. Eine
+   Schnittstelle mit totem Link zählt einfach nicht weiter, und das sieht
+   aus wie Ruhe. Deshalb wird — wenn die Fassung den Endpunkt kennt — die
+   Schnittstellenübersicht dazugelesen. Fehlt sie, bleiben Zustand und
+   Beschreibung null; die Zähler kommen trotzdem. */
+function schnittstellen(out, host, d, uebersichtRoh) {
+  const stat = d?.statistics;
+  if (!stat || typeof stat !== "object") {
+    out.thrIn = null; out.thrOut = null; out.interfaces = null; return;
+  }
+
+  const zusatz = schnittstellenUebersicht(uebersichtRoh);
   const physisch = [];
   for (const [schluessel, w] of Object.entries(stat)) {
-    /* Nur die Zeilen auf Verbindungsebene tragen die Gesamtzähler. */
+    /* Nur die Zeilen auf Verbindungsebene tragen die Gesamtzähler; die
+       Zeilen je IP-Netz sind Teilmengen davon. */
     if (!w || !String(w.network || "").startsWith("<Link#")) continue;
     const name = w.name || schluessel;
     if (/^(lo|enc|pflog|pfsync|ipfw)/.test(name)) continue;
@@ -289,29 +326,63 @@ function durchsatz(out, host, d) {
     physisch.push({
       name, label,
       rx: zahl(w["received-bytes"]), tx: zahl(w["sent-bytes"]),
-      fehler: (zahl(w["received-errors"]) || 0) + (zahl(w["send-errors"]) || 0)
+      rxPakete: zahl(w["received-packets"]), txPakete: zahl(w["sent-packets"]),
+      fehler: (zahl(w["received-errors"]) || 0) + (zahl(w["send-errors"]) || 0),
+      verworfen: zahl(w["dropped-packets"]) || 0,
+      kollisionen: zahl(w["collisions"]) || 0
     });
   }
-  if (!physisch.length) { out.thrIn = null; out.thrOut = null; return; }
+  if (!physisch.length) { out.thrIn = null; out.thrOut = null; out.interfaces = null; return; }
 
   const jetzt = Date.now();
   const schluessel = zaehlerSchluessel(host);
   const vorher = zaehlerstand.get(schluessel);
-  zaehlerstand.set(schluessel, { t: jetzt, je: Object.fromEntries(physisch.map(p => [p.name, { rx: p.rx, tx: p.tx }])) });
+  zaehlerstand.set(schluessel, {
+    t: jetzt,
+    je: Object.fromEntries(physisch.map(p => [p.name, {
+      rx: p.rx, tx: p.tx, rxPakete: p.rxPakete, txPakete: p.txPakete,
+      fehler: p.fehler, verworfen: p.verworfen
+    }]))
+  });
 
-  const rate = (name, feld, wert) => {
+  const sekunden = vorher ? (jetzt - vorher.t) / 1000 : 0;
+  /* Zuwachs eines Zählers seit der letzten Abfrage — null, solange es
+     keine letzte gibt, und null nach einem Zählerrücksetzer. */
+  const zuwachs = (name, feld, wert) => {
     const alt = vorher?.je?.[name]?.[feld];
-    const dt = vorher ? (jetzt - vorher.t) / 1000 : 0;
-    if (alt == null || wert == null || dt <= 0) return null;
+    if (alt == null || wert == null || sekunden <= 0) return null;
     const delta = wert - alt;
-    if (delta < 0) return null;                   /* Zähler zurückgesetzt — Neustart */
-    return Math.round((delta * 8) / dt / 1000) / 1000;   /* Mbit/s, drei Nachkommastellen */
+    return delta < 0 ? null : delta;
+  };
+  const mbit = (name, feld, wert) => {
+    const delta = zuwachs(name, feld, wert);
+    return delta == null ? null : Math.round((delta * 8) / sekunden / 1000) / 1000;
+  };
+  const proSekunde = (name, feld, wert) => {
+    const delta = zuwachs(name, feld, wert);
+    return delta == null ? null : Math.round(delta / sekunden);
   };
 
-  out.interfaces = physisch.map(p => ({
-    name: p.name, label: p.label, fehler: p.fehler,
-    in: rate(p.name, "rx", p.rx), out: rate(p.name, "tx", p.tx)
-  }));
+  out.interfaces = physisch.map(p => {
+    const z = zusatz.get(p.name) || {};
+    return {
+      name: p.name,
+      label: p.label,
+      beschreibung: z.beschreibung || null,
+      link: z.link || null,                        /* "up" / "down" / null = unbekannt */
+      mtu: z.mtu ?? null,
+      in: mbit(p.name, "rx", p.rx),                /* Mbit/s herein */
+      out: mbit(p.name, "tx", p.tx),               /* Mbit/s hinaus */
+      inPps: proSekunde(p.name, "rxPakete", p.rxPakete),
+      outPps: proSekunde(p.name, "txPakete", p.txPakete),
+      rxBytes: p.rx, txBytes: p.tx,
+      fehler: p.fehler,
+      fehlerNeu: zuwachs(p.name, "fehler", p.fehler),
+      verworfen: p.verworfen,
+      verworfenNeu: zuwachs(p.name, "verworfen", p.verworfen),
+      kollisionen: p.kollisionen
+    };
+  });
 
   /* Gibt es eine ausdrücklich als WAN beschriebene Schnittstelle, zählt
      die — sonst die Summe über alles Physische. */
@@ -323,6 +394,39 @@ function durchsatz(out, host, d) {
   out.thrIn = wan ? wan.in : summe("in");
   out.thrOut = wan ? wan.out : summe("out");
   out.thrQuelle = wan ? wan.label : "alle Schnittstellen";
+
+  /* Zuwachs an Fehlern oder Verwürfen ist eine Notiz, keine Ampel: ein
+     einzelnes verworfenes Paket auf einer ausgelasteten Leitung ist
+     normal, und eine Schwelle dafür wäre geraten. Sichtbar gehört es
+     trotzdem — an einer schlechten Leitung wächst diese Zahl stetig. */
+  const auffaellig = out.interfaces.filter(i => (i.fehlerNeu || 0) + (i.verworfenNeu || 0) > 0);
+  out.ifNote = auffaellig.length
+    ? auffaellig.map(i => `${i.label}: ${(i.fehlerNeu || 0)} Fehler, ${(i.verworfenNeu || 0)} verworfen`).join(" · ")
+    : null;
+}
+
+/* Die Schnittstellenübersicht ist zwischen den Fassungen unterschiedlich
+   verpackt — mal eine Liste, mal `rows`, mal eine Abbildung nach Kennung.
+   Gelesen wird deshalb nachsichtig, und jedes Feld darf fehlen. Was nicht
+   kommt, bleibt null; erfunden wird nichts. */
+export function schnittstellenUebersicht(d) {
+  const map = new Map();
+  const liste = Array.isArray(d) ? d
+    : Array.isArray(d?.rows) ? d.rows
+    : (d && typeof d === "object") ? Object.values(d) : null;
+  if (!Array.isArray(liste)) return map;
+  for (const e of liste) {
+    if (!e || typeof e !== "object") continue;
+    const geraet = e.device || e.if || e.name;
+    if (!geraet) continue;
+    const zustand = e.status ?? e.link ?? null;
+    map.set(String(geraet), {
+      link: zustand == null ? null : String(zustand).toLowerCase(),
+      beschreibung: e.description || e.descr || null,
+      mtu: zahl(e.mtu)
+    });
+  }
+  return map;
 }
 
 /* ---------- WireGuard ---------- */
@@ -365,20 +469,23 @@ function wireguard(out, d, status) {
    Nur was wirklich gemessen wurde, darf die Farbe bestimmen. Ein
    ausstehender Neustart oder eine neue Hauptfassung sind Hinweise, keine
    Störungen — sie stehen als Notiz da, ohne die Ampel zu drehen. */
-function ampel(out) {
-  if (out.disk != null && out.disk >= 90) { out.status = "crit"; out.note = `Platte zu ${out.disk} % belegt`; return; }
-  if (out.ram != null && out.ram >= 90) {
-    out.status = "warn";
+function ampel(out, grenze) {
+  if (out.disk != null && out.disk >= grenze.disk_crit) { out.status = "crit"; out.note = `Platte zu ${out.disk} % belegt (kritisch ab ${grenze.disk_crit} %)`; return; }
+  if (out.ram != null && out.ram >= grenze.ram_warn) {
+    /* Der ZFS-Cache zählt in dieser Zahl als belegt, ist aber jederzeit
+       abzugeben — deshalb steht er dabei, statt die Ampel allein zu drehen. */
+    out.status = out.ram >= grenze.ram_crit ? "crit" : "warn";
     out.note = `Arbeitsspeicher ${out.ram} % belegt` + (out.ramArcMb ? ` (davon ${out.ramArcMb} MB ZFS-Cache)` : "");
     return;
   }
-  if (out.disk != null && out.disk >= 80) { out.status = "warn"; out.note = `Platte zu ${out.disk} % belegt`; return; }
+  if (out.disk != null && out.disk >= grenze.disk_warn) { out.status = "warn"; out.note = `Platte zu ${out.disk} % belegt`; return; }
   if (out.wgFehler) { out.status = "warn"; out.note = out.wgFehler; return; }
 
   const hinweise = [];
   if (out.needsReboot) hinweise.push("Neustart steht aus");
   if (out.updates) hinweise.push(`${out.updates} Aktualisierung(en)`);
   if (out.majorUpgrade) hinweise.push(`Fassung ${out.majorUpgrade} verfügbar`);
+  if (out.ifNote) hinweise.push(out.ifNote);
   if (hinweise.length) out.note = hinweise.join(" · ");
 }
 

@@ -50,16 +50,44 @@ export function fakeProxmox() {
           { node: "pve-hq-02", status: "online", cpu: 0.71, mem: 59_000_000_000, maxmem: 67_000_000_000, disk: 280_000_000_000, maxdisk: 450_000_000_000, uptime: 3_542_400 }
         ]);
       case "/api2/json/cluster/resources":
+        /* So, wie ein echter Cluster es liefert: laufende Gäste tragen
+           Werte, gestoppte tragen Nullen (keine Messung!), und bei
+           virtuellen Maschinen bleibt `disk` auf 0, weil der Wirt die
+           Belegung im Gast nicht kennt. Eine Vorlage ist auch dabei. */
         return send(200, [
-          { type: "qemu", node: "pve-hq-01", vmid: 101, status: "running" },
-          { type: "qemu", node: "pve-hq-01", vmid: 141, status: "stopped" },
-          { type: "lxc",  node: "pve-hq-01", vmid: 201, status: "running" },
-          { type: "qemu", node: "pve-hq-02", vmid: 301, status: "running" },
+          { type: "qemu", node: "pve-hq-01", vmid: 101, name: "vm-web", status: "running",
+            cpu: 0.12, maxcpu: 4, mem: 3_200_000_000, maxmem: 8_589_934_592,
+            disk: 0, maxdisk: 68_719_476_736, uptime: 864_000, tags: "prod" },
+          { type: "qemu", node: "pve-hq-01", vmid: 141, name: "vm-alt", status: "stopped",
+            cpu: 0, maxcpu: 2, mem: 0, maxmem: 4_294_967_296, disk: 0, maxdisk: 34_359_738_368, uptime: 0 },
+          { type: "qemu", node: "pve-hq-01", vmid: 900, name: "vorlage-debian", status: "stopped", template: 1,
+            cpu: 0, maxcpu: 2, mem: 0, maxmem: 2_147_483_648, disk: 0, maxdisk: 8_589_934_592 },
+          { type: "lxc",  node: "pve-hq-01", vmid: 201, name: "ct-dns", status: "running",
+            cpu: 0.41, maxcpu: 2, mem: 400_000_000, maxmem: 1_073_741_824,
+            disk: 2_000_000_000, maxdisk: 8_589_934_592, uptime: 3_600 },
+          { type: "qemu", node: "pve-hq-02", vmid: 301, name: "vm-fremd", status: "running", cpu: 0.9, maxcpu: 8 },
           { type: "storage", node: "pve-hq-01", storage: "local-lvm", disk: 410_000_000_000, maxdisk: 450_000_000_000 },
           { type: "storage", node: "pve-hq-01", storage: "local", disk: 20_000_000_000, maxdisk: 100_000_000_000 }
         ]);
       case "/api2/json/cluster/status":
         return send(200, [{ type: "cluster", name: "cl-hq", quorate: 1, nodes: 3 }]);
+      case "/api2/json/nodes/pve-hq-01/status":
+        return send(200, {
+          kversion: "Linux 6.8.12-4-pve #1 SMP PREEMPT_DYNAMIC PMX 6.8.12-4 (2026-06-02T14:00Z)",
+          pveversion: "pve-manager/8.3.2/abc123",
+          cpuinfo: { cpus: 16, cores: 8, sockets: 1, model: "AMD Ryzen 9 5950X" },
+          loadavg: ["0.42", "0.51", "0.60"],
+          rootfs: { used: 21_000_000_000, total: 100_000_000_000 },
+          swap: { used: 0, total: 0 },
+          uptime: 3_542_400
+        });
+      case "/api2/json/nodes/pve-hq-01/apt/update":
+        /* Ein Knoten mit offenen Paketen. Ein Token ohne Sys.Audit bekäme
+           hier 403 — der Sammler meldet dann „unbekannt" statt „keine". */
+        return send(200, [
+          { Package: "pve-manager", OldVersion: "8.3.1", Version: "8.3.2", Title: "Proxmox VE Verwaltung" },
+          { Package: "openssl", OldVersion: "3.0.14", Version: "3.0.15", Title: "Kryptobibliothek" }
+        ]);
       case "/api2/json/status/datastore-usage":
         return send(200, [
           { store: "main", used: 3_700_000_000_000, total: 5_000_000_000_000 },

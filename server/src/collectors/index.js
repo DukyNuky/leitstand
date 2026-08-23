@@ -10,11 +10,15 @@ import { collectOpnsense, testConnection as testOpnsense } from "./opnsense.js";
 import { collectAdguard, testConnection as testAdguard } from "./adguard.js";
 import { collectPortainer, testConnection as testPortainer } from "./portainer.js";
 
+/* Der zweite Parameter sind die Einstellungen des laufenden Bestands. Ein
+   Sammler braucht sie für die Schwellwerte: ab wann eine Belegung gelb
+   und ab wann sie rot ist, ist eine Betriebsentscheidung und darf je
+   System abweichen (siehe `schwellenFuer` in inventory.js). */
 export function makeCollectors(secrets) {
-  const wrap = fn => async host => {
+  const wrap = fn => async (host, settings) => {
     const cred = secrets.get(host.id);
     if (!cred) return null;
-    return fn(host, cred);
+    return fn(host, cred, settings);
   };
   return {
     pve: wrap(collectPve),

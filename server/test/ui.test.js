@@ -71,7 +71,7 @@ function ladeUi({ live = true } = {}) {
 function zeichneAlles(sandbox, ziele) {
   const ui = sandbox.window.LeitstandUI;
   const seiten = {};
-  for (const v of ["lage", "sites", "compute", "netz", "vpn", "dienste", "post", "links", "cfg", "verwaltung"]) {
+  for (const v of ["lage", "sites", "virt", "compute", "netz", "vpn", "dienste", "post", "links", "cfg", "verwaltung"]) {
     ui.state.view = v;
     ui.render();
     seiten[v] = ziele.get("#wrap").innerHTML + ziele.get("#top").innerHTML + ziele.get("#rail-nav").innerHTML;
@@ -289,7 +289,7 @@ test("Inspector, Verwaltung und Formulare zeichnen für jeden Fall", async () =>
   /* Ein Standortfilter darf keine Ansicht kippen, auch wenn dort nichts liegt. */
   ui.state.site = "rz";
   ui.state.onlyProblems = true;
-  for (const v of ["lage", "sites", "compute", "netz", "vpn", "dienste", "links"]) {
+  for (const v of ["lage", "sites", "virt", "compute", "netz", "vpn", "dienste", "links"]) {
     ui.state.view = v;
     ui.render();
     sauber(ziele.get("#wrap").innerHTML, `gefiltert/${v}`);
@@ -807,11 +807,11 @@ test("Portainer zeigt Umgebungen, Container und wer klemmt", async () => {
   const { sandbox, ziele } = ladeUi();
   const ui = sandbox.window.LeitstandUI;
   ui.applyLive(zustand);
-  ui.state.view = "compute";
+  ui.state.view = "virt";
   ui.render();
   const html = ziele.get("#wrap").innerHTML;
 
-  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Compute-Ansicht");
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Virtualisierungs-Ansicht");
   assert.match(html, /1\/2/, "eine von zwei Umgebungen erreichbar");
   assert.match(html, /20\/22/, "laufende von allen Containern");
   assert.match(html, /jellyfin/, "der Container mit Exit 137 gehört mit Namen hin");
@@ -849,9 +849,240 @@ test("Ohne hinterlegten Zugang steht da, was fehlt — keine Nullen", async () =
   assert.match(dienste, /Kennzahlen erst mit hinterlegtem Zugang/);
   assert.ok(!/undefined|NaN/.test(dienste));
 
-  ui.state.view = "compute";
+  ui.state.view = "virt";
   ui.render();
-  const compute = ziele.get("#wrap").innerHTML;
-  assert.match(compute, /API-Token/);
-  assert.ok(!/undefined|NaN/.test(compute));
+  const virt = ziele.get("#wrap").innerHTML;
+  assert.match(virt, /API-Token/);
+  assert.ok(!/undefined|NaN/.test(virt));
+});
+
+/* ============================================================
+   Virtualisierung: Knoten und Gäste
+   ============================================================ */
+
+/* Ein Zustand mit einem echten Proxmox-Knoten dahinter — dieselbe
+   Attrappe, gegen die auch der Sammler geprüft wird. */
+async function zustandMitProxmox(extra = "") {
+  const { fakeProxmox, listen: hoere } = await import("./fake-proxmox.js");
+  const pve = fakeProxmox();
+  const url = await hoere(pve);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-virt-"));
+  try {
+    fs.writeFileSync(path.join(dir, "inventory.yaml"), `
+settings: { interval: 3600, icmp: false, timeout: 2 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: pve-hq-01, type: pve, site: hq, url: "${url}", role: Cluster-Node${extra} }
+tunnels: []
+links: []
+`);
+    fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+      "pve-hq-01": { user: "leitstand@pve", tokenId: "ro", secret: "1a2b3c4d-0000-1111-2222-333344445555" }
+    }));
+    const server = createServer({
+      inventory: path.join(dir, "inventory.yaml"),
+      secrets: path.join(dir, "secrets.json"),
+      state: path.join(dir, "incidents.json")
+    });
+    await server.engine.runOnce();
+    const { buildState } = await import("../src/api.js");
+    const zustand = buildState(server.engine, server.secrets);
+    server.engine.stop();
+    return zustand;
+  } finally {
+    await new Promise(r => { pve.closeAllConnections?.(); pve.close(r); });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Die Virtualisierung zeigt den Knoten mit Softwarestand und offenen Paketen", async () => {
+  const zustand = await zustandMitProxmox();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "virt";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Virtualisierung");
+  assert.match(html, /pve-hq-01/);
+  assert.match(html, /6\.8\.12-4-pve/, "der Kernel gehört zum Softwarestand");
+  assert.match(html, /2 Update\(s\) offen/);
+  assert.match(html, /2 von 3 laufen|2 laufen/, "wie viele Gäste laufen");
+});
+
+test("Jeder Gast steht mit Namen und Auslastung da", async () => {
+  const zustand = await zustandMitProxmox();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "virt";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.match(html, /vm-web/);
+  assert.match(html, /ct-dns/);
+  assert.match(html, /41 %/, "die CPU-Auslastung des Containers");
+  assert.equal(/vorlage-debian/.test(html), false, "eine Vorlage ist kein laufender Gast");
+  assert.match(html, /1 Vorlage\(n\)/, "gezählt wird sie am Knoten");
+});
+
+/* Der Kern von Regel 5 an dieser Stelle: die Null, die Proxmox für einen
+   gestoppten Gast meldet, ist keine Messung. */
+test("Ein gestoppter Gast zeigt seinen Zustand statt 0 %", async () => {
+  const zustand = await zustandMitProxmox();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "virt";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  const zeile = html.split("vm-alt")[1].split("</tr>")[0];
+  assert.match(zeile, /stopped/);
+  assert.equal(/>0 %</.test(zeile), false, "eine ausgeschaltete Maschine langweilt sich nicht");
+});
+
+/* ============================================================
+   Eigene Schwellwerte
+   ============================================================ */
+
+test("Ein System mit eigener Grenze sagt das — und die Ampel folgt ihr", async () => {
+  /* local-lvm liegt bei 91 %: mit der Vorgabe rot, mit 97 nicht. */
+  const streng = await zustandMitProxmox();
+  assert.equal(streng.hosts[0].status, "crit");
+  assert.match(streng.hosts[0].note, /local-lvm/);
+
+  const locker = await zustandMitProxmox(", schwellen: { disk_warn: 93, disk_crit: 97 }");
+  assert.notEqual(locker.hosts[0].status, "crit", "die eigene Grenze greift");
+  assert.deepEqual(locker.hosts[0].schwellenEigen, { disk_warn: 93, disk_crit: 97 });
+  assert.equal(locker.hosts[0].schwellen.ram_warn, 85, "ungesetzte Werte kommen weiter von oben");
+
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(locker);
+  ui.state.view = "virt";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML, /eigene Schwellen/);
+
+  /* Und in den Einstellungen steht, welches System abweicht — eine
+     Abweichung, die niemand mehr findet, ist eine stillgelegte Überwachung. */
+  ui.state.view = "cfg";
+  ui.render();
+  const cfg = ziele.get("#wrap").innerHTML;
+  assert.match(cfg, /pve-hq-01/);
+  assert.match(cfg, /Speicher gelb 93 %/);
+});
+
+test("Das Formular zeigt eigene Werte, aber nicht die geerbten", async () => {
+  const zustand = await zustandMitProxmox();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  vm.runInContext("openForm('hosts','edit','pve-hq-01')", sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /Schwellwerte/);
+  /* Der globale Wert steht als Platzhalter da, nicht als Inhalt: sonst
+     schriebe jedes Speichern ihn als eigenen fest. */
+  assert.match(html, /data-field="s_disk_warn"[^>]*value=""/);
+  assert.match(html, /placeholder="80"/);
+});
+
+/* ============================================================
+   Schnittstellen einer Firewall
+   ============================================================ */
+
+/* Die Ansicht liest nur Felder — hier genügt ein Gerät, wie der Sammler
+   es liefert. Der Weg dorthin ist in opnsense.test.js geprüft. */
+function firewallMit(interfaces) {
+  return {
+    id: "fw-01", name: "fw-01", type: "opnsense", site: "hq", role: "Firewall",
+    status: "ok", ms: 12, hist: [12], monitored: true, checks: [], version: "26.1",
+    interfaces, thrIn: 4.2, thrOut: 1.1, thrQuelle: "WAN",
+    schwellen: { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 }
+  };
+}
+
+test("Die Netzansicht zeigt jede Leitung einzeln mit Rate und Zählern", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(firewallMit([
+    { name: "vtnet0", label: "LAN", beschreibung: "LAN", link: "up", mtu: 1500,
+      in: 4.25, out: 0.5, inPps: 900, outPps: 400,
+      rxBytes: 81_386_215_378, txBytes: 557_996_298_083, fehler: 0, fehlerNeu: 0, verworfen: 0, verworfenNeu: 0, kollisionen: 0 },
+    { name: "vtnet1", label: "WAN", beschreibung: "Uplink Glasfaser", link: "down", mtu: 1492,
+      in: null, out: null, inPps: null, outPps: null,
+      rxBytes: 562_774_671_970, txBytes: 78_304_533_217, fehler: 17, fehlerNeu: 3, verworfen: 4, verworfenNeu: 1, kollisionen: 0 }
+  ]));
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Netzansicht");
+  assert.match(html, /vtnet0/);
+  assert.match(html, /Uplink Glasfaser/);
+  assert.match(html, /4\.3/, "die Rate herein, auf eine Stelle gerundet");
+  assert.match(html, /1 mit neuen Fehlern/);
+  assert.match(html, /\(\+4\)/, "Fehler und Verwürfe seit dem letzten Durchlauf zusammen");
+  assert.match(html, /75\.8 GB/, "die übertragene Menge lesbar statt in Bytes");
+  assert.match(html, /chip--warn">down/, "eine tote Leitung ist als solche zu sehen");
+});
+
+/* Ohne zweiten Durchlauf gibt es keinen Durchsatz — und eine Null wäre an
+   dieser Stelle eine Behauptung. */
+test("Vor der ersten Differenz steht ein Strich, keine Null", async () => {
+  const zustand = await zustandMitDiensten();
+  zustand.hosts.push(firewallMit([
+    { name: "vtnet0", label: "LAN", beschreibung: null, link: null, mtu: null,
+      in: null, out: null, inPps: null, outPps: null,
+      rxBytes: 1000, txBytes: 2000, fehler: 0, fehlerNeu: null, verworfen: 0, verworfenNeu: null, kollisionen: 0 }
+  ]));
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  const zeile = html.split("vtnet0")[1].split("</tr>")[0];
+  assert.equal(/>0\.00</.test(zeile), false, "ein fehlender Messwert ist keine Null");
+  assert.match(zeile, /—/);
+});
+
+/* ============================================================
+   AdGuard: die Auflösung selbst
+   ============================================================ */
+
+test("Die AdGuard-Kachel nennt die Auflösung über UDP/53", async () => {
+  const zustand = await zustandMitDiensten();
+  const ag = zustand.hosts.find(h => h.type === "adguard");
+  ag.checks = [
+    { kind: "tcp", port: 443, ok: true, ms: 2, detail: "Port 443 offen", skipped: false, wesentlich: false },
+    { kind: "dns", port: 53, ok: true, ms: 7, detail: "example.org → 93.184.216.34 (UDP/53)", skipped: false, wesentlich: true }
+  ];
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "dienste";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /DNS UDP\/53/);
+  assert.match(html, /7 ms/);
+});
+
+test("Löst er nicht auf, steht der Befund im Klartext auf der Kachel", async () => {
+  const zustand = await zustandMitDiensten();
+  const ag = zustand.hosts.find(h => h.type === "adguard");
+  ag.checks = [
+    { kind: "dns", port: 53, ok: false, ms: null, detail: "keine Antwort über UDP/53 nach 4000 ms",
+      skipped: false, wesentlich: true }
+  ];
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "dienste";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /Löst nicht auf/);
+  assert.match(html, /keine Antwort über UDP\/53/);
 });

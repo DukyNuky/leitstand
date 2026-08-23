@@ -180,15 +180,23 @@ export function createServer(opts = {}) {
     let mm;
     if ((mm = p.match(/^\/api\/verlauf\/([^/]+)$/)) && m === "GET") {
       const id = decodeURIComponent(mm[1]);
-      const host = inv.hosts.find(h => String(h.id) === id);
-      const tunnel = inv.tunnels.find(t => String(t.id) === id);
+      /* `system|schnittstelle` ist die Reihe einer einzelnen Schnittstelle.
+         Der Strich trennt, weil er in keiner Kennung vorkommt — und weil
+         die Reihe damit ohne Sonderfall in derselben Ablage liegt. */
+      const strich = id.indexOf("|");
+      const wirtId = strich > 0 ? id.slice(0, strich) : id;
+      const ifName = strich > 0 ? id.slice(strich + 1) : null;
+      const host = inv.hosts.find(h => String(h.id) === wirtId);
+      const tunnel = ifName ? null : inv.tunnels.find(t => String(t.id) === id);
       if (!host && !tunnel) return json(res, 404, { error: `„${id}“ ist nicht angelegt.` });
+      if (ifName && !host) return json(res, 404, { error: `„${wirtId}“ ist nicht angelegt.` });
+      const art = ifName ? "i" : host ? "h" : "t";
       const tage = Math.min(90, Math.max(1, Number(url.searchParams.get("tage")) || 7));
-      const roh = verlauf.reihe(id, { tage, art: host ? "h" : "t" });
+      const roh = verlauf.reihe(id, { tage, art });
       const punkte = verdichte(roh, Math.min(2000, Math.max(200, Number(url.searchParams.get("punkte")) || 900)));
       return json(res, 200, {
-        id, art: host ? "host" : "tunnel",
-        name: host ? (host.name || host.id) : id,
+        id, art: ifName ? "interface" : host ? "host" : "tunnel",
+        name: ifName ? `${host.name || host.id} · ${ifName}` : host ? (host.name || host.id) : id,
         tage, takt: verlauf.takt,
         punkte, gemessen: roh.length, gezeigt: punkte.length,
         reihen: belegteReihen(roh),

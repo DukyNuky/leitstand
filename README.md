@@ -142,19 +142,21 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | | |
 |---|---|
 | **Erreichbarkeit** | ICMP, TCP-Port, HTTP-Status — alle 15 s, drei Fehlschläge bis Rot; Port- und TLS-Prüfung fragen die IP **und** den Namen aus der Oberflächen-Adresse, damit ein System hinter einem Reverse Proxy nicht als Teilausfall gilt |
+| **DNS über UDP/53** | eine echte Auflösung, kein Portklopfen — ohne Zugangsdaten. Jeder AdGuard bekommt sie von Haus aus, und ihr Ausfall gilt als Störung, nicht als Teilausfall neben einem grünen Port. Antwortet er nur über TCP, steht genau das im Befund: dann ist nicht der Dienst weg, sondern UDP/53 zu |
 | **Antwortzeiten** | Sparkline in der Tabelle für die letzte halbe Stunde — und ein **Verlauf über Tage** auf der Seite jedes Systems, der einen Neustart übersteht |
-| **Zeitreihen** | ein Punkt je Minute und Gegenstand auf der Platte (Antwortzeit mit Spannweite, CPU, RAM, Speicher, Durchsatz, Ampel), 30 Tage lang, als lesbares JSON je Zeile |
+| **Zeitreihen** | ein Punkt je Minute und Gegenstand auf der Platte (Antwortzeit mit Spannweite, CPU, RAM, Speicher, Durchsatz, Ampel), 30 Tage lang, als lesbares JSON je Zeile — **je Firewall-Schnittstelle eine eigene Reihe** |
 | **Zertifikate** | Restlaufzeit aller TLS-Ziele, Warnung ab 30 Tagen, Rot ab 14 |
 | **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake des verknüpften Peers. Die Karte zeigt auch Strecken **zwischen Nebenstandorten**, nicht nur die zum Hauptstandort |
-| **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version |
+| **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version — dazu je Knoten Kernel, `pve-manager`-Fassung, Kerne und Modell, Last und **ausstehende Paketaktualisierungen mit Paketnamen**, und **jeder Gast einzeln** mit Zustand und Auslastung. Alles in einer eigenen Ansicht *Virtualisierung* |
 | **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
-| **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, Durchsatz je Schnittstelle, WireGuard-Peers mit Handshake-Alter |
-| **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** |
+| **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, WireGuard-Peers mit Handshake-Alter — und **jede Schnittstelle einzeln**: Durchsatz ↓/↑, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand und Zuwachs), Verbindungszustand und MTU, mit Verlauf über Tage je Leitung |
+| **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** und **ob er über UDP/53 wirklich auflöst** |
 | **Portainer** | Umgebungen erreichbar/gesamt, Stacks, Container laufend/gestoppt, `unhealthy`, Neustartschleifen und Exit 137 (Speichergrenze) — mit dem **Namen** des Containers, der klemmt |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
 | **Startseite** | Kacheln tragen die Ampel des verknüpften Systems; ein Lesezeichen ohne System kann auf Wunsch selbst geprüft werden — ein GET je Minute, Ampel ohne Störung |
+| **Schwellwerte je System** | Belegungsgrenzen gelten global — und dürfen an einem einzelnen System abweichen. Für den Host, der bekanntermaßen bei 93 % läuft, weil es nicht anders geht |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
 Alles andere (pfSense, TrueNAS, Mailcow, Home Assistant) wird bisher nur auf
@@ -419,8 +421,11 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
    Hauptstandort setzen
 2. Unter *Verwaltung → Systeme* die Beispiele durch die echten Geräte ersetzen —
    Kennung, Typ, IP genügen, die Prüfungen leiten sich daraus ab
-3. Für Proxmox die Token hinterlegen und *Verbindung testen* — danach sind
-   Compute-Ansicht und Speicherbelegung echt
+3. Für Proxmox die Token hinterlegen und *Verbindung testen* — danach sind die
+   Ansicht *Virtualisierung* (Knoten, Softwarestand, jeder Gast mit Auslastung)
+   und die Speicherbelegung echt. Läuft ein Host bekanntermaßen voll, bekommt er
+   unter *Verwaltung → System bearbeiten → Schwellwerte* seine eigene Grenze,
+   statt jede Nacht rot zu leuchten
 4. Tunnel eintragen (Gegenstelle im Transfernetz) und die Startseite befüllen
 5. Bei der Firewall den API-Schlüssel hinterlegen, dann am Tunnel den
    **WireGuard-Peer** auswählen — danach steht in der Tunnelzeile der echte
@@ -428,7 +433,8 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
 
 **Am Werkzeug:**
 
-6. OPNsense: Zustandstabelle, CARP-Rolle und HAProxy-Backends — und ein
-   Sammler für pfSense, für das es bislang gar keinen gibt
+6. OPNsense: Zustandstabelle, CARP-Rolle und HAProxy-Backends (die
+   Schnittstellen sind gebaut) — und ein Sammler für pfSense, für das es
+   bislang gar keinen gibt
 7. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
 8. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen

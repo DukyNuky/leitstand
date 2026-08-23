@@ -5,7 +5,7 @@
    Was Stufe 1 nicht wissen kann, steht deshalb ausdrücklich auf null und
    wird als Strich angezeigt — nie als Fantasiewert. */
 
-import { TYPES } from "./inventory.js";
+import { TYPES, schwellenFuer } from "./inventory.js";
 import { buildInfo } from "./version.js";
 
 const uiStatus = s => (s === "unknown" ? "idle" : s);
@@ -13,7 +13,7 @@ const STARTED = new Date().toISOString();
 
 export function buildState(engine, secrets, bestand = null) {
   const inv = engine.inv;
-  const hosts = inv.hosts.map(h => hostView(h, engine.hosts.get(h.id)));
+  const hosts = inv.hosts.map(h => hostView(h, engine.hosts.get(h.id), inv.settings));
   const byId = new Map(hosts.map(h => [h.id, h]));
 
   return {
@@ -130,10 +130,17 @@ function bytes(n) {
   return (v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)) + " " + e[i];
 }
 
-function hostView(h, st = {}) {
+function hostView(h, st = {}, settings = {}) {
   const x = st.extra || {};
   return {
     id: h.id,
+    /* Die Schwellwerte, nach denen für dieses System tatsächlich gemessen
+       wird — die globalen, von den eigenen überschrieben. Die Oberfläche
+       zeigt sie an und lässt sie bearbeiten; ohne diese Angabe stünde dort
+       eine Zahl aus den Einstellungen, während der Sammler nach einer
+       anderen entscheidet. */
+    schwellen: schwellenFuer(h, settings),
+    schwellenEigen: h.schwellen || null,
     name: h.name || h.id,
     type: h.type,
     site: h.site,
@@ -149,13 +156,24 @@ function hostView(h, st = {}) {
     monitored: h.monitor !== false,
     checks: (st.checks || []).map(c => ({
       kind: c.kind, port: c.port || null, ok: c.ok, ms: c.ms ?? null,
-      detail: c.detail || null, skipped: !!c.skipped
+      detail: c.detail || null, skipped: !!c.skipped,
+      /* Eine als wesentlich gekennzeichnete Prüfung ist nicht eine von
+         mehreren, sondern der Dienst selbst — die Oberfläche hebt sie
+         deshalb hervor statt sie in einer Reihe mit den übrigen zu zeigen. */
+      wesentlich: !!c.wesentlich
     })),
     tls: st.tls || null,
     /* aus einem Sammler, sonst null */
     cpu: x.cpu ?? null, ram: x.ram ?? null, disk: x.disk ?? null,
     vms: x.vms ?? null, lxc: x.lxc ?? null, running: x.running ?? null, stopped: x.stopped ?? null,
     uptime: x.uptime || null, cluster: x.cluster || null, quorum: x.quorum ?? null,
+    /* Proxmox VE: Knoten im Einzelnen und seine Gäste */
+    node: x.node || null, nodeStatus: x.nodeStatus || null, uptimeSeconds: x.uptimeSeconds ?? null,
+    kernel: x.kernel || null, pveVersion: x.pveVersion || null,
+    cores: x.cores ?? null, sockets: x.sockets ?? null, cpuModel: x.cpuModel || null,
+    load1: x.load1 ?? null, rootUsed: x.rootUsed ?? null, swap: x.swap ?? null,
+    updatesNote: x.updatesNote || null, updateListe: x.updateListe || null,
+    guests: x.guests || null, templates: x.templates ?? null,
     storages: x.storages || null, stores: x.stores || null,
     used: x.used ?? null, failed: x.failed ?? null, lastGood: x.lastGood || null,
     in24: x.in24 ?? null, spam: x.spam ?? null, virus: x.virus ?? null,

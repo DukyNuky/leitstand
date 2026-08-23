@@ -131,6 +131,7 @@ const ICON = {
   lage:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 13h4l2.5-7 4 14 2.5-7H21"/></svg>',
   sites:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/></svg>',
   compute:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>',
+  virt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><path d="M14 17h7M17.5 13.5v7"/></svg>',
   netz:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l8 4v6c0 4-3.5 7-8 8-4.5-1-8-4-8-8V7z"/></svg>',
   vpn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.2 11l7.6-3.8M8.2 13l7.6 3.8"/></svg>',
   dienste:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
@@ -144,7 +145,13 @@ const ICON = {
 const VIEWS = [
   { id:"lage",    label:"Lagebild",     icon:"lage",    group:"Übersicht" },
   { id:"sites",   label:"Standorte",    icon:"sites",   group:"Übersicht" },
-  { id:"compute", label:"Compute",      icon:"compute", group:"Infrastruktur" },
+  /* „Compute" hieß früher alles, was Rechenlast trägt — Proxmox, Speicher
+     und Container in einer Ansicht. Die Virtualisierung hat daraus eine
+     eigene bekommen: Knoten im Einzelnen, ihr Softwarestand und jeder
+     Gast mit seiner Auslastung. Was bleibt, ist Speicher und Sicherung —
+     und das steht jetzt auch so dran. */
+  { id:"virt",    label:"Virtualisierung", icon:"virt", group:"Infrastruktur" },
+  { id:"compute", label:"Speicher & Sicherung", icon:"compute", group:"Infrastruktur" },
   { id:"netz",    label:"Netz & Proxy", icon:"netz",    group:"Infrastruktur" },
   { id:"vpn",     label:"VPN-Tunnel",   icon:"vpn",     group:"Infrastruktur" },
   { id:"dienste", label:"Dienste",      icon:"dienste", group:"Infrastruktur" },
@@ -251,7 +258,7 @@ function renderAlarmstrip() {
     { k:"Kritisch", v:critCount(), tone: critCount() ? "crit" : "ok", go:"lage", pulse: critCount() > 0 },
     { k:"Warnungen", v:warnCount(), tone: warnCount() ? "warn" : "ok", go:"lage" },
     { k:"Systeme", v: überwacht.length ? `${hostsUp}/${überwacht.length}` : "—",
-      tone: !überwacht.length ? "idle" : hostsUp === überwacht.length ? "ok" : "warn", go:"compute" },
+      tone: !überwacht.length ? "idle" : hostsUp === überwacht.length ? "ok" : "warn", go:"sites" },
     { k:"Tunnel", v: state.tunnels.length ? `${tunOk}/${state.tunnels.length}` : "—",
       tone: !state.tunnels.length ? "idle" : tunOk === state.tunnels.length ? "ok" : "warn", go:"vpn" },
     { k:"Backups 24 h", v: BACKUPS.length ? `${bkOk}/${BACKUPS.length}` : "—", tone: !BACKUPS.length ? "idle" : bkOk === BACKUPS.length ? "ok" : "warn", go:"compute" },
@@ -477,7 +484,7 @@ function viewLage() {
   const kpis = [
     { l:"Erreichbarkeit", v: pct(hosts.length - still, hosts.length),
       s: hosts.length ? `${still} von ${hosts.length} ohne Antwort` : "kein überwachtes System",
-      t: !hosts.length ? "idle" : still ? "warn" : "ok", go:"compute" },
+      t: !hosts.length ? "idle" : still ? "warn" : "ok", go:"sites" },
     { l:"Offene Störungen", v:critCount() + warnCount(), s:`${critCount()} kritisch · ${warnCount()} Warnung`,
       t: critCount() ? "crit" : warnCount() ? "warn" : "ok", go:"lage" },
     { l:"VPN-Tunnel", v: state.tunnels.length ? `${tunOk}/${state.tunnels.length}` : "—",
@@ -686,33 +693,6 @@ function viewSites() {
   }).join("")}`;
 }
 
-/* ============================================================
-   Ansicht: Compute
-   ============================================================ */
-function pveCard(h) {
-  return `<div class="card" data-action="inspect" data-kind="host" data-id="${h.id}">
-    <div class="card-head">
-      <span style="padding-top:4px">${dot(h.status)}</span>
-      <div><div class="card-title mono">${esc(h.name)}</div><div class="card-meta">${esc(h.role)}</div></div>
-      <div class="spacer"></div>
-      <div class="right">
-        <div class="card-meta">${esc(h.cluster || (h.quorum == null ? "—" : "standalone"))}</div>
-        <div class="card-meta">${h.version ? "v" + esc(h.version) : "—"}</div></div>
-    </div>
-    ${hasMetrics(h) ? `<div class="col" style="gap:7px">
-      ${meter("CPU", h.cpu)}${meter("RAM", h.ram)}${meter("Speicher", h.disk)}
-    </div>` : `<div class="row" style="gap:8px;font-size:12px;color:var(--faint)">
-      ${dot("idle")}<span>${h.collectorError ? esc(h.collectorError) : "Kennzahlen erst mit hinterlegtem API-Token"} — Verwaltung → ${esc(h.name)}</span></div>`}
-    <div class="stat-row">
-      ${stat("VMs", nz(h.vms))}${stat("LXC", nz(h.lxc))}
-      ${stat("Antwort", nz(h.ms, " ms"))}
-      ${stat("Laufzeit", nz(h.uptime))}
-      <div class="spacer"></div>${histCell(h, { value: false })}
-    </div>
-    ${h.note ? `<div class="row" style="gap:7px;font-size:12px;color:var(--${h.status})">${dot(h.status)}<span>${esc(h.note)}</span></div>` : ""}
-  </div>`;
-}
-
 const hasMetrics = h => h.cpu != null || h.ram != null || h.disk != null;
 const stat = (k, v) => `<div class="stat"><span class="stat-k">${esc(k)}</span><span class="stat-v">${esc(String(v))}</span></div>`;
 
@@ -725,24 +705,187 @@ function simpleRows(hosts, cols) {
   </tr>`).join("");
 }
 
-function viewCompute() {
+/* ============================================================
+   Ansicht: Virtualisierung
+
+   Zwei Fragen, in dieser Reihenfolge: Wie geht es den Wirten — und was
+   läuft darauf? Der erste Teil ist eine Kachel je Knoten mit Zustand,
+   Softwarestand und ausstehenden Paketen; der zweite eine Tabelle über
+   alle Gäste aller Knoten, weil man einen Gast selten auf dem Knoten
+   sucht, auf dem man ihn vermutet.
+   ============================================================ */
+function viewVirt() {
   if (!state.hosts.length) return onboarding();
   const hs = visibleHosts();
   const pve = hs.filter(h => h.type === "pve");
-  const store = hs.filter(h => ["truenas", "pbs"].includes(h.type));
   const cont = hs.filter(h => h.type === "portainer");
-  /* Die auffälligen Container aller Portainer-Instanzen in einer Liste:
-     „3 auffällig" in einer Zelle sagt nicht, welcher — und genau danach
-     wird gefragt. */
   const contProbleme = cont.flatMap(h => (h.probleme || []).map(p => ({ ...p, host: h.name })));
+
   const vms = sumKnown(pve, "vms"), lxc = sumKnown(pve, "lxc");
+  const laufend = sumKnown(pve, "running"), gestoppt = sumKnown(pve, "stopped");
+  const offen = sumKnown(pve, "updates");
+
   return `
   <div class="panel">
-    <div class="panel-head"><h3>Proxmox VE</h3>
-      <span class="hint">${pve.length} Knoten · ${nz(vms)} VMs · ${nz(lxc)} Container</span></div>
-    <div class="panel-body"><div class="grid g3">${pve.length ? pve.map(pveCard).join("") : '<div class="empty">Kein Proxmox-VE-Knoten in dieser Auswahl.</div>'}</div></div>
+    <div class="panel-head"><h3>Proxmox-Knoten</h3>
+      <span class="hint">${pve.length} Knoten · ${nz(vms)} VMs · ${nz(lxc)} Container</span>
+      <div class="spacer"></div>
+      ${offen ? `<span class="chip chip--info">${offen} Paketaktualisierung(en) offen</span>` : ""}</div>
+    <div class="panel-body"><div class="grid g2">${pve.length
+      ? pve.map(knotenKarte).join("")
+      : '<div class="empty">Kein Proxmox-VE-Knoten in dieser Auswahl.</div>'}</div></div>
+    ${pve.some(h => h.updatesNote) ? `<div class="panel-note">${esc(pve.find(h => h.updatesNote).updatesNote)}.
+      Der Paketstand hängt an <span class="mono">Sys.Audit</span> auf dem Knoten — ohne dieses Recht bleibt die Zahl leer,
+      statt eine Null zu behaupten.</div>` : ""}
   </div>
 
+  ${gaestePanel(pve, laufend, gestoppt)}
+
+  <div class="panel">
+    <div class="panel-head"><h3>Container-Plattformen</h3><span class="hint">Portainer</span>
+      ${contProbleme.length ? `<div class="spacer"></div><span class="chip chip--warn">${contProbleme.length} auffällige Container</span>` : ""}</div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Standort</th><th>Umgebungen</th><th>Stacks</th><th>Container</th><th>Auffällig</th><th>Antwortzeit</th></tr></thead><tbody>
+      ${cont.length ? portainerRows(cont)
+        : '<tr><td colspan="8"><div class="empty">Kein Portainer in dieser Auswahl.</div></td></tr>'}
+      </tbody></table>
+    </div>
+    ${contProbleme.length ? `<div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th>Container</th><th>Umgebung</th><th>Zustand</th><th>Befund</th></tr></thead><tbody>
+      ${contProbleme.map(p => `<tr data-sev="warn">
+        <td class="mono">${esc(p.name)}</td>
+        <td class="faint">${esc(p.umgebung)}</td>
+        <td class="mono faint">${esc(p.status || p.zustand)}</td>
+        <td>${esc(p.grund)}</td></tr>`).join("")}
+      </tbody></table></div>` : ""}
+    ${cont.some(h => h.containers == null && h.endpoints == null) ? `<div class="panel-note">Stacks, Container und
+      ungesunde Dienste liest der Leitstand über die Portainer-API — dafür fehlt hier noch ein API-Token
+      (<b>Verwaltung → System bearbeiten</b>).</div>` : ""}
+    ${cont.some(h => h.containerNote) ? `<div class="panel-note">${esc(cont.find(h => h.containerNote).containerNote)}.</div>` : ""}
+  </div>`;
+}
+
+/* Ein Knoten ausführlich: Zustand, worauf er läuft, was ansteht.
+
+   Ausstehende Pakete stehen als Hinweis da und drehen die Ampel nicht —
+   ein Knoten mit vierzig offenen Paketen ist nicht gestört, er ist alt.
+   Wer davon geweckt werden will, hat den Unterschied zwischen einer
+   Wartungsliste und einem Alarm aufgegeben. */
+function knotenKarte(h) {
+  const s = h.schwellen || {};
+  return `<div class="card" data-action="inspect" data-kind="host" data-id="${esc(h.id)}">
+    <div class="card-head">
+      <span style="padding-top:4px">${dot(h.status)}</span>
+      <div>
+        <div class="card-title mono">${esc(h.name)}</div>
+        <div class="card-meta">${esc(h.cluster ? `Cluster ${h.cluster}` : h.quorum == null ? h.role : "standalone")}${
+          h.quorum === false ? ' · <span style="color:var(--crit)">kein Quorum</span>' : ""}</div>
+      </div>
+      <div class="spacer"></div>
+      <div class="right">
+        <div class="card-meta">${h.nodeStatus ? esc(h.nodeStatus) : "—"}</div>
+        <div class="card-meta mono">${h.version ? "PVE " + esc(h.version) : "—"}</div>
+      </div>
+    </div>
+
+    ${hasMetrics(h) ? `<div class="col" style="gap:7px">
+      ${meter("CPU", h.cpu, { warn: 80, crit: 95 })}
+      ${meter("RAM", h.ram, { warn: s.ram_warn, crit: s.ram_crit })}
+      ${meter("Speicher (Wurzel)", h.disk, { warn: s.disk_warn, crit: s.disk_crit })}
+    </div>` : `<div class="row" style="gap:8px;font-size:12px;color:var(--faint)">
+      ${dot("idle")}<span>${h.collectorError ? esc(h.collectorError) : "Kennzahlen erst mit hinterlegtem API-Token"} — Verwaltung → ${esc(h.name)}</span></div>`}
+
+    <div class="stat-row">
+      ${stat("Gäste", h.running == null ? "—" : `${h.running} von ${(h.running || 0) + (h.stopped || 0)} laufen`)}
+      ${stat("VMs / LXC", `${nz(h.vms)} / ${nz(h.lxc)}`)}
+      ${stat("Kerne", nz(h.cores))}
+      ${stat("Laufzeit", nz(h.uptime))}
+      <div class="spacer"></div>${histCell(h, { value: false })}
+    </div>
+
+    <div class="row row-wrap" style="gap:6px">
+      ${h.kernel ? `<span class="chip chip--plain mono" title="Kernel">${esc(h.kernel)}</span>` : ""}
+      ${h.updates == null ? `<span class="chip chip--plain">Paketstand unbekannt</span>`
+        : h.updates ? `<span class="chip chip--info">${h.updates} Update(s) offen</span>`
+        : `<span class="chip chip--ok">Pakete aktuell</span>`}
+      ${h.load1 != null ? `<span class="chip chip--plain mono" title="Last (1 min)">Last ${esc(String(h.load1))}</span>` : ""}
+      ${h.templates ? `<span class="chip chip--plain">${h.templates} Vorlage(n)</span>` : ""}
+      ${h.schwellenEigen ? `<span class="chip chip--plain" title="Für dieses System eigene Schwellwerte">eigene Schwellen</span>` : ""}
+    </div>
+    ${h.note ? `<div class="row" style="gap:7px;font-size:12px;color:var(--${h.status})">${dot(h.status)}<span>${esc(h.note)}</span></div>` : ""}
+  </div>`;
+}
+
+/* Alle Gäste aller Knoten in einer Tabelle. Laufendes zuerst, darin das
+   Belastete oben — die Reihenfolge kommt schon aus dem Sammler.
+
+   Ein gestoppter Gast hat keine Auslastung, sondern einen Strich: die
+   Null, die Proxmox dort meldet, ist keine Messung. */
+function gaestePanel(pve, laufend, gestoppt) {
+  const q = state.q.toLowerCase().trim();
+  const alle = pve.flatMap(h => (h.guests || []).map(g => ({ ...g, wirt: h.name, wirtId: h.id })));
+  const gaeste = q
+    ? alle.filter(g => `${g.name} ${g.vmid} ${g.wirt} ${g.tags || ""}`.toLowerCase().includes(q))
+    : alle;
+  const ohneListe = pve.filter(h => h.guests == null);
+
+  return `<div class="panel">
+    <div class="panel-head"><h3>Gäste</h3>
+      <span class="hint">${gaeste.length} angezeigt${laufend != null ? ` · ${laufend} laufen, ${nz(gestoppt)} gestoppt` : ""}</span>
+      <div class="spacer"></div><span class="hint">Auslastung aus der Bestandsliste des Clusters</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th><th>Gast</th><th>Art</th><th>Knoten</th>
+        <th>CPU</th><th>RAM</th><th>Platte</th><th>Kerne</th><th class="right">Laufzeit</th>
+      </tr></thead><tbody>
+      ${gaeste.length ? gaeste.map(gastZeile).join("")
+        : `<tr><td colspan="9"><div class="empty">${ohneListe.length
+            ? "Kein Knoten meldet Gäste — fehlt das API-Token oder die Leseberechtigung?"
+            : "Kein Gast in dieser Auswahl."}</div></td></tr>`}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Bei virtuellen Maschinen kennt der Wirt die Belegung <em>im</em> Gast nicht — die Spalte
+      Platte bleibt dort leer, solange kein Gastagent Auskunft gibt. Bei Containern ist die Zahl echt. Was gestoppt ist,
+      hat keine Auslastung: dort steht ein Strich und keine Null.</div>
+  </div>`;
+}
+
+function gastZeile(g) {
+  const laeuft = g.status === "running";
+  const ampel = laeuft ? "ok" : g.status === "paused" ? "warn" : "idle";
+  return `<tr data-sev="${ampel}" data-action="inspect" data-kind="host" data-id="${esc(g.wirtId)}">
+    <td class="sev">${dot(ampel)}</td>
+    <td>
+      <div class="mono">${esc(g.name)}</div>
+      <div class="t-sub">${esc(String(g.vmid ?? "—"))}${g.tags ? " · " + esc(String(g.tags)) : ""}${
+        g.lock ? ` · <span style="color:var(--warn)">gesperrt: ${esc(String(g.lock))}</span>` : ""}</div>
+    </td>
+    <td>${chip("plain", g.typ === "lxc" ? "LXC" : "VM")}</td>
+    <td class="mono faint">${esc(g.wirt)}</td>
+    <td style="min-width:110px">${g.cpu != null ? meter("", g.cpu, { text: g.cpu + " %", warn: 80, crit: 95 }) : `<span class="faint">${esc(g.status || "—")}</span>`}</td>
+    <td style="min-width:110px">${g.ram != null ? meter("", g.ram, { text: g.ram + " %" }) : '<span class="faint">—</span>'}</td>
+    <td style="min-width:110px">${g.disk != null ? meter("", g.disk, { text: g.disk + " %" }) : '<span class="faint">—</span>'}</td>
+    <td class="mono faint">${nz(g.cores)}</td>
+    <td class="right mono faint">${g.uptime != null ? esc(kurzLaufzeit(g.uptime)) : "—"}</td>
+  </tr>`;
+}
+
+/* „3 T", „5 h", „12 min" — in einer Tabellenzeile ist mehr nur Lärm. */
+function kurzLaufzeit(sek) {
+  if (!Number.isFinite(sek)) return "—";
+  if (sek >= 86400) return `${Math.floor(sek / 86400)} T`;
+  if (sek >= 3600) return `${Math.floor(sek / 3600)} h`;
+  return `${Math.floor(sek / 60)} min`;
+}
+
+/* ============================================================
+   Ansicht: Speicher & Sicherung
+   ============================================================ */
+function viewCompute() {
+  if (!state.hosts.length) return onboarding();
+  const hs = visibleHosts();
+  const store = hs.filter(h => ["truenas", "pbs"].includes(h.type));
+  return `
   <div class="grid g2">
     <div class="panel">
       <div class="panel-head"><h3>Speicher &amp; Sicherung</h3><span class="hint">TrueNAS · Proxmox Backup Server</span></div>
@@ -760,26 +903,25 @@ function viewCompute() {
     </div>
 
     <div class="panel">
-      <div class="panel-head"><h3>Container-Plattformen</h3><span class="hint">Portainer</span>
-        ${contProbleme.length ? `<div class="spacer"></div><span class="chip chip--warn">${contProbleme.length} auffällige Container</span>` : ""}</div>
-      <div class="panel-body panel-body--flush tablewrap">
-        <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Standort</th><th>Umgebungen</th><th>Stacks</th><th>Container</th><th>Auffällig</th><th>Antwortzeit</th></tr></thead><tbody>
-        ${cont.length ? portainerRows(cont)
-          : '<tr><td colspan="8"><div class="empty">Kein Portainer in dieser Auswahl.</div></td></tr>'}
-        </tbody></table>
+      <div class="panel-head"><h3>Belegung im Einzelnen</h3><span class="hint">Datastores und Speicher</span>
+        <div class="spacer"></div><span class="hint">Schwellwerte je System, siehe Verwaltung</span></div>
+      <div class="panel-body col" style="gap:14px">
+        ${store.length ? store.map(h => {
+          const liste = h.stores || h.storages || [];
+          const s = h.schwellen || {};
+          return `<div>
+            <div class="row" style="gap:8px;margin-bottom:4px">
+              ${dot(h.status)}<span class="sec-title" style="margin:0">${esc(h.name)}</span>
+              <div class="spacer"></div>
+              <span class="faint" style="font-size:11.5px">gelb ab ${nz(s.disk_warn, " %")} · rot ab ${nz(s.disk_crit, " %")}${
+                h.schwellenEigen ? " (eigene Werte)" : ""}</span>
+            </div>
+            ${liste.length ? liste.map(x => meter(x.name, x.used, {
+              text: x.used != null ? x.used + " %" : "—", warn: s.disk_warn, crit: s.disk_crit
+            })).join("") : '<div class="faint" style="font-size:12.5px">Noch keine Belegung gelesen.</div>'}
+          </div>`;
+        }).join("") : '<div class="empty">Kein Speichersystem in dieser Auswahl.</div>'}
       </div>
-      ${contProbleme.length ? `<div class="panel-body panel-body--flush tablewrap">
-        <table class="t"><thead><tr><th>Container</th><th>Umgebung</th><th>Zustand</th><th>Befund</th></tr></thead><tbody>
-        ${contProbleme.map(p => `<tr data-sev="warn">
-          <td class="mono">${esc(p.name)}</td>
-          <td class="faint">${esc(p.umgebung)}</td>
-          <td class="mono faint">${esc(p.status || p.zustand)}</td>
-          <td>${esc(p.grund)}</td></tr>`).join("")}
-        </tbody></table></div>` : ""}
-      ${cont.some(h => h.containers == null && h.endpoints == null) ? `<div class="panel-note">Stacks, Container und
-        ungesunde Dienste liest der Leitstand über die Portainer-API — dafür fehlt hier noch ein API-Token
-        (<b>Verwaltung → System bearbeiten</b>).</div>` : ""}
-      ${cont.some(h => h.containerNote) ? `<div class="panel-note">${esc(cont.find(h => h.containerNote).containerNote)}.</div>` : ""}
     </div>
   </div>
 
@@ -850,7 +992,96 @@ function viewNetz() {
          Ohne ihn bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat.`}</div>
   </div>`;
 
-  return firewalls + haproxyPanel();
+  return firewalls + schnittstellenPanel(fws) + haproxyPanel();
+}
+
+/* Alle Schnittstellen aller Firewalls in einer Tabelle.
+
+   Die Zahl in der Firewall-Zeile darüber ist die WAN-Seite (oder die
+   Summe) — die beantwortet „wie viel geht gerade durch das Haus?". Diese
+   Tabelle beantwortet die nächste Frage: durch welche Leitung. Ohne sie
+   sieht man an einer vollen Uplink-Anzeige nicht, ob der Verkehr aus dem
+   LAN, aus dem Gastnetz oder aus dem Tunnel kommt.
+
+   Vor dem zweiten Durchlauf steht hier ein Strich: Durchsatz ist eine
+   Differenz zweier Zählerstände, und einen ersten gibt es noch nicht. */
+function schnittstellenPanel(fws) {
+  const mit = fws.filter(f => (f.interfaces || []).length);
+  if (!mit.length) {
+    const ohne = fws.some(f => f.version);       /* API antwortet, Zähler fehlen trotzdem */
+    return `<div class="panel">
+      <div class="panel-head"><h3>Schnittstellen</h3><span class="hint">Durchsatz je Leitung</span></div>
+      <div class="panel-body"><div class="empty">${ohne
+        ? "Noch keine Zählerstände gelesen — Durchsatz entsteht erst aus der Differenz zweier Durchläufe."
+        : "Ohne API-Schlüssel liest der Leitstand keine Schnittstellenzähler."}</div></div>
+    </div>`;
+  }
+
+  const zeilen = mit.flatMap(f => f.interfaces.map(i => ({ ...i, fw: f.name, fwId: f.id, site: f.site })));
+  const auffaellig = zeilen.filter(i => (i.fehlerNeu || 0) + (i.verworfenNeu || 0) > 0).length;
+
+  return `<div class="panel">
+    <div class="panel-head"><h3>Schnittstellen</h3>
+      <span class="hint">${zeilen.length} Leitungen auf ${mit.length} Gerät(en)</span>
+      <div class="spacer"></div>
+      ${auffaellig ? `<span class="chip chip--warn">${auffaellig} mit neuen Fehlern</span>` : ""}
+      <span class="hint">Durchsatz aus der Differenz zweier Durchläufe</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th><th>Leitung</th><th>Gerät</th><th>Verbindung</th>
+        <th class="right">↓ herein</th><th class="right">↑ hinaus</th>
+        <th class="right">Pakete/s</th><th class="right">Übertragen</th><th>Fehler · verworfen</th>
+      </tr></thead><tbody>
+      ${zeilen.map(ifZeile).join("")}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Fehler und Verwürfe sind Zählerstände seit dem letzten Neustart des Geräts; in Klammern
+      steht, was seit dem letzten Durchlauf dazugekommen ist — nur das ist eine Nachricht. Eine Ampel machen sie nicht:
+      ein einzelnes verworfenes Paket auf einer ausgelasteten Leitung ist normal, und eine Schwelle dafür wäre geraten.
+      Der Verlauf je Leitung steht auf der Seite des Geräts.</div>
+  </div>`;
+}
+
+function ifZeile(i) {
+  const neu = (i.fehlerNeu || 0) + (i.verworfenNeu || 0);
+  /* Der Verbindungszustand kommt aus der Schnittstellenübersicht. Kennt
+     die Fassung den Endpunkt nicht, ist er unbekannt — und unbekannt wird
+     als Strich gezeigt, nicht als „up". */
+  const link = i.link == null ? '<span class="faint">—</span>'
+    : i.link === "up" ? chip("ok", "up")
+    : chip("warn", String(i.link));
+  return `<tr data-sev="${neu ? "warn" : "ok"}" data-action="inspect" data-kind="host" data-id="${esc(i.fwId)}">
+    <td class="sev">${dot(i.link === "down" ? "warn" : "ok")}</td>
+    <td>
+      <div class="mono">${esc(i.label)}</div>
+      <div class="t-sub mono">${esc(i.name)}${i.beschreibung && i.beschreibung !== i.label ? " · " + esc(i.beschreibung) : ""}${
+        i.mtu ? ` · MTU ${esc(String(i.mtu))}` : ""}</div>
+    </td>
+    <td class="mono faint">${esc(i.fw)}</td>
+    <td>${link}</td>
+    <td class="right mono">${mbit(i.in)}</td>
+    <td class="right mono">${mbit(i.out)}</td>
+    <td class="right mono faint">${i.inPps == null && i.outPps == null ? "—" : `${nz(i.inPps)} / ${nz(i.outPps)}`}</td>
+    <td class="right mono faint">${menge(i.rxBytes)} / ${menge(i.txBytes)}</td>
+    <td class="mono ${neu ? "" : "faint"}" style="${neu ? "color:var(--warn)" : ""}">
+      ${nz(i.fehler)} · ${nz(i.verworfen)}${neu ? ` <b>(+${neu})</b>` : ""}</td>
+  </tr>`;
+}
+
+/* Mbit/s lesbar: unter 1 mit zwei Nachkommastellen, darüber mit einer.
+   Null ist hier ein Messwert („gerade nichts los") und wird als 0 gezeigt;
+   unbekannt bleibt ein Strich. */
+function mbit(v) {
+  if (v == null || !Number.isFinite(v)) return '<span class="faint">—</span>';
+  return v < 1 ? v.toFixed(2) : v.toFixed(1);
+}
+
+function menge(n) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const e = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < e.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${e[i]}`;
 }
 
 /* Kurzfassung der tatsächlich gelaufenen Prüfungen — was übersprungen
@@ -859,7 +1090,7 @@ function checkList(h) {
   const cs = h.checks || [];
   if (!cs.length) return "—";
   return cs.map(c => {
-    const name = esc(c.kind + (c.port ? "/" + c.port : ""));
+    const name = esc(c.kind + (c.port ? "/" + c.port : "")) + (c.wesentlich ? "*" : "");
     if (c.skipped) return `<span class="faint" style="text-decoration:line-through" title="${esc(c.detail || "übersprungen")}">${name}</span>`;
     return `<span style="color:var(--${c.ok ? "ok" : "crit"})" title="${esc(c.detail || "")}">${name}</span>`;
   }).join(" · ");
@@ -1104,15 +1335,43 @@ function serviceCard(h, body) {
 /* Eine AdGuard-Kachel sagt zuerst, ob überhaupt gefiltert wird — ein
    abgeschalteter Schutz ist die Angabe, die ein offener Port nicht kennt.
    Ohne hinterlegten Zugang bleibt es bei dem, was gemessen wurde. */
+/* Die DNS-Prüfung dieses Systems — die einzige, die den Dienst selbst
+   misst und nicht seine Oberfläche. */
+function dnsPruefung(h) {
+  return (h.checks || []).find(c => c.kind === "dns") || null;
+}
+
+/* Antwortet er, und wie schnell? Ein offener Port sagt das nicht: gefragt
+   wird über UDP/53 mit einer echten Auflösung. Bleibt die Antwort aus,
+   steht hier der Befund im Klartext — er ist die wichtigste Zeile auf
+   dieser Kachel. */
+function dnsZelle(h) {
+  const c = dnsPruefung(h);
+  if (!c) return stat("DNS UDP/53", "—");
+  if (c.skipped) return stat("DNS UDP/53", "übersprungen");
+  return `<div class="stat"><span class="stat-k">DNS UDP/53</span>
+    <span class="stat-v" style="color:var(--${c.ok ? "ok" : "crit"})" title="${esc(c.detail || "")}">
+      ${c.ok ? esc(nz(c.ms, " ms")) : "keine Antwort"}</span></div>`;
+}
+
 function adguardCard(h) {
   const kennzahlen = h.dnsQueries != null || h.protection != null;
+  const c = dnsPruefung(h);
+  /* Auch ohne Zugangsdaten ist diese Zeile die Aussage der Kachel: der
+     Rest hängt an einem Passwort, die Auflösung nicht. */
+  const dnsZeile = c && !c.ok && !c.skipped
+    ? `<div class="row" style="gap:7px;font-size:12px;color:var(--crit)">${dot("crit")}
+        <span>Löst nicht auf: ${esc(c.detail || "keine Antwort über UDP/53")}</span></div>`
+    : "";
+
   if (!kennzahlen) return serviceCard(h, `
     <div class="stat-row">
+      ${dnsZelle(h)}
       ${stat("Antwort", nz(h.ms, " ms"))}
       ${stat("Zuletzt erreicht", fmtWhen(h.lastSeen) || "—")}
-      ${stat("Zertifikat", h.tls?.days != null ? h.tls.days + " T" : "—")}
       <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
     </div>
+    ${dnsZeile}
     <div class="row" style="gap:8px;font-size:12px;color:var(--faint)">
       ${dot("idle")}<span>${h.collectorError ? esc(h.collectorError) : "Kennzahlen erst mit hinterlegtem Zugang"} — Verwaltung → ${esc(h.name)}</span></div>`);
 
@@ -1125,7 +1384,7 @@ function adguardCard(h) {
       ${stat(`Anfragen${h.statsFenster ? " / " + h.statsFenster : ""}`, nz(h.dnsQueries))}
       ${stat("Geblockt", h.blockRate != null ? h.blockRate + " %" : "—")}
       ${stat("Ø Bearbeitung", nz(h.avgMs, " ms"))}
-      ${stat("Antwort", nz(h.ms, " ms"))}
+      ${dnsZelle(h)}
       <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
     </div>
     <div class="row row-wrap" style="gap:6px">
@@ -1133,7 +1392,12 @@ function adguardCard(h) {
       ${h.filterRules ? `<span class="chip chip--plain">${esc(h.filtersAktiv ?? "?")} Listen · ${esc(String(h.filterRules))} Regeln</span>` : ""}
       ${h.upstreams ? `<span class="chip chip--plain">${esc(String(h.upstreams))} Upstream(s)</span>` : ""}
       ${h.version ? `<span class="chip chip--plain mono">${esc(h.version)}</span>` : ""}
-    </div>`);
+    </div>
+    ${dnsZeile}
+    ${h.protection === false ? `<div class="row" style="gap:7px;font-size:12px;color:var(--warn)">${dot("warn")}
+      <span>Schutz ist abgeschaltet — es wird gerade nichts gefiltert.</span></div>` : ""}
+    ${h.filtering === false ? `<div class="row" style="gap:7px;font-size:12px;color:var(--warn)">${dot("warn")}
+      <span>Filterung ist abgeschaltet — die Listen sind geladen, greifen aber nicht.</span></div>` : ""}`);
 }
 
 /* Eine Zeile je Portainer, und die zählt, was zählt: wie viele Umgebungen
@@ -1644,7 +1908,7 @@ function viewSystem() {
     <div class="sec-title">Nicht im Bestand</div>
     <p class="muted" style="margin:0 0 12px;font-size:13.5px">„<span class="mono">${esc(d.id)}</span>" steht nicht (mehr) im Bestand.
       Aufgezeichnete Messwerte bleiben auf der Platte, angezeigt werden sie hier aber nur zu einem angelegten Gegenstand.</p>
-    <button class="btn btn--primary" data-action="view" data-view="compute">Zu den Systemen</button></div></div>`;
+    <button class="btn btn--primary" data-action="view" data-view="sites">Zu den Systemen</button></div></div>`;
 
   const titel = h ? h.name : `${siteName(t.a)} ↔ ${siteName(t.b)}`;
   const kicker = h ? (TYPE_LABEL[h.type] || h.type) : "Tunnel";
@@ -1669,6 +1933,8 @@ function viewSystem() {
   </div>
 
   ${verlaufPanel(d, g)}
+
+  ${h ? ifVerlaufPanel(d, h) : ""}
 
   <div class="grid g2">
     <div class="panel">
@@ -1764,6 +2030,74 @@ function verlaufPanel(d, g) {
   </div>`;
 }
 
+/* Der Verlauf einer einzelnen Schnittstelle.
+
+   Am System steht nur der Durchsatz der WAN-Seite; hier lässt sich jede
+   Leitung einzeln über die Zeit ansehen. Geholt wird sie erst auf Klick —
+   je Schnittstelle eine eigene Reihe zu laden, nur weil die Seite offen
+   ist, wäre Verkehr für nichts.
+
+   Die Reihe liegt unter derselben Kennung, unter der sie geschrieben
+   wurde: `system|schnittstelle`. */
+function ifVerlaufPanel(d, h) {
+  const ifs = h.interfaces || [];
+  if (!ifs.length) return "";
+
+  const knoepfe = ifs.map(i => `<button class="btn btn--sm" data-action="if-verlauf" data-if="${esc(i.name)}"
+    aria-current="${d.iface === i.name}" title="${esc(i.name)}">${esc(i.label)}</button>`).join("");
+
+  const kopf = `<div class="panel-head">
+    <h3>Durchsatz je Schnittstelle</h3>
+    <span class="hint">${d.iface ? esc(d.iface) : "eine Leitung wählen"}</span>
+    <div class="spacer"></div>${knoepfe}</div>`;
+
+  if (!d.iface) return `<div class="panel">${kopf}
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th>Leitung</th><th>Verbindung</th><th class="right">↓ herein</th><th class="right">↑ hinaus</th>
+        <th class="right">Pakete/s</th><th class="right">Übertragen</th><th>Fehler · verworfen</th></tr></thead><tbody>
+      ${ifs.map(i => `<tr data-sev="ok">
+        <td><div class="mono">${esc(i.label)}</div><div class="t-sub mono">${esc(i.name)}${
+          i.beschreibung && i.beschreibung !== i.label ? " · " + esc(i.beschreibung) : ""}</div></td>
+        <td>${i.link == null ? '<span class="faint">—</span>' : i.link === "up" ? chip("ok", "up") : chip("warn", String(i.link))}</td>
+        <td class="right mono">${mbit(i.in)}</td>
+        <td class="right mono">${mbit(i.out)}</td>
+        <td class="right mono faint">${i.inPps == null && i.outPps == null ? "—" : `${nz(i.inPps)} / ${nz(i.outPps)}`}</td>
+        <td class="right mono faint">${menge(i.rxBytes)} / ${menge(i.txBytes)}</td>
+        <td class="mono faint">${nz(i.fehler)} · ${nz(i.verworfen)}</td>
+      </tr>`).join("")}
+      </tbody></table></div>
+    <div class="panel-note">Die Momentaufnahme steht in der Tabelle, der Verlauf über Tage hinter den Schaltflächen
+      oben rechts. Aufgezeichnet wird je Leitung eine eigene Reihe, im selben Takt wie alles andere.</div>
+  </div>`;
+
+  if (d.ifBusy && !d.ifDaten) return `<div class="panel">${kopf}<div class="panel-body"><div class="empty">Verlauf wird geholt …</div></div></div>`;
+  if (d.ifError) return `<div class="panel">${kopf}<div class="panel-body">
+    <div class="row" style="gap:8px;align-items:flex-start">${dot("crit")}
+      <span style="font-size:13px">Verlauf nicht abrufbar: <span class="mono">${esc(d.ifError)}</span></span></div></div></div>`;
+
+  const punkte = d.ifDaten?.punkte || [];
+  if (!punkte.length) return `<div class="panel">${kopf}<div class="panel-body">
+    <div class="empty">Für diese Leitung liegt in diesem Zeitraum noch nichts auf der Platte.</div>
+    <p class="muted" style="margin:10px 0 0;font-size:12.5px;max-width:70ch">Aufgezeichnet wird ab dem zweiten
+      Durchlauf — vorher gibt es keinen Durchsatz, weil er die Differenz zweier Zählerstände ist.</p></div></div>`;
+
+  const reihen = (d.ifDaten.reihen || []).filter(r => punkte.some(p => Number.isFinite(p[r.key])));
+  return `<div class="panel">${kopf}
+    <div class="panel-body col" style="gap:18px">
+      ${reihen.map(r => `<div>
+        <div class="row" style="gap:8px;margin-bottom:2px">
+          <span class="sec-title" style="margin:0">${esc(r.label)}</span>
+          <span class="faint" style="font-size:11.5px">${esc(r.einheit)}</span>
+          <div class="spacer"></div>${reiheKennzahlen(punkte, r)}
+        </div>
+        ${zeitDiagramm(punkte, r)}
+      </div>`).join("")}
+    </div>
+    <div class="panel-note">Von ${esc(fmtWhen(d.ifDaten.von) || "—")} bis ${esc(fmtWhen(d.ifDaten.bis) || "—")},
+      derselbe Zeitraum wie oben. Wo nichts gemessen wurde, ist die Linie unterbrochen.</div>
+  </div>`;
+}
+
 /* ---- Bausteine, die Detailseite und Inspector gemeinsam nutzen ---- */
 function hostStammdaten(h) {
   const rows = [
@@ -1799,6 +2133,7 @@ function pruefungenBlock(g) {
     ${checks.length ? checks.map(c => `<div class="row" style="gap:8px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
       ${dot(c.skipped ? "idle" : c.ok ? "ok" : "crit")}
       <span class="mono">${esc(c.kind)}${c.port ? "/" + c.port : ""}</span>
+      ${c.wesentlich ? `<span class="chip chip--plain" title="Diese Prüfung ist der Dienst selbst — ihr Ausfall gilt als Störung, nicht als Teilausfall">wesentlich</span>` : ""}
       <span class="faint" style="min-width:0">${esc(c.detail || "")}</span>
       <span class="spacer"></span><span class="mono faint">${c.ms != null ? c.ms + " ms" : ""}</span>
     </div>`).join("") : '<div class="empty">Noch kein Durchlauf.</div>'}</div>`;
@@ -1812,9 +2147,30 @@ function zertifikatBlock(h) {
   </dl></div>`;
 }
 
+/* Die Balken der Auslastung folgen den Schwellwerten, die für dieses
+   System gelten — sonst zeigte ein Balken Rot, während die Ampel Grün
+   ist, weil am System eine andere Grenze hinterlegt wurde. */
 function auslastungBlock(h) {
   if (!hasMetrics(h)) return "";
-  return `${h.cpu != null ? meter("CPU", h.cpu) : ""}${h.ram != null ? meter("RAM", h.ram) : ""}${h.disk != null ? meter("Speicher", h.disk) : ""}`;
+  const s = h.schwellen || {};
+  return `${h.cpu != null ? meter("CPU", h.cpu, { warn: 80, crit: 95 }) : ""}`
+    + `${h.ram != null ? meter("RAM", h.ram, { warn: s.ram_warn, crit: s.ram_crit }) : ""}`
+    + `${h.disk != null ? meter("Speicher", h.disk, { warn: s.disk_warn, crit: s.disk_crit }) : ""}`;
+}
+
+/* Welche Grenzen für dieses System gelten — und ob sie eigene sind.
+
+   Diese Zeile steht bewusst neben den Kennzahlen und nicht nur in den
+   Einstellungen: wer eine gelbe Ampel sieht, will an derselben Stelle
+   ablesen können, ab wann sie gelb wird. */
+function schwellenZeile(h) {
+  const s = h.schwellen;
+  if (!s) return "—";
+  const eigen = h.schwellenEigen || {};
+  const teil = (k, label) => `${label} ${s[k]} %${eigen[k] != null ? ' <span class="chip chip--plain">eigen</span>' : ""}`;
+  return `Speicher: ${teil("disk_warn", "gelb ab")}, ${teil("disk_crit", "rot ab")}<br>`
+    + `RAM: ${teil("ram_warn", "gelb ab")}, ${teil("ram_crit", "rot ab")}`
+    + (h.schwellenEigen ? "" : `<br><span class="faint">aus den Einstellungen — je System änderbar unter Verwaltung</span>`);
 }
 
 /* Was ein Sammler über die reine Auslastung hinaus liefert. Steht hier
@@ -1824,10 +2180,82 @@ function kennzahlenPanel(h) {
   const kv = rows => `<dl class="kv">${rows.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const ja = (v, an, aus) => (v == null ? "—" : v ? an : `<span style="color:var(--warn)">${aus}</span>`);
 
+  if (h.type === "pve" && (h.guests || h.updates != null || h.kernel)) {
+    const g = h.guests || [];
+    const upd = h.updateListe || [];
+    return `<div class="panel">
+      <div class="panel-head"><h3>Knoten im Einzelnen</h3><span class="hint">aus /nodes/${esc(h.node || "…")}/status und /apt/update</span></div>
+      <div class="panel-body">${kv([
+        ["Knoten", h.node ? `<span class="mono">${esc(h.node)}</span>${h.nodeStatus ? ` · ${esc(h.nodeStatus)}` : ""}` : "—"],
+        ["Cluster", h.cluster ? `${esc(h.cluster)}${h.quorum === false ? ' · <span style="color:var(--crit)">kein Quorum</span>' : h.quorum ? " · Quorum steht" : ""}` : "standalone"],
+        ["Fassung", h.pveVersion ? `<span class="mono">${esc(h.pveVersion)}</span>` : (h.version ? `<span class="mono">${esc(h.version)}</span>` : "—")],
+        ["Kernel", h.kernel ? `<span class="mono">${esc(h.kernel)}</span>` : "—"],
+        ["Prozessor", h.cpuModel ? `${esc(h.cpuModel)}${h.cores ? ` · ${h.cores} Kerne${h.sockets ? ` auf ${h.sockets} Sockel` : ""}` : ""}` : nz(h.cores, " Kerne")],
+        ["Last (1 min)", nz(h.load1)],
+        ["Wurzeldateisystem", h.rootUsed != null ? `${h.rootUsed} %` : "—"],
+        ["Auslagerung", h.swap != null ? `${h.swap} %` : "— (keine eingerichtet)"],
+        ["Laufzeit", nz(h.uptime)],
+        ["Ausstehende Pakete", h.updates == null
+          ? `<span class="faint">${esc(h.updatesNote || "nicht gelesen")}</span>`
+          : h.updates ? `<span class="mono">${h.updates}</span>` : "keine bekannt"],
+        ["Gäste", h.running == null ? "—" : `${h.running} laufen, ${h.stopped} gestoppt${h.templates ? `, ${h.templates} Vorlagen` : ""}`],
+        ["Schwellwerte", schwellenZeile(h)]
+      ])}</div>
+
+      ${upd.length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th>Paket</th><th>installiert</th><th>verfügbar</th><th>Was es ist</th></tr></thead><tbody>
+        ${upd.map(p => `<tr data-sev="info">
+          <td class="mono">${esc(p.paket)}</td>
+          <td class="mono faint">${esc(nz(p.von))}</td>
+          <td class="mono">${esc(nz(p.auf))}</td>
+          <td class="faint">${esc(p.titel || "—")}</td></tr>`).join("")}
+        </tbody></table></div>
+        <div class="panel-note">Gezeigt werden die ersten ${upd.length} Einträge. Was hier steht, ist der Stand des
+          letzten Listenabgleichs <em>auf dem Knoten</em> — eine leere Liste heißt „nichts bekannt", nicht
+          „garantiert aktuell". Aktualisiert wird hier nichts: jeder Zugang ist ein Konto ohne Schreibrechte.</div>` : ""}
+
+      ${g.length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th style="width:34px"></th><th>Gast</th><th>Art</th><th>CPU</th><th>RAM</th><th>Platte</th><th class="right">Laufzeit</th></tr></thead><tbody>
+        ${g.map(x => `<tr data-sev="${x.status === "running" ? "ok" : "idle"}">
+          <td class="sev">${dot(x.status === "running" ? "ok" : "idle")}</td>
+          <td><div class="mono">${esc(x.name)}</div><div class="t-sub">${esc(String(x.vmid ?? "—"))}${x.tags ? " · " + esc(String(x.tags)) : ""}</div></td>
+          <td>${chip("plain", x.typ === "lxc" ? "LXC" : "VM")}</td>
+          <td style="min-width:100px">${x.cpu != null ? meter("", x.cpu, { text: x.cpu + " %", warn: 80, crit: 95 }) : `<span class="faint">${esc(x.status || "—")}</span>`}</td>
+          <td style="min-width:100px">${x.ram != null ? meter("", x.ram, { text: x.ram + " %" }) : '<span class="faint">—</span>'}</td>
+          <td style="min-width:100px">${x.disk != null ? meter("", x.disk, { text: x.disk + " %" }) : '<span class="faint">—</span>'}</td>
+          <td class="right mono faint">${x.uptime != null ? esc(kurzLaufzeit(x.uptime)) : "—"}</td>
+        </tr>`).join("")}
+        </tbody></table></div>` : ""}
+    </div>`;
+  }
+
+  if (h.type === "opnsense" && (h.interfaces || h.disk != null)) {
+    return `<div class="panel">
+      <div class="panel-head"><h3>Gerät im Einzelnen</h3><span class="hint">aus dem Diagnose-Zweig der OPNsense-API</span></div>
+      <div class="panel-body">${kv([
+        ["Fassung", h.version ? `<span class="mono">${esc(h.version)}</span>${h.abi ? ` · ABI ${esc(h.abi)}` : ""}` : "—"],
+        ["Betriebssystem", h.os ? `<span class="mono">${esc(h.os)}</span>` : "—"],
+        ["Laufzeit", nz(h.uptime)],
+        ["Last", h.load ? `<span class="mono">${esc(h.load)}</span>` : "—"],
+        ["Arbeitsspeicher", h.ram != null ? `${h.ram} %${h.ramTotalMb ? ` von ${h.ramTotalMb} MB` : ""}${h.ramArcMb ? ` · ${h.ramArcMb} MB ZFS-Cache` : ""}` : "—"],
+        ["Aktualisierungen", h.updates == null ? "—" : h.updates ? `${h.updates} offen${h.majorUpgrade ? ` · Fassung ${esc(h.majorUpgrade)} verfügbar` : ""}` : "keine offen"],
+        ["Neustart nötig", h.needsReboot == null ? "—" : ja(!h.needsReboot, "nein", "ja")],
+        ["WireGuard", h.wgPeers == null ? "—" : `${h.wgPeers} Peer(s) auf ${nz(h.wgIfaces)} Schnittstelle(n)${h.wgStill ? `, ${h.wgStill} still` : ""}`],
+        ["Schwellwerte", schwellenZeile(h)]
+      ])}</div>
+      <div class="panel-note">Durchsatz, Pakete und Fehler je Leitung stehen weiter oben unter
+        <b>Durchsatz je Schnittstelle</b> — samt Verlauf über Tage.</div>
+    </div>`;
+  }
+
   if (h.type === "adguard" && (h.dnsQueries != null || h.protection != null)) {
+    const c = dnsPruefung(h);
     return `<div class="panel">
       <div class="panel-head"><h3>DNS-Filter</h3><span class="hint">aus /control/status und /control/stats</span></div>
       <div class="panel-body">${kv([
+        ["Auflösung über UDP/53", !c ? "— keine DNS-Prüfung angelegt"
+          : c.skipped ? "übersprungen"
+          : `<span style="color:var(--${c.ok ? "ok" : "crit"})">${esc(c.detail || (c.ok ? "antwortet" : "keine Antwort"))}</span>${c.ms != null ? ` <span class="mono faint">${c.ms} ms</span>` : ""}`],
         ["Anfragen", h.dnsQueries != null ? `<span class="mono">${esc(String(h.dnsQueries))}</span>${h.statsFenster ? ` / ${esc(h.statsFenster)}` : ""}` : "—"],
         ["Geblockt", h.dnsBlocked != null ? `<span class="mono">${esc(String(h.dnsBlocked))}</span>${h.blockRate != null ? ` (${h.blockRate} %)` : ""}` : "—"],
         ["Ø Bearbeitung", h.avgMs != null ? `<span class="mono">${h.avgMs} ms</span>` : "—"],
@@ -1883,8 +2311,13 @@ function kennzahlenPanel(h) {
 function speicherBlock(h) {
   const liste = h.storages || h.stores || [];
   if (!liste.length) return "";
-  return `<div class="sec-title" style="margin-top:6px">${h.type === "pbs" ? "Datastores" : "Speicher"}</div>
-    ${liste.map(s => meter(s.name, s.used, { text: s.used != null ? s.used + " %" : "—" })).join("")}`;
+  const s = h.schwellen || {};
+  return `<div class="sec-title" style="margin-top:6px">${h.type === "pbs" ? "Datastores" : "Speicher"}
+      <span class="faint" style="font-weight:400">— gelb ab ${nz(s.disk_warn, " %")}, rot ab ${nz(s.disk_crit, " %")}${
+        h.schwellenEigen ? " (für dieses System gesetzt)" : ""}</span></div>
+    ${liste.map(x => meter(x.name, x.used, {
+      text: x.used != null ? x.used + " %" : "—", warn: s.disk_warn, crit: s.disk_crit
+    })).join("")}`;
 }
 
 /* ============================================================
@@ -1916,6 +2349,19 @@ function fassungZeile() {
        diese Seite ist noch die alte. <button class="btn btn--sm" data-action="reload">Neu laden</button></span>`
     : "";
   return `${zeile}<br><span class="faint">${stand}${stand ? " · " : ""}${herkunft}</span>${veraltet}`;
+}
+
+/* Welche Systeme von den globalen Grenzen abweichen — mit Namen. Eine
+   Abweichung, die niemand mehr findet, ist eine stillgelegte Überwachung;
+   sie gehört an eine Stelle, an der man ohne Suchen darüber stolpert. */
+function eigeneSchwellen() {
+  const mit = state.hosts.filter(h => h.schwellenEigen);
+  if (!mit.length) return "keine — überall gelten die Werte oben";
+  return mit.map(h => {
+    const e = h.schwellenEigen;
+    const teile = Object.entries(e).map(([k, v]) => `${k.replace("disk", "Speicher").replace("ram", "RAM").replace("_warn", " gelb").replace("_crit", " rot")} ${v} %`);
+    return `<b>${esc(h.name)}</b>: ${esc(teile.join(", "))}`;
+  }).join("<br>");
 }
 
 function viewCfg() {
@@ -1955,6 +2401,10 @@ function viewCfg() {
         ["System still", s.fail_threshold != null
           ? `${mono(s.fail_threshold)} Fehlschläge in Folge → kritisch (davor Warnung)` : "—"],
         ["Langsame Antwort", s.slow_ms != null ? `über ${mono(s.slow_ms + " ms")} → Warnung` : "—"],
+        ["Belegung", s.disk_warn != null
+          ? `Speicher ab ${mono(s.disk_warn + " %")} Warnung, ab ${mono(s.disk_crit + " %")} kritisch · RAM ab ${mono(s.ram_warn + " %")} / ${mono(s.ram_crit + " %")}`
+          : "—"],
+        ["Eigene Grenzen", eigeneSchwellen()],
         ["Zertifikat", s.tls_warn_days != null
           ? `unter ${mono(s.tls_warn_days + " Tagen")} Warnung · unter ${mono(s.tls_crit_days + " Tagen")} kritisch` : "—"],
         ["Verlauf im Speicher", s.history != null ? `${mono(s.history)} Messpunkte je System${s.interval ? ` (${Math.round(s.history * s.interval / 60)} min)` : ""}` : "—"],
@@ -2344,7 +2794,7 @@ function checkNow() {
 /* ============================================================
    Zeichnen & Verdrahten
    ============================================================ */
-const RENDERERS = { lage:viewLage, sites:viewSites, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
+const RENDERERS = { lage:viewLage, sites:viewSites, virt:viewVirt, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
   dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung,
   /* Keine Schaltfläche in der Leiste: diese Seite gehört immer zu einem
      bestimmten Gegenstand und wird über #/system/<kennung> erreicht. */
@@ -2410,10 +2860,39 @@ function open(kind, id) {
 /* ---------- Detailseite ---------- */
 function openSystem(id) {
   const tage = state.detail?.tage || 1;
-  state.detail = { id, tage, daten: null, busy: true, error: null, geladen: 0 };
+  state.detail = { id, tage, daten: null, busy: true, error: null, geladen: 0,
+    /* Die gewählte Schnittstelle gehört zu diesem System — beim Wechsel
+       auf ein anderes fängt sie von vorn an, sonst zeigte die Seite den
+       Verlauf einer Leitung, die es dort gar nicht gibt. */
+    iface: null, ifDaten: null, ifBusy: false, ifError: null };
   state.diagnose = null;
   go("system", id);
   ladeVerlauf();
+}
+
+/* Der Verlauf einer einzelnen Schnittstelle — eigener Abruf unter der
+   Kennung `system|schnittstelle`, mit demselben Zeitraum wie oben. */
+async function ladeIfVerlauf() {
+  const d = state.detail;
+  if (!d || !d.iface) return;
+  if (!LIVE()) { d.ifError = "kein Dienst erreichbar"; d.ifBusy = false; render(); return; }
+  const angefragt = `${d.id}|${d.iface}/${d.tage}`;
+  d.ifBusy = true;
+  render();
+  try {
+    const daten = await window.LEITSTAND.call("GET", `/api/verlauf/${encodeURIComponent(d.id + "|" + d.iface)}?tage=${d.tage}`);
+    if (!state.detail || `${state.detail.id}|${state.detail.iface}/${state.detail.tage}` !== angefragt) return;
+    state.detail.ifDaten = daten;
+    state.detail.ifError = null;
+  } catch (e) {
+    if (!state.detail || `${state.detail.id}|${state.detail.iface}/${state.detail.tage}` !== angefragt) return;
+    state.detail.ifError = e.message;
+  } finally {
+    if (state.detail && `${state.detail.id}|${state.detail.iface}/${state.detail.tage}` === angefragt) {
+      state.detail.ifBusy = false;
+      render();
+    }
+  }
 }
 
 /* Der Verlauf kommt aus einem eigenen Abruf, nicht aus dem Zustandsstrom:
@@ -2449,7 +2928,7 @@ async function ladeVerlauf() {
    die Systemliste statt ins Leere. */
 function zurueck() {
   if (window.history && window.history.length > 1) window.history.back();
-  else go("compute");
+  else go("sites");
 }
 function toggleTheme() {
   const cur = document.documentElement.getAttribute("data-theme");
@@ -2470,8 +2949,23 @@ document.addEventListener("click", ev => {
     case "view": ev.preventDefault(); go(el.dataset.view); break;
     case "system": ev.preventDefault(); openSystem(el.dataset.id); break;
     case "zurueck": ev.preventDefault(); zurueck(); break;
-    case "verlauf-tage": if (state.detail) { state.detail.tage = Number(el.dataset.tage) || 1; state.detail.daten = null; ladeVerlauf(); } break;
-    case "verlauf-neu": if (state.detail) ladeVerlauf(); break;
+    case "verlauf-tage": if (state.detail) {
+      state.detail.tage = Number(el.dataset.tage) || 1;
+      state.detail.daten = null; state.detail.ifDaten = null;
+      ladeVerlauf();
+      /* Der Zeitraum gilt für beide Diagramme — sonst stünden zwei
+         Zeitachsen untereinander, die verschiedene Tage zeigen. */
+      if (state.detail.iface) ladeIfVerlauf();
+    } break;
+    case "verlauf-neu": if (state.detail) { ladeVerlauf(); if (state.detail.iface) ladeIfVerlauf(); } break;
+    case "if-verlauf": if (state.detail) {
+      const gewaehlt = el.dataset.if;
+      /* Noch einmal auf dieselbe Leitung klappt sie wieder zu — dann steht
+         die Übersicht über alle wieder da. */
+      state.detail.iface = state.detail.iface === gewaehlt ? null : gewaehlt;
+      state.detail.ifDaten = null; state.detail.ifError = null;
+      if (state.detail.iface) ladeIfVerlauf(); else render();
+    } break;
     case "site": state.site = el.dataset.site; state.inspector = null; render(); break;
     case "site-filter": state.site = el.dataset.id; state.inspector = null; go(state.view); break;
     case "toggle-problems": state.onlyProblems = !state.onlyProblems; render(); break;
@@ -2741,7 +3235,14 @@ function openForm(kind, mode, id) {
   if (mode === "edit") {
     if (kind === "hosts") {
       const h = byId(state.hosts, id);
-      data = { id: h.id, type: h.type, site: h.site, ip: h.ip || "", url: h.url || "", role: h.role || "", monitor: h.monitored !== false };
+      const eigen = h.schwellenEigen || {};
+      data = { id: h.id, type: h.type, site: h.site, ip: h.ip || "", url: h.url || "", role: h.role || "", monitor: h.monitored !== false,
+        /* Nur die selbst gesetzten kommen ins Formular. Stünden die
+           geltenden drin, schriebe jedes Speichern die globalen Werte als
+           eigene fest — und eine spätere Änderung an den Einstellungen
+           erreichte dieses System nie mehr. */
+        s_disk_warn: eigen.disk_warn ?? "", s_disk_crit: eigen.disk_crit ?? "",
+        s_ram_warn: eigen.ram_warn ?? "", s_ram_crit: eigen.ram_crit ?? "" };
     } else if (kind === "sites") {
       const s = SITES.find(x => x.id === id);
       if (!s) return;
@@ -2805,6 +3306,20 @@ function formPayload() {
       const p = PEERS.find(x => x.id === ref);
       d.peer = p ? { host: p.von, iface: p.iface || undefined, name: p.name, key: p.key || undefined } : null;
     }
+  }
+  if (f.kind === "hosts") {
+    /* Die vier Felder wandern in ein `schwellen`-Objekt. Ausdrücklich
+       `null`, wenn keines gefüllt ist — nur so löst der Dienst eine früher
+       gesetzte Abweichung wieder, statt die alte stehen zu lassen. */
+    const s = {};
+    for (const k of ["disk_warn", "disk_crit", "ram_warn", "ram_crit"]) {
+      const roh = String(d["s_" + k] ?? "").trim();
+      delete d["s_" + k];
+      if (!roh) continue;
+      const n = Number(roh.replace(",", ".").replace("%", "").trim());
+      if (Number.isFinite(n)) s[k] = Math.round(n);
+    }
+    d.schwellen = Object.keys(s).length ? s : null;
   }
   for (const k of Object.keys(d)) if (d[k] === "") delete d[k];
   if (f.kind === "hosts") d.monitor = f.data.monitor !== false;
@@ -3382,13 +3897,21 @@ function adminSettings() {
       ${f("slow_ms", "Grenze „langsam“", "Millisekunden bis Gelb")}
       ${f("tls_warn_days", "Zertifikat: Warnung", "Tage Restlaufzeit")}
       ${f("tls_crit_days", "Zertifikat: kritisch", "Tage Restlaufzeit")}
+      ${f("disk_warn", "Speicher: Warnung", "Belegung in % — je System änderbar")}
+      ${f("disk_crit", "Speicher: kritisch", "Belegung in % — je System änderbar")}
+      ${f("ram_warn", "RAM: Warnung", "Belegung in %")}
+      ${f("ram_crit", "RAM: kritisch", "Belegung in %")}
       ${f("history", "Verlaufspunkte", "je System im Speicher, für die Sparkline")}
       ${f("icmp", "ICMP verwenden", "true oder false")}
       ${f("verlauf_takt", "Zeitreihe: Takt", "Sekunden je Punkt auf der Platte")}
       ${f("verlauf_tage", "Zeitreihe: Aufbewahrung", "Tage, danach fällt der älteste heraus")}
       ${f("link_takt", "Startseite: Prüftakt", "Sekunden zwischen zwei Abrufen einer Kachel")}
     </div></div>
-    <div class="panel-note">Ein geänderter Abstand greift ab dem nächsten Durchlauf. Steht ICMP auf
+    <div class="panel-note">Die Belegungsgrenzen gelten für Proxmox-Speicher, PBS-Datastores und die Platte einer
+      Firewall. Einzelne Systeme dürfen abweichen — beim Bearbeiten eines Systems unter <b>Schwellwerte</b>. Das ist
+      der Weg für einen Host, der bekanntermaßen und gewollt voll läuft: ihn einzeln hochsetzen, statt die Grenze für
+      alle aufzuweichen.
+      <br>Ein geänderter Abstand greift ab dem nächsten Durchlauf. Steht ICMP auf
       <span class="mono">false</span>, wird nur noch TCP geprüft — für Weboberflächen genügt das, für reine
       Ping-Ziele nicht.
       <br>Takt und Aufbewahrung der Zeitreihe bestimmen, wie viel Platz das Volume braucht: rund 100 Byte je Punkt,
@@ -3483,6 +4006,34 @@ function peerRefOf(peer) {
   return p ? p.id : null;
 }
 
+/* Eigene Schwellwerte je System.
+
+   Der Anlass ist ein alltäglicher: ein Host läuft seit Jahren bei 93 %
+   Belegung, weil mehr Platte nicht drin ist. Mit der globalen Grenze
+   leuchtet er jede Nacht rot — und eine Ampel, die immer rot ist, hat man
+   nach zwei Wochen abtrainiert. Wer die Lage kennt, soll sie hier
+   festhalten können, statt die Überwachung insgesamt stumpfer zu machen.
+
+   Leer heißt: es gilt der Wert aus den Einstellungen. Deshalb steht der
+   auch als Platzhalter im Feld — man sieht, wogegen man entscheidet. */
+function schwellenFelder(inp, d) {
+  const g = (state.settings || {});
+  const ph = k => String(g[k] ?? "");
+  const eigen = ["s_disk_warn", "s_disk_crit", "s_ram_warn", "s_ram_crit"].some(k => String(d[k] ?? "") !== "");
+  return `<div>
+    <div class="sec-title">Schwellwerte${eigen ? ' <span class="chip chip--plain">eigene gesetzt</span>' : ""}</div>
+    <p class="admin-hint" style="margin:0 0 8px">Leer lassen heißt: es gilt der Wert aus den Einstellungen (im Feld
+      als Platzhalter). Eintragen lohnt für Systeme, deren Belegung bekannt und gewollt hoch ist — eine Ampel, die
+      jede Nacht rot leuchtet, wird nicht mehr gelesen.</p>
+    <div class="admin-grid">
+      ${inp("s_disk_warn", "Speicher gelb ab %", "Belegung, ab der gewarnt wird", { ph: ph("disk_warn") })}
+      ${inp("s_disk_crit", "Speicher rot ab %", "ab hier gilt es als Störung", { ph: ph("disk_crit") })}
+      ${inp("s_ram_warn", "RAM gelb ab %", "", { ph: ph("ram_warn") })}
+      ${inp("s_ram_crit", "RAM rot ab %", "", { ph: ph("ram_crit") })}
+    </div>
+  </div>`;
+}
+
 function renderAdminForm() {
   const f = state.form;
   if (!f || !f.open) return "";
@@ -3522,6 +4073,8 @@ function renderAdminForm() {
         <span class="switch" role="switch" aria-checked="${d.monitor !== false}" data-action="form-toggle" data-field="monitor"></span>
         <span>Überwachen <span class="faint">— aus für Laborsysteme, die nicht alarmieren sollen</span></span>
       </label>
+
+      ${schwellenFelder(inp, d)}
 
       ${typeHasApi(d.type) ? `
       <div>

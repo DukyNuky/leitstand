@@ -510,3 +510,77 @@ test("Der eigene Takt bremst den Abruf, ohne den Durchlauf zu bremsen", async ()
   assert.equal(e.linkChecks.get(web.url).stand, erst, "innerhalb des Taktes wird nicht erneut abgerufen");
   await web.close(); await p.close();
 });
+
+/* ============================================================
+   Wesentliche Prüfungen
+
+   Eine Prüfung, die den Dienst selbst misst — die DNS-Auflösung eines
+   Resolvers etwa —, ist nicht eine von mehreren. Fällt sie aus, während
+   die Weboberfläche weiter antwortet, wäre „Teilausfall, gelb" die
+   falsche Auskunft: aufgelöst wird im Netz gerade gar nichts.
+   ============================================================ */
+
+/* Zwei Ports: einer bleibt offen (die Oberfläche), einer geht zu (der
+   Dienst). Der zweite trägt die Kennzeichnung. */
+function inventoryWesentlich(offen, wesentlichPort) {
+  return Inv.normalize({
+    settings: { interval: 60, timeout: 1, fail_threshold: 3, icmp: false, history: 10 },
+    sites: [{ id: "hq", name: "HQ" }],
+    hosts: [{ id: "ziel", type: "other", site: "hq", ip: "127.0.0.1", checks: [
+      { kind: "tcp", port: offen },
+      { kind: "tcp", port: wesentlichPort, wesentlich: true }
+    ] }],
+    tunnels: [], links: []
+  });
+}
+
+test("Fällt eine wesentliche Prüfung aus, ist das kein Teilausfall", async () => {
+  const a = await openPort(), b = await openPort();
+  const e = new Engine(inventoryWesentlich(a.port, b.port));
+  await e.runOnce();
+  assert.equal(e.hosts.get("ziel").status, "ok");
+
+  await b.close();
+  await e.runOnce();
+  const st = e.hosts.get("ziel");
+  assert.equal(st.status, "warn", "der erste Fehlschlag bleibt eine Warnung");
+  assert.equal(/Teilausfall/.test(st.note), false, "„Teilausfall“ verharmlost hier");
+  assert.match(st.note, /TCP\//);
+  await a.close();
+});
+
+test("Bleibt sie aus, wird daraus eine Störung — nicht dauerhaft Gelb", async () => {
+  const a = await openPort(), b = await openPort();
+  const e = new Engine(inventoryWesentlich(a.port, b.port));
+  await e.runOnce();
+  await b.close();
+  await e.runOnce(); await e.runOnce(); await e.runOnce();
+
+  const st = e.hosts.get("ziel");
+  assert.equal(st.status, "crit", "nach der eingestellten Zahl von Fehlschlägen");
+  assert.equal(st.reachable, true, "erreichbar ist er ja — nur tut er nicht, wofür es ihn gibt");
+  const inc = [...e.incidents.values()][0];
+  assert.equal(inc.sev, "crit");
+  assert.match(inc.rule, /^dienst\./, "eigene Regel, damit sie sich von „nicht erreichbar“ trennen lässt");
+  await a.close();
+});
+
+test("Kommt sie zurück, zählt der Zähler wieder von vorn", async () => {
+  const a = await openPort(), b = await openPort();
+  const e = new Engine(inventoryWesentlich(a.port, b.port));
+  await e.runOnce();
+  await b.close();
+  await e.runOnce();
+  assert.equal(e.hosts.get("ziel").wfails, 1);
+
+  /* Denselben Port wieder öffnen — der Dienst ist zurück. */
+  const b2 = await new Promise(r => {
+    const s = net.createServer(c => c.end());
+    s.listen(b.port, "127.0.0.1", () => r({ close: () => new Promise(x => s.close(x)) }));
+  });
+  await e.runOnce();
+  assert.equal(e.hosts.get("ziel").wfails, 0);
+  assert.equal(e.hosts.get("ziel").status, "ok");
+  assert.equal(e.incidents.size, 0);
+  await a.close(); await b2.close();
+});

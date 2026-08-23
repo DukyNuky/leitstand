@@ -5,7 +5,7 @@
 
 import net from "node:net";
 import tls from "node:tls";
-import dns from "node:dns";
+import dgram from "node:dgram";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -89,22 +89,160 @@ export async function httpCheck({ url, timeout = 4000, expect = null }) {
   } finally { clearTimeout(timer); }
 }
 
-/* ---- DNS: löst der Resolver noch auf? ---- */
-export function dnsCheck({ host, port = 53, query = "example.com", timeout = 4000 }) {
+/* ---- DNS: löst der Resolver noch auf? ----
+
+   Gefragt wird über **UDP/53**, und zwar mit einer selbst gebauten
+   Anfrage statt über `dns.Resolver`. Der Grund ist der Fall, um den es
+   hier eigentlich geht: ein Resolver, dessen UDP-Port zu ist. Der
+   Systemauflöser fällt dann still auf TCP zurück und meldet Erfolg —
+   während im Netz kein einziges Gerät mehr auflöst, weil kein Gerät
+   von sich aus TCP versucht. Eine Überwachung, die das nicht
+   auseinanderhält, meldet Grün für einen toten DNS-Dienst.
+
+   Umgekehrt gilt: kommt über UDP gar nichts, wird einmal TCP versucht.
+   Nicht als Rückfall, sondern als Befund — antwortet er dort, ist nicht
+   der Dienst weg, sondern UDP/53 blockiert, und das ist eine ganz
+   andere Suche. Das steht dann in der Meldung. */
+
+const RCODE = { 0: "NOERROR", 1: "FORMERR", 2: "SERVFAIL", 3: "NXDOMAIN", 4: "NOTIMP", 5: "REFUSED" };
+
+/* Eine Standardanfrage nach dem A-Satz eines Namens. Zwölf Byte Kopf,
+   der Name in Längen-Label-Form, dann Typ und Klasse. */
+export function dnsFrage(name, id) {
+  const teile = String(name).replace(/\.$/, "").split(".").filter(Boolean);
+  if (!teile.length) throw new Error("kein Name zum Auflösen angegeben");
+  const labels = [];
+  for (const t of teile) {
+    const b = Buffer.from(t, "ascii");
+    if (!b.length || b.length > 63) throw new Error(`„${name}“ ist kein gültiger Name`);
+    labels.push(Buffer.from([b.length]), b);
+  }
+  labels.push(Buffer.from([0]));
+  const kopf = Buffer.alloc(12);
+  kopf.writeUInt16BE(id, 0);
+  kopf.writeUInt16BE(0x0100, 2);            /* Anfrage, Rekursion erwünscht */
+  kopf.writeUInt16BE(1, 4);                 /* genau eine Frage */
+  const ende = Buffer.alloc(4);
+  ende.writeUInt16BE(1, 0);                 /* QTYPE  A */
+  ende.writeUInt16BE(1, 2);                 /* QCLASS IN */
+  return Buffer.concat([kopf, ...labels, ende]);
+}
+
+/* Namen überspringen — auch die gestauchte Schreibweise (zwei Byte, die
+   auf eine frühere Stelle zeigen), die in Antworten die Regel ist. */
+function ueberspringeName(buf, p) {
+  while (p < buf.length) {
+    const len = buf[p];
+    if (len === 0) return p + 1;
+    if ((len & 0xc0) === 0xc0) return p + 2;
+    p += len + 1;
+  }
+  return p;
+}
+
+/* Aus der Antwort wird nur gelesen, was für die Frage „antwortet er
+   richtig?" zählt: Kennung, Antwortcode, Zahl der Antworten und die
+   erste A-Adresse. Alles Weitere wäre ein halber Resolver. */
+export function dnsAntwort(buf, id) {
+  if (!buf || buf.length < 12) return { fehler: "Antwort zu kurz" };
+  if (buf.readUInt16BE(0) !== id) return { fehler: "fremde Antwort — die Kennung passt nicht zur Anfrage" };
+  const flags = buf.readUInt16BE(2);
+  if (!(flags & 0x8000)) return { fehler: "das war keine Antwort, sondern eine Anfrage" };
+  const rcode = flags & 0x0f;
+  const fragen = buf.readUInt16BE(4), antworten = buf.readUInt16BE(6);
+  let p = 12;
+  for (let i = 0; i < fragen; i++) { p = ueberspringeName(buf, p); p += 4; }
+  const adressen = [];
+  for (let i = 0; i < antworten && p + 10 <= buf.length; i++) {
+    p = ueberspringeName(buf, p);
+    if (p + 10 > buf.length) break;
+    const typ = buf.readUInt16BE(p);
+    const laenge = buf.readUInt16BE(p + 8);
+    p += 10;
+    if (typ === 1 && laenge === 4 && p + 4 <= buf.length) adressen.push([...buf.subarray(p, p + 4)].join("."));
+    p += laenge;
+  }
+  return { rcode, antworten, adressen, gekuerzt: !!(flags & 0x0200) };
+}
+
+/* Eine gelesene Antwort bewerten — für UDP und TCP dieselbe Regel. */
+function bewerte(buf, id, { query, port, ms, proto }) {
+  const a = dnsAntwort(buf, id);
+  if (a.fehler) return { ...fail(`DNS: ${a.fehler}`, ms), geantwortet: true };
+  if (a.rcode !== 0)
+    return { ...fail(`DNS: ${RCODE[a.rcode] || "RCODE " + a.rcode} für ${query} (${proto}/${port})`, ms), geantwortet: true };
+  /* NOERROR ohne einen einzigen Satz heißt: er hat geantwortet und nichts
+     gefunden. Als „erreichbar" durchzuwinken wäre falsch — auflösen tut er
+     dann nämlich nicht. Der häufigste Grund steht gleich dabei, weil er
+     hier besonders naheliegt: der Prüfname steht auf einer Filterliste. */
+  if (!a.antworten)
+    return { ...fail(`antwortet, liefert aber keine Adresse für ${query} — steht der Name auf einer Filterliste?`, ms), geantwortet: true };
+  return pass(ms, `${query} → ${a.adressen[0] || a.antworten + " Antworten"} (${proto}/${port})`,
+    { answers: a.antworten, proto, addr: a.adressen[0] || null });
+}
+
+function dnsUeberUdp({ host, port = 53, query = "example.com", timeout = 4000 }) {
   return new Promise(resolve => {
     const t0 = Date.now();
-    const r = new dns.Resolver({ timeout, tries: 1 });
-    r.setServers([port === 53 ? host : `${host}:${port}`]);
+    const id = 1 + Math.floor(Math.random() * 65534);
+    let frage;
+    try { frage = dnsFrage(query, id); } catch (e) { return resolve(fail(e.message)); }
+
+    const sock = dgram.createSocket(net.isIPv6(host) ? "udp6" : "udp4");
     let settled = false;
-    const done = x => { if (settled) return; settled = true; resolve(x); };
-    const guard = setTimeout(() => { try { r.cancel(); } catch {} done(fail(`DNS-Zeitüberschreitung nach ${timeout} ms`, timeout)); }, timeout + 200);
-    r.resolve4(query, (err, addr) => {
-      clearTimeout(guard);
-      const ms = Date.now() - t0;
-      if (err) return done(fail(`DNS: ${err.code || err.message}`, ms));
-      done(pass(ms, `${query} → ${addr[0]}`, { answers: addr.length }));
-    });
+    const done = r => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(uhr);
+      try { sock.close(); } catch {}
+      resolve(r);
+    };
+    const uhr = setTimeout(() => done(fail(`keine Antwort über UDP/${port} nach ${timeout} ms`, timeout)), timeout);
+    sock.on("error", e => done(fail(errText(e), Date.now() - t0)));
+    sock.on("message", msg => done(bewerte(msg, id, { query, port, ms: Date.now() - t0, proto: "UDP" })));
+    sock.send(frage, port, host, e => { if (e) done(fail(errText(e), Date.now() - t0)); });
   });
+}
+
+/* DNS über TCP ist dieselbe Nachricht mit zwei Byte Länge davor. */
+function dnsUeberTcp({ host, port = 53, query = "example.com", timeout = 4000 }) {
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    const id = 1 + Math.floor(Math.random() * 65534);
+    let frage;
+    try { frage = dnsFrage(query, id); } catch (e) { return resolve(fail(e.message)); }
+    const laenge = Buffer.alloc(2);
+    laenge.writeUInt16BE(frage.length, 0);
+
+    const sock = new net.Socket();
+    let settled = false, puffer = Buffer.alloc(0);
+    const done = r => { if (settled) return; settled = true; sock.destroy(); resolve(r); };
+    sock.setTimeout(timeout);
+    sock.once("connect", () => sock.write(Buffer.concat([laenge, frage])));
+    sock.on("data", d => {
+      puffer = Buffer.concat([puffer, d]);
+      if (puffer.length < 2) return;
+      const n = puffer.readUInt16BE(0);
+      if (puffer.length < 2 + n) return;
+      done(bewerte(puffer.subarray(2, 2 + n), id, { query, port, ms: Date.now() - t0, proto: "TCP" }));
+    });
+    sock.once("timeout", () => done(fail(`keine Antwort über TCP/${port} nach ${timeout} ms`, timeout)));
+    sock.once("error", e => done(fail(errText(e), Date.now() - t0)));
+    sock.connect(port, host);
+  });
+}
+
+export async function dnsCheck(opt) {
+  const port = opt.port || 53;
+  if (opt.proto === "tcp") return dnsUeberTcp({ ...opt, port });
+  const udp = await dnsUeberUdp({ ...opt, port });
+  /* Hat er über UDP geantwortet — und sei es mit SERVFAIL —, ist die Frage
+     beantwortet. Nur wenn gar nichts kam, lohnt der zweite Versuch. */
+  if (udp.ok || udp.geantwortet) return udp;
+  const tcp = await dnsUeberTcp({ ...opt, port });
+  return tcp.ok
+    ? { ...udp, detail: `${udp.detail} — über TCP/${port} antwortet er dagegen: UDP/53 kommt nicht durch` }
+    : { ...udp, detail: `${udp.detail} (auch über TCP/${port} nicht)` };
 }
 
 /* ---- ICMP: nutzt das System-ping, weil roher ICMP root bräuchte ---- */
@@ -208,7 +346,7 @@ export async function runCheck(check, target, settings = {}) {
     /* DNS und ICMP fragen das System selbst, nicht seine Oberflächen-Adresse:
        ein Resolver antwortet auf seiner IP, nicht auf dem Namen, unter dem
        ein Proxy seine Weboberfläche ausliefert. */
-    case "dns":  return dnsCheck({ host, port: check.port || 53, query: check.query, timeout });
+    case "dns":  return dnsCheck({ host, port: check.port || 53, query: check.query, proto: check.proto, timeout });
     case "icmp": return settings.icmp === false
       ? { ok: null, ms: null, detail: "ICMP abgeschaltet", skipped: true }
       : icmpCheck({ host, timeout });
