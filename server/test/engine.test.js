@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import net from "node:net";
 import http from "node:http";
 import * as Inv from "../src/inventory.js";
-import { Engine, findePeer } from "../src/engine.js";
+import { Engine, findePeer, frischerPeer, peerAbstand, tlsBewerten } from "../src/engine.js";
 
 /* Ein echter, offener Port als Prüfziel — keine Attrappe der Prüfung selbst. */
 function openPort() {
@@ -583,4 +583,129 @@ test("Kommt sie zurück, zählt der Zähler wieder von vorn", async () => {
   assert.equal(e.hosts.get("ziel").status, "ok");
   assert.equal(e.incidents.size, 0);
   await a.close(); await b2.close();
+});
+
+/* ============================================================
+   Beide Enden einer Strecke
+
+   Ein Tunnel ist keine Einbahnstraße: an beiden Enden steht eine
+   Firewall, und jede meldet die jeweils andere als Peer. Erst mit beiden
+   Enden stimmt die Zuordnung in beide Richtungen — und erst dann lassen
+   sich die zwei Auskünfte gegeneinander halten.
+   ============================================================ */
+
+function mitZweiEnden({ peer, peerB, probe, peersA, peersB, timeoutPort }) {
+  return Inv.normalize({
+    settings: { icmp: false, timeout: 1, fail_threshold: 2, history: 10 },
+    sites: [{ id: "hq", name: "HQ" }, { id: "rz", name: "RZ" }],
+    hosts: [
+      { id: "fw-a", type: "opnsense", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: timeoutPort }] },
+      { id: "fw-b", type: "opnsense", site: "rz", ip: "127.0.0.1", checks: [{ kind: "tcp", port: timeoutPort }] }
+    ],
+    links: [],
+    tunnels: [{ id: "wg", a: "hq", b: "rz", iface: "wg0",
+      ...(probe ? { probe } : {}), ...(peer ? { peer } : {}), ...(peerB ? { peerB } : {}) }]
+  });
+}
+
+const sammler = (peersA, peersB) => ({
+  opnsense: async h => ({ peers: h.id === "fw-a" ? peersA : peersB })
+});
+
+test("Beide Enden werden aufgelöst und stehen am Tunnel", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitZweiEnden({
+      peer: { host: "fw-a", key: "AqujlFK4" }, peerB: { host: "fw-b", key: "Kx7QdZZ1" },
+      probe: { ip: "127.0.0.1", port: p.port }, timeoutPort: p.port
+    }),
+    { collectors: sammler(
+      [{ name: "nach-RZ", key: "AqujlFK4", iface: "wg0", handshake: 80, allowed: "10.99.0.2/32" }],
+      [{ name: "nach-HQ", key: "Kx7QdZZ1", iface: "wg0", handshake: 95, allowed: "10.99.0.1/32" }]) });
+  await e.runOnce();
+
+  const st = e.tunnels.get("wg");
+  assert.equal(st.peer.name, "nach-RZ");
+  assert.equal(st.peerB.name, "nach-HQ");
+  assert.equal(st.peerAbstand, 15, "die beiden Auskünfte liegen 15 Sekunden auseinander");
+  assert.equal(st.status, "ok");
+  await p.close();
+});
+
+/* WireGuard erneuert den Handshake nur, wenn Verkehr fließt, und die
+   beiden Firewalls werden zu verschiedenen Zeitpunkten abgefragt. Vom
+   älteren Ende auszugehen hieße, eine tragende Strecke rot zu melden. */
+test("Ohne Messung zählt das frischere der beiden Enden", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitZweiEnden({
+      peer: { host: "fw-a", key: "AqujlFK4" }, peerB: { host: "fw-b", key: "Kx7QdZZ1" }, timeoutPort: p.port
+    }),
+    { collectors: sammler(
+      [{ name: "nach-RZ", key: "AqujlFK4", iface: "wg0", handshake: 4000 }],
+      [{ name: "nach-HQ", key: "Kx7QdZZ1", iface: "wg0", handshake: 30 }]) });
+  await e.runOnce();
+
+  assert.equal(e.tunnels.get("wg").status, "ok", "ein Ende spricht gerade — die Strecke steht");
+  assert.equal(e.incidents.size, 0);
+  await p.close();
+});
+
+/* Dieselbe Strecke ist sich über ihren Handshake einig. Weichen die Enden
+   weit voneinander ab, zeigt eine der Verknüpfungen woandershin — das ist
+   ein Hinweis, keine Störung. */
+test("Widersprechen sich die beiden Enden, steht das als Notiz da", async () => {
+  const p = await openPort();
+  const e = new Engine(
+    mitZweiEnden({
+      peer: { host: "fw-a", key: "AqujlFK4" }, peerB: { host: "fw-b", key: "Kx7QdZZ1" },
+      probe: { ip: "127.0.0.1", port: p.port }, timeoutPort: p.port
+    }),
+    { collectors: sammler(
+      [{ name: "nach-RZ", key: "AqujlFK4", iface: "wg0", handshake: 20 }],
+      [{ name: "nach-HQ", key: "Kx7QdZZ1", iface: "wg0", handshake: 4000 }]) });
+  await e.runOnce();
+
+  const st = e.tunnels.get("wg");
+  assert.equal(st.status, "ok");
+  assert.match(st.note, /widersprechen/);
+  assert.equal(e.incidents.size, 0, "eine Notiz, keine Meldung");
+  await p.close();
+});
+
+test("Von zwei Enden gewinnt das frischere, und „nie“ verliert immer", () => {
+  const a = { name: "a", handshake: 400 }, b = { name: "b", handshake: 30 };
+  const nie = { name: "c", handshake: null };
+  assert.equal(frischerPeer(a, b).name, "b");
+  assert.equal(frischerPeer(b, a).name, "b");
+  assert.equal(frischerPeer(nie, a).name, "a", "„nie“ darf sich nicht als null Sekunden vordrängen");
+  assert.equal(frischerPeer(a, nie).name, "a");
+  assert.equal(frischerPeer(null, b).name, "b");
+  assert.equal(frischerPeer(null, null), null);
+  assert.equal(peerAbstand(a, b), 370);
+  assert.equal(peerAbstand(a, nie), null, "gegen ein „nie“ gibt es keinen Abstand");
+  assert.equal(peerAbstand(a, null), null);
+});
+
+/* ============================================================
+   Zertifikate, die niemand prüft
+   ============================================================ */
+
+/* Ein eigensigniertes Zertifikat bezeugt keine Herkunft. Läuft es ab,
+   ändert sich für den Betrieb nichts — wer es gestern angenommen hat,
+   nimmt es heute an. Eine rote Ampel dafür ist genau die Meldung, die man
+   zu übergehen lernt, und mit ihr die nächste, die zählt. */
+test("Ein eigensigniertes Zertifikat bekommt von sich aus keine Ampel", () => {
+  const eigen = { selfSigned: true, days: -30 };
+  const echt = { selfSigned: false, days: -30 };
+  assert.equal(tlsBewerten({ id: "a" }, eigen, {}), false);
+  assert.equal(tlsBewerten({ id: "a" }, echt, {}), true, "ein Zertifikat einer Ausgabestelle bleibt bewertet");
+  assert.equal(tlsBewerten({ id: "a" }, eigen, { tls_selfsigned_ignore: false }), true,
+    "wer die Ampel will, bekommt sie zurück");
+});
+
+test("Ein einzelnes System darf sein Zertifikat ganz aus der Bewertung nehmen", () => {
+  const echt = { selfSigned: false, days: 3 };
+  assert.equal(tlsBewerten({ id: "a", tls_ignore: true }, echt, {}), false);
+  assert.equal(tlsBewerten({ id: "a" }, echt, {}), true);
 });

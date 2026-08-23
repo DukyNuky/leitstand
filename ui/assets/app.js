@@ -251,7 +251,10 @@ function renderAlarmstrip() {
   const hostsUp = überwacht.filter(h => h.status !== "crit").length;
   const tunOk = state.tunnels.filter(t => t.status === "ok").length;
   const bkOk = BACKUPS.filter(b => b.status === "ok").length;
-  const certWarn = CERTS.filter(c => c.days <= (thr("tls_warn_days") ?? 30)).length;
+  /* Nur die bewerteten zählen. Ein eigensigniertes Zertifikat, das keine
+     Ampel bekommt, darf auch keine Zahl in der Kopfleiste erzeugen —
+     sonst bliebe die Meldung stehen, nur woanders. */
+  const certWarn = CERTS.filter(c => c.bewertet !== false && c.days <= (thr("tls_warn_days") ?? 30)).length;
   /* Was es noch nicht gibt, wird als Strich gezeigt — nicht als „0 von 0",
      das wie ein Messwert aussieht. */
   const cells = [
@@ -906,7 +909,7 @@ function viewCompute() {
       <div class="panel-head"><h3>Belegung im Einzelnen</h3><span class="hint">Datastores und Speicher</span>
         <div class="spacer"></div><span class="hint">Schwellwerte je System, siehe Verwaltung</span></div>
       <div class="panel-body col" style="gap:14px">
-        ${store.length ? store.map(h => {
+        ${(() => { const ohnePbs = store.filter(h => h.type !== "pbs"); return ohnePbs.length ? ohnePbs.map(h => {
           const liste = h.stores || h.storages || [];
           const s = h.schwellen || {};
           return `<div>
@@ -920,12 +923,82 @@ function viewCompute() {
               text: x.used != null ? x.used + " %" : "—", warn: s.disk_warn, crit: s.disk_crit
             })).join("") : '<div class="faint" style="font-size:12.5px">Noch keine Belegung gelesen.</div>'}
           </div>`;
-        }).join("") : '<div class="empty">Kein Speichersystem in dieser Auswahl.</div>'}
+        }).join("") : store.length
+          ? '<div class="empty">Alles Datastores — sie stehen unten in eigener Tabelle, mit Aufräumen und Prüfung.</div>'
+          : '<div class="empty">Kein Speichersystem in dieser Auswahl.</div>'; })()}
       </div>
     </div>
   </div>
 
+  ${datastorePanel(hs.filter(h => h.type === "pbs"))}
   ${backupPanel()}`;
+}
+
+/* ---------- Datastores des Backup Servers ----------
+
+   Die Belegung allein sagt zu wenig. Ein Datastore, in den seit einer
+   Woche nichts mehr gesichert wurde, ist unauffällig voll; einer, der nie
+   aufgeräumt wurde, wächst, obwohl längst gelöschte Sicherungen darin
+   liegen; und einer, der nie geprüft wurde, trägt vielleicht nichts
+   Brauchbares. Deshalb stehen hier vier Zeitpunkte neben dem Balken —
+   und wo einer fehlt, steht „nie", nicht ein Datum von heute. */
+function datastorePanel(pbs) {
+  const zeilen = pbs.flatMap(h => (h.stores || []).map(s => ({ ...s, wirt: h, schwellen: h.schwellen || {} })));
+  if (!pbs.length) return "";
+
+  return `<div class="panel">
+    <div class="panel-head"><h3>Datastores</h3><span class="hint">Proxmox Backup Server</span>
+      <div class="spacer"></div><span class="hint">${zeilen.length} Datastore(s) auf ${pbs.length} Server(n)</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr><th style="width:34px"></th><th>Datastore</th><th>Server</th>
+        <th style="min-width:170px">Belegung</th><th>Frei</th><th>Gesamt</th><th>Voll ca.</th>
+        <th>Letzte Sicherung</th><th>Aufgeräumt</th><th>Geprüft</th></tr></thead><tbody>
+      ${zeilen.length ? zeilen.map(s => `<tr data-sev="${storeTon(s)}">
+        <td class="sev">${dot(storeTon(s))}</td>
+        <td><div class="mono">${esc(s.name)}</div>${s.comment ? `<div class="t-sub">${esc(s.comment)}</div>` : ""}</td>
+        <td class="faint">${esc(s.wirt.name)}</td>
+        <td>${meter("", s.used, { text: s.used != null ? s.used + " %" : "—",
+          warn: s.schwellen.disk_warn, crit: s.schwellen.disk_crit })}</td>
+        <td class="mono faint">${esc(menge(s.availBytes))}</td>
+        <td class="mono faint">${esc(menge(s.totalBytes))}</td>
+        <td class="mono">${vollZelle(s)}</td>
+        <td class="mono faint">${aufgabenZelle(s.lastBackup, s.backupOk)}</td>
+        <td class="mono faint">${aufgabenZelle(s.lastGc, s.gcOk)}</td>
+        <td class="mono faint">${aufgabenZelle(s.lastVerify, s.verifyOk)}</td>
+      </tr>`).join("") : `<tr><td colspan="10"><div class="empty">Noch keine Belegung gelesen — ohne API-Token
+        bleibt es bei der Erreichbarkeit.</div></td></tr>`}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Die Grenzen für Gelb und Rot stehen je Server unter <b>Verwaltung → System bearbeiten →
+      Schwellwerte</b>. <b>Voll ca.</b> schätzt PBS selbst aus seinem Verlauf — steht dort ein Strich, hat PBS keine
+      Schätzung, und der Leitstand rechnet sich keine aus. <b>Aufgeräumt</b> ist der letzte Garbage-Collection-Lauf:
+      ohne ihn geben gelöschte Sicherungen ihren Platz nicht frei. <b>Geprüft</b> ist der letzte Verify-Lauf — er ist
+      das Einzige, was eine Sicherung von einer Datei unterscheidet, die man noch nie gelesen hat.
+      ${zeilen.some(s => s.wartung) ? "<br>Ein Datastore in Wartung nimmt nichts an; das ist eine Einstellung, keine Störung." : ""}</div>
+  </div>`;
+}
+
+function storeTon(s) {
+  if (s.used == null) return "idle";
+  const w = s.schwellen.disk_warn ?? 80, c = s.schwellen.disk_crit ?? 90;
+  return s.used >= c ? "crit" : s.used >= w ? "warn" : "ok";
+}
+
+/* Wann er voll ist — mit der Zahl, die PBS selbst nennt. Ohne die bleibt
+   es beim Strich: zwei Messpunkte hochzurechnen wäre geraten. */
+function vollZelle(s) {
+  if (s.vollInTagen == null) return '<span class="faint">—</span>';
+  const ton = s.vollInTagen <= 14 ? "warn" : "ok";
+  return `<span style="color:var(--${ton})" title="${esc(s.vollAm || "")}">${
+    s.vollInTagen <= 0 ? "jetzt" : `in ${s.vollInTagen} T`}</span>`;
+}
+
+/* Ein Zeitpunkt und ob es glückte. „nie" ist eine Auskunft und wird als
+   solche gezeigt — nicht als Strich, der wie „nicht gelesen" aussieht. */
+function aufgabenZelle(wann, ok) {
+  if (!wann) return '<span class="faint" title="In den letzten Aufgaben kommt kein solcher Lauf vor">nie</span>';
+  const text = esc(fmtWhen(wann) || "—");
+  return ok === false ? `<span style="color:var(--crit)" title="Der letzte Lauf ist fehlgeschlagen">${text} ✕</span>` : text;
 }
 
 function backupPanel() {
@@ -1302,11 +1375,23 @@ function viewVpn() {
 
 /* Worauf gemessen wird: die Gegenstelle im Transfernetz. Gibt es die
    nicht, steht dort der Endpunkt des verknüpften Peers — damit die Spalte
-   sagt, woher der Zustand dieser Zeile überhaupt stammt. */
+   sagt, woher der Zustand dieser Zeile überhaupt stammt. Ist auch der
+   nicht bekannt, stehen die Adressen da, die die Firewalls als erlaubte
+   Netze melden: gelesen, nicht gemessen, und als solche gekennzeichnet.
+
+   Darunter die beiden Enden. Eine Strecke hat zwei; steht dort nur eines,
+   ist die andere Firewall nicht verknüpft — und ihre Zeile in der
+   Gegenstellenliste behauptet dann, zu keiner Strecke zu gehören. */
 function gegenstelle(t) {
-  if (t.probe) return esc(t.probe);
-  if (t.peer?.endpoint) return `${esc(t.peer.endpoint)} <span class="faint">(Peer)</span>`;
-  return "—";
+  const ziel = t.probe ? esc(t.probe)
+    : t.peer?.endpoint ? `${esc(t.peer.endpoint)} <span class="faint">(Peer)</span>`
+    : (t.ips || []).length ? `${esc(t.ips.join(" ↔ "))} <span class="faint">(gelesen)</span>`
+    : "—";
+  const enden = [t.peer, t.peerB].filter(Boolean);
+  if (!enden.length) return ziel;
+  const namen = enden.map(p => `${p.gefunden ? "" : "⚠ "}${esc(p.host)}`).join(" ↔ ");
+  return `<div>${ziel}</div><div class="t-sub">${namen}${
+    enden.length === 1 ? ' <span class="faint" title="Die zweite Firewall meldet dieselbe Strecke — unter Verwaltung → Tunnel auswählen">· nur ein Ende</span>' : ""}</div>`;
 }
 
 /* Das Handshake-Alter des verknüpften Peers. Ohne Verknüpfung steht hier
@@ -1315,11 +1400,19 @@ function gegenstelle(t) {
    ausdrücklich als solcher gezeigt: das ist ein anderer Zustand als „noch
    nie gemeldet" und will anders behandelt werden. */
 function handshakeZelle(t) {
-  if (!t.peer) return `<span class="faint" title="Kein Peer verknüpft — unter Verwaltung → Tunnel auswählen">—</span>`;
-  if (!t.peer.gefunden) return `<span style="color:var(--warn)" title="${esc(t.peer.note || "")}">nicht gemeldet</span>`;
+  const enden = [t.peer, t.peerB].filter(Boolean);
+  if (!enden.length) return `<span class="faint" title="Kein Peer verknüpft — unter Verwaltung → Tunnel auswählen">—</span>`;
+  /* Meldet eines der beiden Enden, zählt dessen Auskunft. „Nicht
+     gemeldet" steht hier nur, wenn keines mehr etwas sagt — sonst stünde
+     eine tragende Strecke wegen einer schiefen Verknüpfung auf Gelb. */
+  const gemeldet = enden.filter(p => p.gefunden);
+  if (!gemeldet.length)
+    return `<span style="color:var(--warn)" title="${esc(enden[0].note || "")}">nicht gemeldet</span>`;
   if (t.handshake == null) return `<span class="faint" title="Diese Gegenstelle hat sich noch nie gemeldet">nie</span>`;
+  const p = gemeldet.find(x => x.handshake === t.handshake) || gemeldet[0];
   const ton = t.handshake <= 180 ? "ok" : t.handshake <= 600 ? "warn" : "crit";
-  return `<span style="color:var(--${ton})" title="${esc(t.peer.name || "")}${t.peer.seit ? " · " + esc(t.peer.seit) : ""}">${esc(hs(t.handshake))}</span>`;
+  return `<span style="color:var(--${ton})" title="${esc(p.name || "")}${p.seit ? " · " + esc(p.seit) : ""}${
+    gemeldet.length < enden.length ? " · das andere Ende meldet ihn nicht" : ""}">${esc(hs(t.handshake))}</span>`;
 }
 
 /* Der verknüpfte Peer im Tunnel-Inspektor. Drei Fälle, die nicht
@@ -1332,22 +1425,54 @@ function tunnelPeerBlock(t) {
       ? `Unter <b>Bearbeiten</b> lässt sich eine auswählen — dann stehen hier Handshake und übertragene Menge.`
       : `Sobald bei einer Firewall ein API-Schlüssel hinterlegt ist, lässt sich hier eine auswählen.`}</p></div>`;
 
-  const p = t.peer;
-  if (!p.gefunden) return `<div><div class="sec-title">WireGuard-Peer</div>
+  const enden = [t.peer, t.peerB].filter(Boolean);
+  return `<div><div class="sec-title">WireGuard-Peer${enden.length > 1 ? "s — beide Enden" : ""}</div>
+    ${enden.map(p => peerEnde(p)).join("")}
+    ${enden.length === 1 ? `<p class="admin-hint" style="margin:8px 0 0">Nur ein Ende ist verknüpft. Die zweite
+      Firewall meldet dieselbe Strecke als eigenen Peer — wird sie unter <b>Bearbeiten</b> dazugewählt, stimmt die
+      Zuordnung in beide Richtungen, und die beiden Angaben lassen sich gegeneinander halten.</p>` : ""}
+    ${t.peerAbstand > 600 ? `<div class="row" style="gap:8px;align-items:flex-start;margin-top:8px">${dot("warn")}
+      <span style="font-size:13px">Die Enden widersprechen sich: ihre Handshakes liegen ${esc(hs(t.peerAbstand))}
+      auseinander. Dieselbe Strecke wäre sich einig — vermutlich zeigt eine der Verknüpfungen auf einen anderen
+      Tunnel.</span></div>` : ""}
+    ${streckenBlock(t)}</div>`;
+}
+
+/* Ein Ende: hinterlegt und gemeldet, hinterlegt und verschwunden, oder
+   gemeldet und vollständig. Die drei dürfen nicht gleich aussehen. */
+function peerEnde(p) {
+  if (!p.gefunden) return `<div style="margin-bottom:10px">
     <div class="row" style="gap:8px;align-items:flex-start">${dot("warn")}
       <span style="font-size:13px">${esc(p.note || `„${p.name}" wird von ${p.host} nicht gemeldet.`)}</span></div>
     <p class="admin-hint" style="margin:6px 0 0">Hinterlegt ist <span class="mono">${esc(p.name || p.key || "—")}</span>
       auf <span class="mono">${esc(p.host)}</span>. Die Messung durch den Tunnel läuft davon unberührt weiter.</p></div>`;
 
-  return `<div><div class="sec-title">WireGuard-Peer</div><dl class="kv">
+  return `<dl class="kv" style="margin-bottom:10px">
     <dt>Gegenstelle</dt><dd class="mono">${esc(p.name || "—")}</dd>
     <dt>Gelesen von</dt><dd class="mono">${esc(p.host)}${p.iface ? ` <span class="faint">· ${esc(p.iface)}</span>` : ""}</dd>
     <dt>Endpunkt</dt><dd class="mono">${esc(nz(p.endpoint))}</dd>
     <dt>Erlaubte Netze</dt><dd class="mono">${esc(nz(p.allowed))}</dd>
-    <dt>Letzter Handshake</dt><dd class="mono" title="${esc(p.seit || "")}">${t.handshake == null ? "nie" : esc(hs(t.handshake))}</dd>
-    <dt>Übertragen</dt><dd class="mono">${t.rx ? `${esc(t.rx)} ↓ / ${esc(t.tx)} ↑` : "—"}</dd>
+    <dt>Letzter Handshake</dt><dd class="mono" title="${esc(p.seit || "")}">${p.handshake == null ? "nie" : esc(hs(p.handshake))}</dd>
+    <dt>Übertragen</dt><dd class="mono">${p.rx ? `${esc(p.rx)} ↓ / ${esc(p.tx)} ↑` : "—"}</dd>
     ${p.keepalive ? `<dt>Keepalive</dt><dd class="mono">${esc(p.keepalive)} s</dd>` : ""}
-  </dl></div>`;
+  </dl>`;
+}
+
+/* Was die Firewalls über die Strecke selbst wissen — abgelesen aus den
+   erlaubten Netzen der Peers, nicht aus dem Bestand. Genau die Angaben,
+   die man sonst von Hand abschreibt: die Adressen im Transfernetz und
+   die Netze, die dahinter erreichbar sind. */
+function streckenBlock(t) {
+  const ips = t.ips || [], netze = t.netze || [];
+  if (!ips.length && !netze.length) return "";
+  return `<div style="margin-top:8px">
+    <div class="sec-title">Von den Firewalls gelesen</div><dl class="kv">
+      ${ips.length ? `<dt>Adressen im Tunnel</dt><dd class="mono">${esc(ips.join(" · "))}</dd>` : ""}
+      ${netze.length ? `<dt>Netze dahinter</dt><dd class="mono">${esc(netze.join(" · "))}</dd>` : ""}
+    </dl>
+    <p class="admin-hint" style="margin:4px 0 0">Steht in den erlaubten Netzen der Peers. Eine dieser Adressen
+      gehört als <b>Gegenstelle im Tunnel</b> eingetragen — dann wird durch die Strecke gemessen statt nur der
+      Handshake gelesen; unter <b>Bearbeiten</b> steht sie zur Übernahme bereit.</p></div>`;
 }
 
 function peerPanel() {
@@ -1384,7 +1509,7 @@ function peerPanel() {
           <td class="mono faint">${esc(nz(p.iface))}</td>
           <td>${p.tunnel
             ? `<button class="btn btn--sm" data-action="inspect" data-kind="tunnel" data-id="${esc(p.tunnel)}" title="Dieser Peer trägt eine angelegte Strecke">${esc(p.tunnel)}</button>`
-            : '<span class="faint" title="Keiner Strecke zugeordnet — meist ein Endgerät, kein Site-to-Site-Tunnel">—</span>'}</td>
+            : '<span class="faint" title="Keiner Strecke zugeordnet — meist ein Endgerät. Bei einem Site-to-Site-Tunnel fehlt dagegen die Verknüpfung: unter Verwaltung → Tunnel als zweites Ende auswählen">—</span>'}</td>
           <td class="mono faint">${esc(nz(p.ip === "—" ? null : p.ip))}</td>
           <td class="mono faint">${esc(nz(p.endpoint === "—" ? null : p.endpoint))}</td>
           <td class="mono faint">${p.rx ? `${esc(p.rx)} / ${esc(p.tx)}` : "—"}</td>
@@ -1584,14 +1709,22 @@ function certPanel() {
         <td class="sev">${dot(c.status)}</td><td class="mono">${esc(c.cn)}</td>
         <td class="faint">${esc(c.issuer)}${c.selfSigned ? ' <span class="chip chip--plain">eigensigniert</span>' : ""}</td>
         <td class="mono faint">${esc(c.where)}</td>
-        <td style="min-width:180px">${meter("", c.days < 0 ? 100 : Math.max(3, Math.min(100, Math.round(c.days / 90 * 100))),
+        <td style="min-width:180px">${c.bewertet === false
+          ? `<span class="faint" title="Wird gemessen, aber nicht bewertet — siehe Hinweis unter der Tabelle">${
+              c.days < 0 ? `seit ${Math.abs(c.days)} T abgelaufen` : c.days + " Tage"} · nicht bewertet</span>`
+          : meter("", c.days < 0 ? 100 : Math.max(3, Math.min(100, Math.round(c.days / 90 * 100))),
           { text: c.days < 0 ? `seit ${Math.abs(c.days)} T abgelaufen` : c.days + " Tage",
             tone: c.days <= crit ? "crit" : c.days <= warn ? "warn" : "ok" })}</td>
       </tr>`).join("") : `<tr><td colspan="5"><div class="empty">Noch kein Zertifikat gelesen — es erscheint hier, sobald ein System eine <span class="mono">tls</span>-Prüfung hat und antwortet.</div></td></tr>`}
       </tbody></table>
     </div>
     <div class="panel-note">Der Leitstand liest nur ab, was der Server im Handshake vorzeigt. Erneuern kann und darf er
-      nichts — jeder Zugang ist ein Konto ohne Schreibrechte.</div>
+      nichts — jeder Zugang ist ein Konto ohne Schreibrechte.
+      ${CERTS.some(c => c.bewertet === false) ? `<br><b>Nicht bewertet</b> heißt: gemessen und hier aufgeführt, aber
+        ohne Ampel. Das betrifft eigensignierte Zertifikate — sie bezeugen keine Herkunft, und ihr Ablauf ändert für
+        den Betrieb nichts: wer sie gestern angenommen hat, nimmt sie heute an. Umstellbar unter
+        <b>Verwaltung → Schwellwerte</b> (<span class="mono">tls_selfsigned_ignore</span>), einzelne Systeme beim
+        Bearbeiten.` : ""}</div>
   </div>`;
 }
 
@@ -2230,6 +2363,9 @@ function zertifikatBlock(h) {
     <dt>Common Name</dt><dd class="mono">${esc(h.tls.cn || "—")}</dd>
     <dt>Aussteller</dt><dd>${esc(h.tls.issuer || "—")}${h.tls.selfSigned ? " (eigensigniert)" : ""}</dd>
     <dt>Restlaufzeit</dt><dd class="mono">${h.tls.days != null ? h.tls.days + " Tage" : "—"}</dd>
+    <dt>Bewertung</dt><dd>${h.tls.bewertet === false
+      ? `<span class="faint">keine — ${h.tlsIgnore ? "für dieses System abgeschaltet" : "eigensigniert"}</span>`
+      : "geht in die Ampel ein"}</dd>
   </dl></div>`;
 }
 
@@ -3124,6 +3260,12 @@ document.addEventListener("click", ev => {
       f.data[el.dataset.field] = !f.data[el.dataset.field];
       render(); break;
     }
+    case "form-set": {
+      const f = state.form; if (!f) break;
+      collectForm();
+      f.data[el.dataset.field] = el.dataset.value;
+      render(); break;
+    }
     case "form-test": formTest(); break;
     case "form-save": formSave(); break;
   }
@@ -3338,6 +3480,7 @@ function openForm(kind, mode, id) {
       const h = byId(state.hosts, id);
       const eigen = h.schwellenEigen || {};
       data = { id: h.id, type: h.type, site: h.site, ip: h.ip || "", url: h.url || "", role: h.role || "", monitor: h.monitored !== false,
+        tls_ignore: !!h.tlsIgnore,
         /* Nur die selbst gesetzten kommen ins Formular. Stünden die
            geltenden drin, schriebe jedes Speichern die globalen Werte als
            eigene fest — und eine spätere Änderung an den Einstellungen
@@ -3362,7 +3505,9 @@ function openForm(kind, mode, id) {
            Firewall ihn gerade nicht meldet — sonst löschte allein das
            Öffnen des Formulars eine gültige Verknüpfung. */
         peerOrig: t.peer || null,
-        peerRef: t.peer ? (peerRefOf(t.peer) || "__gespeichert") : "" };
+        peerRef: t.peer ? (peerRefOf(t.peer) || "__gespeichert") : "",
+        peerBOrig: t.peerB || null,
+        peerBRef: t.peerB ? (peerRefOf(t.peerB) || "__gespeichert") : "" };
     }
   } else {
     const erster = (SITES[0] || {}).id;
@@ -3399,14 +3544,17 @@ function formPayload() {
     /* Ausdrücklich null, nicht weglassen: nur so löst der Dienst eine
        bestehende Verknüpfung wieder — ein fehlendes Feld ließe die alte
        stehen, weil die Änderung auf den bestehenden Eintrag gelegt wird. */
-    const ref = d.peerRef;
-    delete d.peerRef; delete d.peerOrig;
-    if (!ref) d.peer = null;
-    else if (ref === "__gespeichert") d.peer = f.data.peerOrig || null;
-    else {
+    const aus = (ref, orig) => {
+      if (!ref) return null;
+      if (ref === "__gespeichert") return orig || null;
       const p = PEERS.find(x => x.id === ref);
-      d.peer = p ? { host: p.von, iface: p.iface || undefined, name: p.name, key: p.key || undefined } : null;
-    }
+      return p ? { host: p.von, iface: p.iface || undefined, name: p.name, key: p.key || undefined } : null;
+    };
+    const a = aus(d.peerRef, f.data.peerOrig);
+    const b = aus(d.peerBRef, f.data.peerBOrig);
+    delete d.peerRef; delete d.peerOrig; delete d.peerBRef; delete d.peerBOrig;
+    d.peer = a;
+    d.peerB = b;
   }
   if (f.kind === "hosts") {
     /* Die vier Felder wandern in ein `schwellen`-Objekt. Ausdrücklich
@@ -3424,6 +3572,9 @@ function formPayload() {
   }
   for (const k of Object.keys(d)) if (d[k] === "") delete d[k];
   if (f.kind === "hosts") d.monitor = f.data.monitor !== false;
+  /* Ausdrücklich false statt weglassen: nur so nimmt ein Speichern die
+     Ausnahme wieder zurück, statt die alte stehen zu lassen. */
+  if (f.kind === "hosts") d.tls_ignore = !!f.data.tls_ignore;
   if (f.kind === "sites") d.primary = !!f.data.primary;
   return d;
 }
@@ -3839,12 +3990,25 @@ function adminSites() {
   </div>`;
 }
 
+/* Beide Enden untereinander. Fehlt das zweite, steht das ausdrücklich da:
+   es ist der häufigste Grund, warum eine Gegenstelle in der Peerliste
+   keiner Strecke zugeordnet ist. */
+function peerZelle(t) {
+  const enden = [t.peer, t.peerB].filter(Boolean);
+  if (!enden.length) return '<span class="faint">—</span>';
+  const zeilen = enden.map(p => p.gefunden
+    ? `${esc(p.name)} <span class="faint">· ${esc(p.host)}</span>`
+    : `<span style="color:var(--warn)" title="${esc(p.note || "")}">${esc(p.name || p.key || "?")} — nicht gemeldet</span>`);
+  if (enden.length === 1) zeilen.push('<span class="faint">zweites Ende nicht verknüpft</span>');
+  return zeilen.map(z => `<div>${z}</div>`).join("");
+}
+
 function adminTunnels() {
   return `<div class="panel">
     <div class="panel-head"><h3>Tunnel</h3><span class="hint">${state.tunnels.length} angelegt</span>
       <div class="spacer"></div><span class="hint">gemessen wird durch den Tunnel, der Handshake kommt vom Peer</span></div>
     <div class="panel-body panel-body--flush tablewrap">
-      <table class="t"><thead><tr><th style="width:34px"></th><th>Kennung</th><th>Strecke</th><th>Interface</th><th>Transfernetz</th><th>Gegenstelle</th><th>Verknüpfter Peer</th><th class="right"></th></tr></thead><tbody>
+      <table class="t"><thead><tr><th style="width:34px"></th><th>Kennung</th><th>Strecke</th><th>Interface</th><th>Transfernetz</th><th>Gegenstelle</th><th>Verknüpfte Peers</th><th class="right"></th></tr></thead><tbody>
       ${state.tunnels.length ? state.tunnels.map(t => `<tr data-sev="${t.status}">
         <td class="sev">${dot(t.status)}</td>
         <td class="mono">${esc(t.id)}</td>
@@ -3852,10 +4016,7 @@ function adminTunnels() {
         <td class="mono faint">${esc(t.iface || "—")}</td>
         <td class="mono faint">${esc(t.net || "—")}</td>
         <td class="mono">${esc(t.probe || "—")}</td>
-        <td class="mono">${!t.peer ? '<span class="faint">—</span>'
-          : t.peer.gefunden
-            ? `${esc(t.peer.name)} <span class="faint">· ${esc(t.peer.host)}</span>`
-            : `<span style="color:var(--warn)" title="${esc(t.peer.note || "")}">${esc(t.peer.name || t.peer.key || "?")} — nicht gemeldet</span>`}</td>
+        <td class="mono">${peerZelle(t)}</td>
         <td class="right">
           <button class="btn btn--sm" data-action="admin-edit" data-kind="tunnels" data-id="${esc(t.id)}">Bearbeiten</button>
           <button class="btn btn--sm" data-action="admin-delete" data-kind="tunnels" data-id="${esc(t.id)}">Löschen</button>
@@ -4018,6 +4179,7 @@ function adminSettings() {
       ${f("slow_ms", "Grenze „langsam“", "Millisekunden bis Gelb")}
       ${f("tls_warn_days", "Zertifikat: Warnung", "Tage Restlaufzeit")}
       ${f("tls_crit_days", "Zertifikat: kritisch", "Tage Restlaufzeit")}
+      ${f("tls_selfsigned_ignore", "Eigensignierte übergehen", "true: keine Ampel (Vorgabe) · false: wie jedes andere")}
       ${f("disk_warn", "Speicher: Warnung", "Belegung in % — je System änderbar")}
       ${f("disk_crit", "Speicher: kritisch", "Belegung in % — je System änderbar")}
       ${f("ram_warn", "RAM: Warnung", "Belegung in %")}
@@ -4032,6 +4194,11 @@ function adminSettings() {
       Firewall. Einzelne Systeme dürfen abweichen — beim Bearbeiten eines Systems unter <b>Schwellwerte</b>. Das ist
       der Weg für einen Host, der bekanntermaßen und gewollt voll läuft: ihn einzeln hochsetzen, statt die Grenze für
       alle aufzuweichen.
+      <br><b>Eigensignierte übergehen</b> bezieht sich nur auf Zertifikate, die sich selbst ausgestellt haben. Ihr
+      Ablauf ist kein Vorfall: geprüft hat sie nie jemand, und wer sie gestern angenommen hat, nimmt sie heute an.
+      Sie stehen weiter in der Zertifikatsliste, dort als „nicht bewertet". Zertifikate einer echten Ausgabestelle
+      sind davon nie betroffen. Soll ein einzelnes System gar kein Zertifikat bewertet bekommen, steht der Schalter
+      beim <b>Bearbeiten des Systems</b>.
       <br>Ein geänderter Abstand greift ab dem nächsten Durchlauf. Steht ICMP auf
       <span class="mono">false</span>, wird nur noch TCP geprüft — für Weboberflächen genügt das, für reine
       Ping-Ziele nicht.
@@ -4088,38 +4255,90 @@ function inpc(key, label, cred, ph, typed) {
    Umbenennung auf der Firewall. Name und Interface stehen als lesbare
    Beschriftung daneben. */
 function peerFeld(d) {
-  const gruppen = new Map();
-  for (const p of PEERS) {
-    if (!gruppen.has(p.von)) gruppen.set(p.von, []);
-    gruppen.get(p.von).push(p);
-  }
-  const gespeichert = d.peerOrig;
+  const gespeichert = d.peerOrig, gespeichertB = d.peerBOrig;
   const fehlt = !!gespeichert && d.peerRef === "__gespeichert";
+  const fehltB = !!gespeichertB && d.peerBRef === "__gespeichert";
 
-  if (!PEERS.length && !fehlt) return `<div>
+  if (!PEERS.length && !fehlt && !fehltB) return `<div>
     <div class="sec-title">WireGuard-Peer</div>
     <p class="admin-hint" style="margin:0">Noch meldet keine Firewall WireGuard-Peers. Dafür braucht OPNsense einen
       API-Schlüssel — unter <b>Verwaltung → Systeme</b> beim Gerät hinterlegen. Danach steht die Gegenstelle hier zur
       Auswahl, und in der Tunnelzeile steht der echte Handshake.</p></div>`;
 
+  return `<div>
+    <div class="sec-title">WireGuard-Peers — beide Enden</div>
+    <label class="admin-field">
+      <span class="admin-label">Gegenstelle auf der Firewall</span>
+      <select class="admin-input" data-field="peerRef">${peerOptionen(d, "peerRef", gespeichert, fehlt)}</select>
+      <span class="admin-hint">Damit steht in der Tunnelzeile das echte Handshake-Alter statt eines Strichs — und
+        die übertragene Menge dazu. Ohne Gegenstelle im Transfernetz wird der Zustand daraus abgeleitet.</span>
+    </label>
+    <label class="admin-field">
+      <span class="admin-label">Gegenstelle am anderen Ende</span>
+      <select class="admin-input" data-field="peerBRef">${peerOptionen(d, "peerBRef", gespeichertB, fehltB)}</select>
+      <span class="admin-hint">Eine Strecke hat zwei Enden, und jede Firewall kennt nur das jeweils andere: dasselbe
+        Kabel, zweimal beschrieben. Ist auch die zweite Firewall benannt, gehört sie in der Gegenstellenliste
+        sichtbar zu dieser Strecke — sonst steht sie dort als „keiner Strecke zugeordnet“ mitten in einer. Und die
+        beiden Angaben lassen sich gegeneinander halten: dieselbe Strecke ist sich über ihren Handshake einig.</span>
+    </label></div>`;
+}
+
+/* Die Auswahlliste eines Endes. Der hinterlegte, zurzeit nicht gemeldete
+   Peer steht mit dabei — sonst löschte allein das Öffnen des Formulars
+   eine gültige Verknüpfung. */
+function peerOptionen(d, feld, gespeichert, fehlt) {
+  const gruppen = new Map();
+  for (const p of PEERS) {
+    if (!gruppen.has(p.von)) gruppen.set(p.von, []);
+    gruppen.get(p.von).push(p);
+  }
+  /* Was am anderen Ende schon steht, ist hier keine Wahl mehr: zweimal
+     derselbe Peer wären nicht zwei Enden, sondern zweimal eines. */
+  const anderes = feld === "peerRef" ? d.peerBRef : d.peerRef;
   const opts = [`<option value="">— nicht verknüpft —</option>`];
   if (fehlt) opts.push(`<option value="__gespeichert" selected>${esc(gespeichert.name || gespeichert.key || "hinterlegt")} — zurzeit nicht gemeldet</option>`);
-  for (const [von, liste] of gruppen)
-    opts.push(`<optgroup label="${esc(von)}">${liste.map(p => {
+  for (const [von, liste] of gruppen) {
+    const zeilen = liste.filter(p => p.id !== anderes);
+    if (!zeilen.length) continue;
+    opts.push(`<optgroup label="${esc(von)}">${zeilen.map(p => {
       /* Ein Peer trägt höchstens eine Strecke — steht er schon an einer
          anderen, gehört das dazugesagt, bevor jemand ihn doppelt vergibt. */
       const belegt = p.tunnel && p.tunnel !== d.id ? ` — schon an ${p.tunnel}` : "";
-      return `<option value="${esc(p.id)}" ${d.peerRef === p.id ? "selected" : ""}>${esc(p.iface || "wg")} · ${esc(p.name)}${esc(belegt)}</option>`;
+      return `<option value="${esc(p.id)}" ${d[feld] === p.id ? "selected" : ""}>${esc(p.iface || "wg")} · ${esc(p.name)}${esc(belegt)}</option>`;
     }).join("")}</optgroup>`);
+  }
+  return opts.join("");
+}
+
+/* Was die verknüpften Firewalls über die Strecke wissen, zur Übernahme.
+
+   Transfernetz und Gegenstelle stehen in den erlaubten Netzen der Peers —
+   bislang musste man sie von dort abschreiben. Angeboten wird, was
+   gelesen wurde; eingetragen wird nur, was man anklickt. Ein stilles
+   Vorbelegen wäre schlechter: es sähe aus wie eine Eingabe und wäre eine
+   Vermutung darüber, welches Ende von hier aus erreichbar ist. */
+function gelesenFeld(d) {
+  const gewaehlt = [d.peerRef, d.peerBRef].map(r => PEERS.find(p => p.id === r)).filter(Boolean);
+  const ips = [...new Set(gewaehlt.flatMap(p => p.ips || []))];
+  const netze = [...new Set(gewaehlt.flatMap(p => p.netze || []))];
+  if (!ips.length && !netze.length) return "";
+
+  const knopf = (feld, wert, titel) => `<button type="button" class="btn btn--sm" data-action="form-set"
+    data-field="${esc(feld)}" data-value="${esc(wert)}" title="${esc(titel)}">${esc(wert)}</button>`;
 
   return `<div>
-    <div class="sec-title">WireGuard-Peer</div>
-    <label class="admin-field">
-      <span class="admin-label">Gegenstelle auf der Firewall</span>
-      <select class="admin-input" data-field="peerRef">${opts.join("")}</select>
-      <span class="admin-hint">Damit steht in der Tunnelzeile das echte Handshake-Alter statt eines Strichs — und
-        die übertragene Menge dazu. Ohne Gegenstelle im Transfernetz wird der Zustand daraus abgeleitet.</span>
-    </label></div>`;
+    <div class="sec-title">Von den Firewalls gelesen</div>
+    ${ips.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:6px">
+      <span class="faint" style="font-size:12.5px;min-width:150px">Adressen im Tunnel</span>
+      ${ips.map(ip => knopf("probeIp", ip, `als Gegenstelle im Tunnel eintragen — diese Adresse wird dann gemessen`)).join("")}
+    </div>` : ""}
+    ${netze.length ? `<div class="row" style="gap:6px;flex-wrap:wrap">
+      <span class="faint" style="font-size:12.5px;min-width:150px">Netze dahinter</span>
+      ${netze.map(n => knopf("net", n, "als Transfernetz eintragen")).join("")}
+    </div>` : ""}
+    <p class="admin-hint" style="margin:6px 0 0">Steht in den erlaubten Netzen der gewählten Peers. Anklicken trägt
+      es oben ein — gemessen wird die Adresse, die von hier aus durch den Tunnel erreichbar ist, also die des
+      <b>anderen</b> Standorts.</p></div>`;
 }
 
 /* Die Kennung des gemeldeten Peers zu einer hinterlegten Verknüpfung —
@@ -4197,6 +4416,10 @@ function renderAdminForm() {
         <span class="switch" role="switch" aria-checked="${d.monitor !== false}" data-action="form-toggle" data-field="monitor"></span>
         <span>Überwachen <span class="faint">— aus für Laborsysteme, die nicht alarmieren sollen</span></span>
       </label>
+      <label class="row" style="gap:9px;cursor:pointer">
+        <span class="switch" role="switch" aria-checked="${!!d.tls_ignore}" data-action="form-toggle" data-field="tls_ignore"></span>
+        <span>Zertifikat nicht bewerten <span class="faint">— gemessen und angezeigt wird es weiter, nur ohne Ampel</span></span>
+      </label>
 
       ${schwellenFelder(inp, d)}
 
@@ -4232,6 +4455,7 @@ function renderAdminForm() {
       ${inp("probeIp", "Gegenstelle im Tunnel", "diese Adresse wird gemessen", { ph: "10.99.0.2" })}
       ${inp("probePort", "Port der Gegenstelle", "leer: nur ICMP", { ph: "22" })}
     </div>
+    ${gelesenFeld(d)}
     ${peerFeld(d)}
     <p class="admin-hint" style="margin:0">Eines von beidem muss es sein. Am besten beides: die Messung <b>durch</b> den
       Tunnel sagt, ob gerade etwas hindurchkommt; der Handshake sagt, wann die Strecke zuletzt stand.</p>`;

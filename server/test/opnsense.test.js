@@ -29,9 +29,18 @@ function opnsense(ab = {}) {
     if (auth !== `${KEY}:${SECRET}`) return send(401, { message: "Authentication failed" });
     const p = new URL(req.url, "http://x").pathname;
 
+    if (p === "/api/core/firmware/info") {
+      /* Ältere Fassungen kennen den Endpunkt nicht. */
+      if (ab.info === false) return send(404, { message: "not found" });
+      return send(200, ab.info ?? { product: { product_version: "26.1.11_10", product_abi: "26.1" } });
+    }
+
     if (p === "/api/core/firmware/status")
       return send(200, {
-        product_version: "26.1.11_10", product_abi: "26.1", os_version: "FreeBSD 14.3-RELEASE-p16",
+        /* Eine OPNsense ohne anstehende Aktualisierung nennt ihre Fassung
+           hier gar nicht — dann muss sie anderswoher kommen. */
+        ...(ab.ohneFassung ? {} : { product_version: "26.1.11_10", product_abi: "26.1" }),
+        os_version: "FreeBSD 14.3-RELEASE-p16",
         needs_reboot: ab.needsReboot ?? "0", upgrade_needs_reboot: "1",
         last_check: "Wed Aug 19 19:00:15 CEST 2026",
         new_packages: ab.newPackages ?? [], upgrade_packages: ab.upgradePackages ?? [],
@@ -178,6 +187,30 @@ test("Fassung, Aktualisierungen und Neustart werden richtig gelesen", async () =
     assert.equal(r.needsReboot, false, "needs_reboot ist die Zeichenkette 0");
     assert.match(r.note, /26\.7/, "und das steht als Hinweis da");
     assert.equal(r.status, undefined, "ohne die Ampel zu drehen");
+  } finally { srv.close(); }
+});
+
+/* Der Anlass ist ein Befund aus dem Betrieb: von mehreren OPNsense zeigte
+   nur die eine ihre Fassung, bei der ein Update anstand. Genau verkehrt
+   herum — ein gepflegtes Gerät stand mit einem Strich da. Der Grund ist,
+   dass `firmware/status` `product_version` nur mitschickt, wenn es zu den
+   Aktualisierungen etwas zu sagen gibt. */
+test("Die Fassung steht auch dann da, wenn nichts ansteht", async () => {
+  const { srv, host } = await an({ ohneFassung: true });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.version, "26.1.11_10", "aus firmware/info geholt");
+    assert.equal(r.abi, "26.1");
+  } finally { srv.close(); }
+});
+
+/* Und wenn selbst der Endpunkt fehlt, steht sie in der Systemauskunft —
+   dort als Zeile einer Liste, aus der sie herausgeschnitten wird. */
+test("Ohne firmware/info kommt die Fassung aus der Systemauskunft", async () => {
+  const { srv, host } = await an({ ohneFassung: true, info: false });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.version, "26.1.11_10-amd64");
   } finally { srv.close(); }
 });
 

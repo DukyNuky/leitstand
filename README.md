@@ -145,10 +145,10 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **DNS über UDP/53** | eine echte Auflösung, kein Portklopfen — ohne Zugangsdaten. Jeder AdGuard bekommt sie von Haus aus, und ihr Ausfall gilt als Störung, nicht als Teilausfall neben einem grünen Port. Antwortet er nur über TCP, steht genau das im Befund: dann ist nicht der Dienst weg, sondern UDP/53 zu |
 | **Antwortzeiten** | Sparkline in der Tabelle für die letzte halbe Stunde — und ein **Verlauf über Tage** auf der Seite jedes Systems, der einen Neustart übersteht |
 | **Zeitreihen** | ein Punkt je Minute und Gegenstand auf der Platte (Antwortzeit mit Spannweite, CPU, RAM, Speicher, Durchsatz, Ampel), 30 Tage lang, als lesbares JSON je Zeile — **je Firewall-Schnittstelle eine eigene Reihe** |
-| **Zertifikate** | Restlaufzeit aller TLS-Ziele, Warnung ab 30 Tagen, Rot ab 14 |
-| **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake des verknüpften Peers. Die Karte zeigt auch Strecken **zwischen Nebenstandorten**, nicht nur die zum Hauptstandort |
+| **Zertifikate** | Restlaufzeit aller TLS-Ziele, Warnung ab 30 Tagen, Rot ab 14. **Eigensignierte bekommen keine Ampel** — sie bezeugen keine Herkunft, und ihr Ablauf ändert für den Betrieb nichts; sie stehen weiter in der Liste, dort als „nicht bewertet". Umstellbar, auch je System |
+| **VPN-Tunnel** | Messung **durch** den Tunnel auf die Gegenstelle — ohne jeden Zugang; dazu, wo hinterlegt, der WireGuard-Handshake **beider Enden**: jede Firewall meldet die andere Seite, und erst mit beiden stimmt die Zuordnung in beide Richtungen. Transfernetz und Gegenstelle werden aus den erlaubten Netzen der Peers **gelesen** statt abgeschrieben. Die Karte zeigt auch Strecken **zwischen Nebenstandorten**, nicht nur die zum Hauptstandort |
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version — dazu je Knoten Kernel, `pve-manager`-Fassung, Kerne und Modell, Last und **ausstehende Paketaktualisierungen mit Paketnamen**, und **jeder Gast einzeln** mit Zustand und Auslastung. Alles in einer eigenen Ansicht *Virtualisierung* |
-| **Proxmox BS** | Datastore-Belegung, fehlgeschlagene Verify-/GC-/Sync-Aufträge |
+| **Proxmox BS** | **jeder Datastore einzeln**: Belegung, freier Platz und Gesamtgröße, die Schätzung von PBS selbst, *wann er voll ist*, dazu die letzte Sicherung, das letzte Aufräumen (GC) und die letzte Prüfung (Verify) — samt Kommentar und Wartungsmodus. Fehlgeschlagene Aufträge der letzten 24 Stunden bleiben die rote Ampel |
 | **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
 | **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, WireGuard-Peers mit Handshake-Alter · **jede Schnittstelle einzeln**: Durchsatz ↓/↑, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand und Zuwachs), Verbindungszustand und MTU, mit Verlauf über Tage je Leitung · **Gateways** mit Zustand, Latenz und Verlust — die Meldung, die von außen niemand sieht, weil die Firewall dabei tadellos antwortet · **Zustandstabelle** und **CARP**-Rolle |
 | **pfSense** | dasselbe — **aber nur mit dem Fremdpaket `pfSense-pkg-API`**. Das steht nicht im Paketverzeichnis von pfSense und ist für neuere Fassungen nicht immer zu haben; ohne es bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat. Der Sammler ist gebaut und geprüft und wartet darauf, dass das Paket da ist |
@@ -235,9 +235,9 @@ einen Texteditor:
 |---|---|
 | **Systeme** | anlegen, ändern, löschen · Typ, Adresse, Beschreibung · Überwachung abschalten · API-Zugangsdaten hinterlegen · **Verbindung testen** mit Einzelschritten |
 | **Standorte** | anlegen, ändern, löschen · **vierstelliges Kürzel** (Land + Stadt, z. B. `DEKO`), Ort, Anschluss, WAN · **Hauptstandort** festlegen (Mitte der Topologie) |
-| **Tunnel** | anlegen, ändern, löschen · Strecke, Interface, Transfernetz, Gegenstelle im Tunnel |
+| **Tunnel** | anlegen, ändern, löschen · Strecke, Interface, Transfernetz, Gegenstelle im Tunnel · **beide WireGuard-Enden** auswählen, Transfernetz und Gegenstelle aus den Peers übernehmen |
 | **Startseite** | Gruppen anlegen, umbenennen, sortieren · Verknüpfungen hinzufügen, mit System verbinden, sortieren, löschen |
-| **Schwellwerte** | Intervall, Zeitlimit, Fehlschläge bis Rot, „langsam“, Zertifikatsfristen, Verlaufslänge, ICMP |
+| **Schwellwerte** | Intervall, Zeitlimit, Fehlschläge bis Rot, „langsam“, Zertifikatsfristen, eigensignierte Zertifikate bewerten oder übergehen, Verlaufslänge, ICMP |
 | **Sicherung** | frühere Stände ansehen — Sicherung und Tagesauszüge, je mit Inhalt — und einen davon **zurückholen** |
 
 Alles landet in derselben `inventory.yaml`, die sich auch von Hand bearbeiten

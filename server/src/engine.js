@@ -262,7 +262,12 @@ export class Engine {
       status = "warn"; note = `langsame Antwort: ${st.ms} ms`;
     }
 
-    if (st.tls) {
+    /* Gelesen wird jedes Zertifikat, bewertet nur, was auch etwas
+       bezeugt. Der Vermerk bleibt am Zustand hängen, damit die
+       Zertifikatsliste den Unterschied anzeigen kann — verschwiegen wird
+       nichts, es leuchtet nur nicht. */
+    if (st.tls) st.tls.bewertet = tlsBewerten(h, st.tls, s);
+    if (st.tls?.bewertet) {
       const d = st.tls.days;
       const text = d < 0 ? `Zertifikat seit ${Math.abs(d)} Tagen abgelaufen`
         : d === 0 ? "Zertifikat läuft heute ab"
@@ -286,7 +291,7 @@ export class Engine {
         : (note || "Zustand auffällig"),
       rule: !reach ? "host.unreachable"
         : wesentlich.length ? `dienst.${wesentlich[0].kind}`
-        : st.tls && st.tls.days <= (s.tls_warn_days ?? 30) ? "tls.expiry" : "host.degraded",
+        : st.tls?.bewertet && st.tls.days <= (s.tls_warn_days ?? 30) ? "tls.expiry" : "host.degraded",
       detail: results.map(r => `${r.kind}${r.port ? "/" + r.port : ""}: ${r.skipped ? "übersprungen" : r.ok ? "ok" : "FEHLER"} ${r.detail || ""}`).join("\n")
     });
   }
@@ -341,30 +346,47 @@ export class Engine {
     for (const t of this.inv.tunnels) {
       const st = this.tunnels.get(t.id);
       if (!st) continue;
-      st.peer = null;
-      st.peerNote = null;
+      const a = this.#peerAufloesen(t.peer);
+      const b = this.#peerAufloesen(t.peerB);
+      st.peer = a.peer; st.peerNote = a.note;
+      st.peerB = b.peer; st.peerBNote = b.note;
+      /* Beide Enden beschreiben dieselbe Strecke. Liegen ihre
+         Handshake-Alter weit auseinander, beschreiben sie zwei — dann
+         zeigt eine der beiden Verknüpfungen woandershin. */
+      st.peerAbstand = peerAbstand(a.peer, b.peer);
       if (!t.peer) continue;
-
-      const liste = this.hosts.get(t.peer.host)?.extra?.peers;
-      const treffer = findePeer(liste, t.peer);
-      const bez = t.peer.name || String(t.peer.key || "").slice(0, 8);
-
-      if (treffer) st.peer = { ...treffer, host: t.peer.host };
-      else if (!Array.isArray(liste))
-        st.peerNote = `${t.peer.host} meldet keine WireGuard-Peers — fehlen dort die Zugangsdaten?`;
-      else
-        st.peerNote = `Den Peer „${bez}“ meldet ${t.peer.host} nicht mehr — dort umbenannt oder entfernt?`;
 
       if (!t.probe?.ip) { this.#tunnelAusHandshake(t, st); continue; }
 
-      /* Durch den Tunnel kommt eine Antwort, der verknüpfte Peer schweigt
-         seit zehn Minuten: dann trägt eine andere Strecke als die
-         verknüpfte. Das ist keine Störung, sondern ein Hinweis auf eine
-         falsche Verknüpfung — es bleibt bei einer Notiz. */
-      if (st.status === "ok" && st.peer?.handshake > 600)
-        st.note = `trägt, aber der verknüpfte Peer „${st.peer.name}“ schweigt seit ${kurzeDauer(st.peer.handshake)} — zeigt die Verknüpfung auf den richtigen Peer?`;
-      else if (st.status === "ok" && st.peerNote) st.note = st.peerNote;
+      /* Durch den Tunnel kommt eine Antwort, die verknüpften Peers
+         schweigen seit zehn Minuten: dann trägt eine andere Strecke als
+         die verknüpfte. Das ist keine Störung, sondern ein Hinweis auf
+         eine falsche Verknüpfung — es bleibt bei einer Notiz. */
+      const p = frischerPeer(a.peer, b.peer);
+      if (st.status !== "ok") continue;
+      if (p?.handshake > 600)
+        st.note = `trägt, aber der verknüpfte Peer „${p.name}“ schweigt seit ${kurzeDauer(p.handshake)} — zeigt die Verknüpfung auf den richtigen Peer?`;
+      else if (st.peerAbstand > 600)
+        st.note = `trägt, aber die beiden Enden widersprechen sich: ${a.peer.host} meldet ${kurzeDauer(a.peer.handshake)}, ${b.peer.host} ${kurzeDauer(b.peer.handshake)} — dieselbe Strecke wäre sich einig.`;
+      else st.note = a.note || b.note || st.note;
     }
+  }
+
+  /* Ein hinterlegtes Ende gegen das halten, was die Firewall gerade
+     meldet. Drei Ausgänge, die sich nicht vermischen dürfen: nichts
+     hinterlegt, hinterlegt aber nicht gemeldet, gefunden. */
+  #peerAufloesen(ref) {
+    if (!ref) return { peer: null, note: null };
+    const liste = this.hosts.get(ref.host)?.extra?.peers;
+    const treffer = findePeer(liste, ref);
+    if (treffer) return { peer: { ...treffer, host: ref.host }, note: null };
+    const bez = ref.name || String(ref.key || "").slice(0, 8);
+    return {
+      peer: null,
+      note: !Array.isArray(liste)
+        ? `${ref.host} meldet keine WireGuard-Peers — fehlen dort die Zugangsdaten?`
+        : `Den Peer „${bez}“ meldet ${ref.host} nicht mehr — dort umbenannt oder entfernt?`
+    };
   }
 
   /* Ohne Messung durch den Tunnel ist der Handshake das einzige Zeugnis.
@@ -372,11 +394,15 @@ export class Engine {
      die Strecke stand, nicht dass gerade etwas hindurchkommt. Deshalb wird
      er zurückhaltend bewertet, und in der Notiz steht, woher er stammt. */
   #tunnelAusHandshake(t, st) {
-    const p = st.peer;
+    /* Von zwei Enden zählt das frischere. Beide beschreiben denselben
+       Handshake, aber jedes wurde zu einem anderen Zeitpunkt abgefragt —
+       und eines der beiden kann eine tote Verknüpfung sein. Das ältere
+       hier zu nehmen, hieße eine tragende Strecke rot zu melden. */
+    const p = frischerPeer(st.peer, st.peerB);
     st.ms = null;
     st.checks = [];
     let status, note;
-    if (!p) { status = "idle"; note = st.peerNote; }
+    if (!p) { status = "idle"; note = st.peerNote || st.peerBNote; }
     else if (p.handshake == null) { status = "idle"; note = "Kein Handshake — diese Gegenstelle hat sich noch nie gemeldet."; }
     else if (p.handshake <= 180) {
       status = "ok"; note = null;
@@ -397,8 +423,9 @@ export class Engine {
     this.#reconcile(t.id, t.b, status, note, {
       title: status === "crit" ? `Tunnel ${t.iface || t.id} trägt nicht` : "Tunnel auffällig",
       rule: "tunnel.handshake",
-      detail: `Bewertet wird der WireGuard-Handshake des Peers „${t.peer.name || t.peer.key}“ auf ${t.peer.host}. `
-        + `Durch den Tunnel wird nicht gemessen — dafür fehlt eine Gegenstelle im Transfernetz (probe.ip).`,
+      detail: `Bewertet wird der WireGuard-Handshake${t.peerB ? " beider Enden" : ""}: `
+        + [t.peer, t.peerB].filter(Boolean).map(x => `„${x.name || x.key}“ auf ${x.host}`).join(" und ")
+        + `. Durch den Tunnel wird nicht gemessen — dafür fehlt eine Gegenstelle im Transfernetz (probe.ip).`,
       kind: "tunnel"
     });
   }
@@ -521,6 +548,38 @@ export class Engine {
    greift, wenn er genau einmal vorkommt: lieber kein Treffer als der
    falsche — ein falscher Treffer meldete den Handshake eines fremden
    Geräts als den dieser Strecke. */
+/* Von zwei Enden das frischere. „Frisch" heißt: der kleinere
+   Handshake-Abstand; „nie gemeldet" ist das schlechteste, nicht das
+   beste — ein null darf sich nicht als Null-Sekunden vordrängen. */
+export function frischerPeer(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  if (a.handshake == null) return b.handshake == null ? a : b;
+  if (b.handshake == null) return a;
+  return b.handshake < a.handshake ? b : a;
+}
+
+/* Wie weit die beiden Enden auseinanderliegen, in Sekunden — oder null,
+   wenn nur eines etwas meldet. Dann gibt es nichts zu vergleichen, und
+   eine Zahl wäre erfunden. */
+export function peerAbstand(a, b) {
+  if (!a || !b || a.handshake == null || b.handshake == null) return null;
+  return Math.abs(a.handshake - b.handshake);
+}
+
+/* Ob das Zertifikat dieses Systems eine Ampel bekommt.
+
+   Zwei Wege, es sein zu lassen, und beide sind Betriebsentscheidungen:
+   ausdrücklich für dieses eine System (`tls_ignore`), oder allgemein für
+   alles Eigensignierte (`tls_selfsigned_ignore`, Vorgabe). Gemessen und
+   angezeigt wird in beiden Fällen weiter — die Zertifikatsliste führt es
+   als „nicht bewertet". Weggelassen wird nichts, nur nicht gemeldet. */
+export function tlsBewerten(host, tls, settings = {}) {
+  if (host?.tls_ignore) return false;
+  if (tls?.selfSigned && settings.tls_selfsigned_ignore !== false) return false;
+  return true;
+}
+
 export function findePeer(liste, wunsch) {
   if (!Array.isArray(liste) || !liste.length || !wunsch) return null;
   if (wunsch.key) {

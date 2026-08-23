@@ -39,6 +39,13 @@ settings:
   slow_ms: 800          # Antwortzeit, ab der es Gelb gibt
   tls_warn_days: 30
   tls_crit_days: 14
+  # Ein eigensigniertes Zertifikat bezeugt keine Herkunft — es trägt nur
+  # einen Schlüssel. Läuft es ab, ändert sich für den Betrieb nichts: wer
+  # es gestern angenommen hat, nimmt es heute an. Es bleibt deshalb ohne
+  # Ampel und steht in der Zertifikatsliste als „nicht bewertet". Auf
+  # false, wer die Ampel will. Einzelne Systeme: `tls_ignore: true` am
+  # Eintrag, dann wird deren Zertifikat nie bewertet.
+  tls_selfsigned_ignore: true
   # Belegung in Prozent. Gilt für Proxmox-Speicher, PBS-Datastores und die
   # Platte einer Firewall. Einzelne Systeme dürfen abweichen — siehe
   # `schwellen:` bei pve-01 weiter unten.
@@ -175,16 +182,29 @@ hosts:
 #             wann die Strecke zuletzt STAND, nicht ob gerade etwas
 #             hindurchkommt.
 #
+#  `peerB`  — dasselbe am anderen Ende. Eine Strecke hat zwei, und jede
+#             Firewall kennt nur die jeweils andere Seite: dasselbe Kabel,
+#             zweimal beschrieben. Ohne das zweite Ende steht dessen Zeile
+#             in der Gegenstellenliste für immer auf „keiner Strecke
+#             zugeordnet" — mitten in einer Strecke. Mit beiden Enden
+#             lassen sich die Auskünfte gegeneinander halten; für den
+#             Zustand zählt das frischere.
+#
 #  Eines von beidem muss es sein, am besten beides. Ausgewählt wird der
 #  Peer in der Verwaltung aus dem, was die Firewalls tatsächlich melden —
 #  von Hand geht es auch: `host` ist das System, das ihn meldet, `key` der
 #  öffentliche Schlüssel (überlebt eine Umbenennung), `name` und `iface`
 #  sind Beschriftung und Rückfall.
+#
+#  `net` und `probe.ip` muss man nicht abschreiben: sie stehen in den
+#  erlaubten Netzen der Peers, und die Verwaltung bietet sie zur Übernahme
+#  an, sobald ein Peer gewählt ist.
 # ============================================================
 tunnels:
   - { id: wg-hq-rz, a: hq, b: rz, iface: wg0, net: 10.99.0.0/30,
       probe: { ip: 10.99.0.2, port: 22 },
-      peer: { host: fw-01, iface: wg0, name: WG-Zweitstandort } }
+      peer:  { host: fw-01, iface: wg0, name: WG-Zweitstandort },
+      peerB: { host: fw-02, iface: wg0, name: WG-Hauptstandort } }
 
 # ============================================================
 #  Startseite

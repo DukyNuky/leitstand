@@ -164,6 +164,46 @@ gebaut.
       Stand **und** als Zuwachs seit dem letzten Durchlauf geführt — nur der
       Zuwachs ist eine Nachricht, und eine Ampel machen sie bewusst nicht.
 
+- [x] **2.8 Beide Enden einer VPN-Strecke** — gebaut. Ein Tunnel darf neben
+      `peer` ein `peerB` benennen: den Peer, den die *andere* Firewall meldet.
+      Der Anlass kam aus dem Betrieb — eine verknüpfte Strecke, und die
+      Gegenzeile in der Gegenstellenliste behauptete trotzdem, zu keiner
+      Strecke zu gehören. Sie tat es zu Recht: verknüpft war nur ein Ende.
+      Für den Zustand zählt jetzt das **frischere** der beiden (WireGuard
+      erneuert den Handshake nur bei Verkehr, und die Firewalls werden zu
+      verschiedenen Zeitpunkten abgefragt); liegen sie weit auseinander, ist
+      das eine Notiz — dieselbe Strecke wäre sich einig.
+      Dazu werden **Tunneladressen und Netze gelesen** statt abgeschrieben:
+      was eine Firewall als `allowed-ips` meldet, ist die Adresse des anderen
+      Endes (/32 bzw. /128) und die Netze dahinter. Beides steht an der
+      Strecke und lässt sich im Formular als `probe.ip` bzw. `net` übernehmen
+      — angeboten, nicht stillschweigend eingetragen: welches Ende von hier
+      aus erreichbar ist, weiß der Betreiber und nicht der Dienst.
+
+- [x] **2.9 Datastores des Backup Servers** — gebaut. Bisher war ein
+      Datastore ein Prozentsatz. Jetzt steht je Datastore auch der freie
+      Platz (von PBS, nicht aus `total − used` gerechnet — bei ZFS mit
+      Reservierungen wäre das falsch), die Gesamtgröße, PBS' eigene
+      Schätzung, *wann er voll ist*, sowie die letzte Sicherung, das letzte
+      Aufräumen und die letzte Prüfung, je mit Erfolg oder Fehlschlag. „Nie
+      geprüft" ist eine Auskunft und steht als solche da. Ohne
+      `estimated-full-date` wird nichts hochgerechnet.
+
+- [x] **2.10 Abgelaufene eigensignierte Zertifikate** — erledigt. Sie
+      bezeugen keine Herkunft, sondern tragen nur einen Schlüssel; läuft
+      eines ab, ändert sich für den Betrieb nichts. Eine rote Ampel dafür ist
+      genau die Meldung, die man zu übergehen lernt — und mit ihr die
+      nächste, die zählt. Sie bekommen deshalb keine (`tls_selfsigned_ignore`,
+      Vorgabe `true`), stehen aber weiter in der Zertifikatsliste, dort als
+      „nicht bewertet". Einzelne Systeme: `tls_ignore: true`.
+
+- [x] **2.11 Fassung einer OPNsense ohne anstehendes Update** — erledigt.
+      `firmware/status` nennt `product_version` nur, wenn es zu den
+      Aktualisierungen etwas zu sagen gibt; auf einem gepflegten Gerät fehlte
+      die Fassung deshalb, auf einem vernachlässigten stand sie da. Gefragt
+      wird jetzt der Reihe nach: `firmware/status`, `firmware/info`, zuletzt
+      die Zeile aus `system_information.versions`.
+
 ---
 
 ## 3. Alarmierung — Push-Kanäle und Totmannschalter

@@ -24,16 +24,17 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 
 ## Proxmox Backup Server — 2 Instanzen
 
-> **Gebaut** — meldet fehlgeschlagene Verify-, GC- und Sync-Aufträge der letzten
-> 24 Stunden als kritische Störung.
+> **Gebaut** — jeder Datastore einzeln, dazu fehlgeschlagene Verify-, GC- und
+> Sync-Aufträge der letzten 24 Stunden als kritische Störung.
 
 | | |
 |---|---|
 | Zugang | API-Token, Rolle `Audit` auf `/` mit Propagate, Port 8007, `Authorization: PBSAPIToken=leitstand@pbs!ro:<uuid>` — **Doppelpunkt** vor dem Geheimnis, nicht `=` wie bei VE und PMG |
 | Rechte | `Audit` deckt beides ab: `Datastore.Audit` für die Belegung *und* `Sys.Audit` auf `/system/tasks` für die Aufgabenliste. `DatastoreAudit` allein reicht **nicht** — die Belegung käme an, die fehlgeschlagenen Aufträge blieben unsichtbar. Die Berechtigung gehört auf die **Token-ID**: PBS schneidet die Rechte des Tokens mit denen des Benutzers, eigene ACL-Einträge für das Token sind Pflicht |
-| Endpunkte | `/api2/json/status/datastore-usage`, `/api2/json/nodes/localhost/tasks?running=0`, `/api2/json/admin/datastore/{store}/snapshots` |
-| Kennzahlen | Belegung je Datastore, letzter erfolgreicher Lauf, fehlgeschlagene Verify-/GC-/Sync-Aufträge, Alter der jüngsten Sicherung |
-| Ampel | kein Erfolg in 26 h → rot · fehlgeschlagener Verify → rot · Belegung > 85 % → gelb |
+| Endpunkte | `/api2/json/status/datastore-usage`, `/api2/json/admin/datastore`, `/api2/json/nodes/localhost/tasks?limit=60&errors=1` **und** `?limit=200`. Zwei Aufgabenlisten, weil sie zwei Fragen beantworten: die gefilterte findet Fehler auch dann, wenn hundert geglückte Sicherungen davorstehen; die ungefilterte sagt, wann ein Datastore zuletzt gesichert, aufgeräumt und geprüft wurde |
+| Kennzahlen | je Datastore: Belegung, belegt/frei/gesamt in Bytes, `estimated-full-date` (PBS' eigene Schätzung, wann er voll ist), letzte Sicherung, letztes Aufräumen, letzte Prüfung — je mit Erfolg oder Fehlschlag —, Kommentar und Wartungsmodus. Dazu, wie bisher: der vollste Datastore als Kennzahl des Systems, fehlgeschlagene Aufträge, letzter Erfolg |
+| Zuordnung | PBS hängt den Datastore vor die Kennung der Aufgabe (`main:host/web-01/…`). Alles vor dem ersten Doppelpunkt ist der Datastore — **aber nur, wenn es auch einer ist**: eine ältere Sicherung namens `vm/101` wird sonst zum erfundenen Datastore |
+| Ampel | fehlgeschlagener Auftrag in 24 h → rot · Belegung über der Grenze des Systems (Vorgabe 90 %) → rot, ab 80 % gelb · laut PBS in ≤ 14 Tagen voll → gelb. Ohne `estimated-full-date` wird **nichts** hochgerechnet |
 | Meldet per Mail | Notification-Matcher für `verify`, `garbage collection`, `sync` — der Regelfall für eine Störung aus dem Postfach (Stufe 4) |
 
 ## Proxmox Mail Gateway
@@ -57,10 +58,11 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 > Gateways, Zustandstabelle und CARP ist die Anbindung vollständig bis auf die
 > HAProxy-Backends.
 
-| Endpunkte | `/api/core/firmware/status` (Version, ausstehende Updates), `/api/diagnostics/interface/get_interface_statistics` (ältere Fassungen: `getInterfaceStatistics`), `/api/interfaces/overview/export` (Verbindungszustand, Beschreibung, MTU — fehlt auf älteren Fassungen), `/api/routes/gateway/status`, `/api/diagnostics/firewall/pf_statistics/state`, `/api/diagnostics/interface/get_vip_status` (CARP), `/api/wireguard/service/show`, HAProxy-Plugin für Backend-Zustände |
+| Endpunkte | `/api/core/firmware/status` (Version, ausstehende Updates), `/api/core/firmware/info` (Version auch dann, wenn nichts ansteht), `/api/diagnostics/interface/get_interface_statistics` (ältere Fassungen: `getInterfaceStatistics`), `/api/interfaces/overview/export` (Verbindungszustand, Beschreibung, MTU — fehlt auf älteren Fassungen), `/api/routes/gateway/status`, `/api/diagnostics/firewall/pf_statistics/state`, `/api/diagnostics/interface/get_vip_status` (CARP), `/api/wireguard/service/show`, HAProxy-Plugin für Backend-Zustände |
 | Kennzahlen | Version + Updatestand, **je Schnittstelle** Durchsatz ↓/↑ in Mbit/s, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand *und* Zuwachs), Kollisionen, Verbindungszustand, MTU · **Gateways** mit Zustand, Latenz, Schwankung und Verlust · **Zustandstabelle** belegt/maximal · **CARP**-Rolle und Wartungsmodus · WireGuard-Peers mit Handshake-Alter |
 | Zähler, nicht Raten | Was hier zurückkommt, sind kumulative Zähler seit dem Neustart. Durchsatz gibt es erst aus der Differenz zweier Abfragen — davor ein Strich, keine Null; nach einem Zählerrücksetzer ebenso |
 | Ampel | Gateway `down` → rot · Zustandstabelle > 90 % → rot, > 80 % → gelb · Verlust ≥ 2 % oder Zustand `loss`/`delay` → gelb · Platte und RAM nach den Schwellwerten (je System überschreibbar) · CARP-Rolle und ausstehende Aktualisierungen: **Notiz, keine Ampel** · Backend ohne aktiven Server → rot (offen) |
+| Fallstrick | `firmware/status` nennt `product_version` nur, wenn es zu den Aktualisierungen etwas zu sagen gibt. Auf einem Gerät, das gerade auf dem letzten Stand ist, fehlt das Feld — dann stand in der Übersicht bei den gepflegten Geräten ein Strich und bei den vernachlässigten eine Zahl, genau verkehrt herum. Gefragt wird deshalb der Reihe nach: `firmware/status`, `firmware/info` (dort je nach Fassung flach oder unter `product`), zuletzt die Zeile „OPNsense 26.1.11_10-amd64" aus `system_information.versions` |
 | Fallstrick | OPNsense schreibt beim Gateway `status: "none"`, wenn es steht und **nicht überwacht** wird. Das ist die Auskunft „nichts zu beanstanden" und nicht das Fehlen einer — als unbekannt gelesen stünde die halbe Tabelle grau da |
 | Fallstrick | Latenz und Verlust kommen als Text mit Einheit; wo nichts gemessen wurde, steht `~`. Das wird zu null, nicht zu 0 — eine tote Strecke als verlustfrei zu melden wäre schlimmer als eine Lücke |
 | Fallstrick | Die Zahl der Zustandstabelle liegt je nach Fassung flach im Antwortobjekt oder in einem Unterobjekt. Gesucht wird deshalb nach Namen über bis zu drei Ebenen; was sich nicht finden lässt, bleibt null |

@@ -214,11 +214,36 @@ hindurchkommt. Widersprechen sie sich — Antwort da, Handshake uralt —, dann
 zeigt die Verknüpfung auf den falschen Peer, und genau das schreibt der Dienst
 als Notiz an die Strecke, ohne die Ampel zu drehen.
 
+**Eine Strecke hat zwei Enden.** Neben `peer` darf ein Tunnel deshalb ein
+`peerB` benennen: den Peer, den die *andere* Firewall meldet. Jede kennt nur
+die jeweils andere Seite — dasselbe Kabel, zweimal beschrieben. Das hat zwei
+Folgen. Erstens stimmt die Zuordnung in beide Richtungen: ohne das zweite Ende
+steht die Gegenzeile in der Gegenstellenliste für immer auf „keiner Strecke
+zugeordnet", mitten in einer Strecke. Zweitens lassen sich die beiden Auskünfte
+gegeneinander halten — dieselbe Strecke ist sich über ihren Handshake einig;
+liegen die Enden weit auseinander, zeigt eine der Verknüpfungen woandershin,
+und das steht als Notiz da.
+
+Für den Zustand zählt das **frischere** Ende. WireGuard erneuert den Handshake
+nur, wenn Verkehr fließt, und die beiden Firewalls werden zu verschiedenen
+Zeitpunkten abgefragt; vom älteren auszugehen hieße, eine tragende Strecke rot
+zu melden. Ein `peerB` ohne `peer` gibt es nicht — es rückt beim Einlesen auf,
+damit sich alles Weitere auf ein Feld verlassen darf.
+
 Zugeordnet wird über den **öffentlichen Schlüssel**, nicht über den Namen: der
 Schlüssel übersteht eine Umbenennung auf der Firewall. Ein Name greift nur als
 Rückfall und nur, wenn er eindeutig ist — lieber kein Treffer als der falsche,
 denn ein falscher meldete den Handshake eines fremden Geräts als den dieser
 Strecke.
+
+**Transfernetz und Gegenstelle stehen schon da.** Was eine Firewall als
+`allowed-ips` eines Peers meldet, ist zweierlei in einer Zeile: die Adresse des
+anderen Endes im Transfernetz — eine /32 beziehungsweise /128 — und die Netze,
+die dahinter geroutet werden. Der Dienst trennt beides und zeigt es an der
+Strecke; im Formular lässt es sich mit einem Klick als `probe.ip`
+beziehungsweise `net` übernehmen. Stillschweigend eingetragen wird nichts: von
+hier aus ist nur eines der beiden Enden erreichbar, und welches, weiß der
+Betreiber, nicht der Dienst.
 
 **Zwei Prüfziele, nicht eines.** Port- und TLS-Prüfung fragen zuerst die IP des
 Systems und, wenn dort nichts antwortet, den Namen aus seiner

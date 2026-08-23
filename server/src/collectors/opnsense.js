@@ -40,6 +40,7 @@ export function baseUrl(host) {
    `alternativen` fängt die Umbenennungen zwischen den OPNsense-Fassungen. */
 export const PFADE = [
   { pfad: "/api/core/firmware/status", zweck: "Fassung und offene Aktualisierungen" },
+  { pfad: "/api/core/firmware/info", zweck: "Fassung, auch wenn nichts ansteht", optional: true },
   {
     pfad: "/api/diagnostics/system/system_information",
     alternativen: ["/api/diagnostics/system/systemInformation"],
@@ -117,7 +118,7 @@ export async function testConnection(host, cred) {
   if (!fw.ok) return { ok: false, detail: fw.error, hint: hintFor(fw) };
 
   const d = fw.data || {};
-  const fassung = d.product_version || d.product?.product_version || d.os_version || null;
+  let fassung = d.product_version || d.product?.product_version || null;
   const teile = [`Verbunden — OPNsense${fassung ? " " + fassung : ""}`];
 
   /* Der Diagnose-Zweig hängt an anderen Rechten als der Firmware-Zweig. */
@@ -134,6 +135,12 @@ export async function testConnection(host, cred) {
     };
   }
   teile.push("Systemauskunft lesbar");
+  /* Steht auf einem gepflegten Gerät keine Fassung in der Firmware-
+     Auskunft, steht sie hier — in der Liste, die auch die Oberfläche zeigt. */
+  if (!fassung) {
+    fassung = ausVersionsliste(sys.data, /^OPNsense/);
+    if (fassung) teile[0] = `Verbunden — OPNsense ${fassung}`;
+  }
 
   const wg = await api(host, cred, "/api/wireguard/service/show", 6000);
   teile.push(wg.ok ? "WireGuard lesbar" : "WireGuard nicht lesbar (Plugin fehlt oder keine Rechte)");
@@ -187,8 +194,9 @@ const zaehlerSchluessel = host => host.id + "@" + baseUrl(host);
 
 export async function collectOpnsense(host, cred, settings) {
   const grenze = schwellenFuer(host, settings);
-  const [fw, sys, res, disk, ifs, uebersicht, wg, zeit, gws, states, vips] = await Promise.all([
+  const [fw, info, sys, res, disk, ifs, uebersicht, wg, zeit, gws, states, vips] = await Promise.all([
     api(host, cred, "/api/core/firmware/status"),
+    api(host, cred, "/api/core/firmware/info"),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_information", "/api/diagnostics/system/systemInformation"]),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_resources", "/api/diagnostics/system/systemResources"]),
     ersterTreffer(host, cred, ["/api/diagnostics/system/system_disk", "/api/diagnostics/system/systemDisk"]),
@@ -207,7 +215,7 @@ export async function collectOpnsense(host, cred, settings) {
   if (!fw.ok) return { error: fw.error, note: fw.error, status: (fw.status === 401 || fw.status === 403) ? "warn" : undefined };
 
   const out = {};
-  fassung(out, fw.data || {});
+  fassung(out, fw.data || {}, info.ok ? info.data : null, sys.ok ? sys.data : null);
   speicher(out, res.ok ? res.data : null);
   platte(out, disk.ok ? disk.data : null);
   laufzeit(out, sys.ok ? sys.data : null, zeit.ok ? zeit.data : null);
@@ -222,11 +230,25 @@ export async function collectOpnsense(host, cred, settings) {
   return out;
 }
 
-/* ---------- Fassung und Aktualisierungen ---------- */
-function fassung(out, d) {
-  out.version = d.product_version || null;
-  out.abi = d.product_abi || null;
-  out.os = d.os_version || null;
+/* ---------- Fassung und Aktualisierungen ----------
+
+   Die Fassung steht an drei Stellen, und keine trägt sie zuverlässig:
+
+   `/api/core/firmware/status` nennt `product_version` nur, wenn zur
+   Antwort auch etwas über Aktualisierungen zu sagen ist. Auf einem
+   Gerät, das gerade auf dem letzten Stand ist, fehlt das Feld schlicht —
+   und dann stand in der Übersicht bei den gepflegten Geräten ein Strich
+   und bei den vernachlässigten eine Zahl. Genau verkehrt herum.
+
+   `/api/core/firmware/info` trägt sie immer, aber je nach Fassung flach
+   oder unter `product`. `/api/diagnostics/system/system_information`
+   schließlich führt sie als Zeile in einer Liste („OPNsense 24.7.5_1-
+   amd64"). Gefragt wird der Reihe nach; die erste Antwort gilt. */
+function fassung(out, d, info, sys) {
+  const p = info?.product || {};
+  out.version = d.product_version || p.product_version || info?.product_version || ausVersionsliste(sys, /^OPNsense/) || null;
+  out.abi = d.product_abi || p.product_abi || info?.product_abi || null;
+  out.os = d.os_version || ausVersionsliste(sys, /^FreeBSD/) || null;
   /* Alles Boolesche kommt hier als "0"/"1". */
   out.needsReboot = d.needs_reboot === "1" || d.needs_reboot === 1;
   out.lastCheck = d.last_check || null;
@@ -238,6 +260,18 @@ function fassung(out, d) {
      Paketaktualisierungen — und wird deshalb getrennt geführt. */
   out.majorUpgrade = d.upgrade_major_version || null;
   out.upgradeSets = Array.isArray(d.upgrade_sets) ? d.upgrade_sets.length : null;
+}
+
+/* Aus „OPNsense 24.7.5_1-amd64" wird „24.7.5_1-amd64", aus
+   „FreeBSD 14.1-RELEASE-p3" der Rest dahinter. Steht dort nur ein Wort,
+   gibt es nichts abzuschneiden — dann ist das Wort die Auskunft. */
+function ausVersionsliste(sys, muster) {
+  const liste = Array.isArray(sys?.versions) ? sys.versions : null;
+  if (!liste) return null;
+  const zeile = liste.map(String).find(z => muster.test(z.trim()));
+  if (!zeile) return null;
+  const rest = zeile.trim().replace(/^\S+\s+/, "").trim();
+  return rest || zeile.trim();
 }
 
 /* ---------- Arbeitsspeicher ---------- */

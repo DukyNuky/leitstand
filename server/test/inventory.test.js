@@ -431,3 +431,69 @@ test("Eigene Schwellwerte überleben Schreiben und Lesen", () => {
   }));
   assert.deepEqual(Inv.load(file).hosts[0].schwellen, { disk_warn: 93, disk_crit: 97 });
 });
+
+/* ============================================================
+   Beide Enden eines Tunnels
+   ============================================================ */
+
+/* Eine Strecke hat zwei Enden, und jede Firewall meldet nur das jeweils
+   andere. Wird nur eines verknüpft, behauptet die Gegenzeile in der
+   Peerliste, zu keiner Strecke zu gehören — mitten in einer. */
+test("Ein Tunnel darf beide Enden benennen", () => {
+  const t = Inv.normalizeTunnel({
+    id: "wg", a: "hq", b: "rz",
+    peer: { host: "fw-01", iface: "wg0", name: "Schweiz", key: "Aqujl" },
+    peerB: { host: "fw-02", iface: "wg0", name: "Köln", key: "Kx7Qd" }
+  });
+  assert.deepEqual(t.peer, { host: "fw-01", iface: "wg0", name: "Schweiz", key: "Aqujl" });
+  assert.deepEqual(t.peerB, { host: "fw-02", iface: "wg0", name: "Köln", key: "Kx7Qd" });
+});
+
+/* Ein zweites Ende ohne erstes gibt es nicht — sonst müsste jede Stelle,
+   die einen Peer liest, zwei Felder abfragen, um eines zu finden. */
+test("Steht nur das zweite Ende da, rückt es auf", () => {
+  const t = Inv.normalizeTunnel({ id: "wg", a: "hq", b: "rz", peerB: { host: "fw-02", name: "Köln" } });
+  assert.deepEqual(t.peer, { host: "fw-02", name: "Köln" });
+  assert.equal(t.peerB, undefined);
+});
+
+test("Ein gelöstes zweites Ende steht nicht als null in der Datei", () => {
+  const file = tmp();
+  const inv = Inv.normalize({
+    settings: { icmp: false }, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "fw-01", type: "opnsense", site: "hq", ip: "10.0.0.1" }],
+    tunnels: [{ id: "t", a: "hq", b: "hq", peer: { host: "fw-01", name: "X", key: "A" } }], links: []
+  });
+  inv.tunnels[0].peerB = null;
+  const text = Inv.save(file, inv);
+  assert.ok(!/peerB/.test(text), "das leere zweite Ende steht noch in der Datei:\n" + text);
+});
+
+test("Beide Enden auf demselben Peer wären nicht zwei Enden", () => {
+  assert.throws(() => Inv.normalize({
+    settings: {}, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "fw-01", type: "opnsense", site: "hq", ip: "10.0.0.1" }],
+    tunnels: [{ id: "t", a: "hq", b: "hq",
+      peer: { host: "fw-01", name: "X", key: "A" }, peerB: { host: "fw-01", name: "X", key: "A" } }],
+    links: []
+  }), /dasselbe|denselben/);
+});
+
+test("Ein zweites Ende auf einem unbekannten System wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({
+    settings: {}, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "fw-01", type: "opnsense", site: "hq", ip: "10.0.0.1" }],
+    tunnels: [{ id: "t", a: "hq", b: "hq",
+      peer: { host: "fw-01", name: "X", key: "A" }, peerB: { host: "gibtsnicht", name: "Y", key: "B" } }],
+    links: []
+  }), /gibtsnicht/);
+});
+
+/* ---------- Zertifikat eines einzelnen Systems ---------- */
+
+test("„Zertifikat nicht bewerten“ steht nur da, wenn es gesetzt ist", () => {
+  const an = Inv.normalizeHost({ id: "a", type: "pve", site: "hq", ip: "10.0.0.1", tls_ignore: true });
+  const aus = Inv.normalizeHost({ id: "b", type: "pve", site: "hq", ip: "10.0.0.2", tls_ignore: false });
+  assert.equal(an.tls_ignore, true);
+  assert.equal("tls_ignore" in aus, false, "ein false an jedem Eintrag wäre Lärm in der Datei");
+});

@@ -112,6 +112,39 @@ test("PBS-Sammler erkennt fehlgeschlagenen Verify-Job", async () => {
   assert.match(r.note, /verify nas-archive/);
 });
 
+/* Ein Datastore ist nicht nur ein Prozentsatz. Was ihn beurteilbar macht,
+   sind die Zeitpunkte daneben: seit wann nichts mehr hineingesichert
+   wurde, wann zuletzt aufgeräumt und wann zuletzt geprüft wurde. */
+test("Jeder Datastore steht mit Belegung, freiem Platz und seinen Läufen da", async () => {
+  const r = await collectPbs({ id: "pbs", url }, cred);
+  const main = r.stores.find(s => s.name === "main");
+  const archiv = r.stores.find(s => s.name === "nas-archive");
+
+  assert.equal(main.used, 74);
+  assert.equal(main.availBytes, 1_100_000_000_000, "der freie Platz kommt von PBS, nicht aus total − used");
+  assert.equal(main.totalBytes, 5_000_000_000_000);
+  assert.equal(main.comment, "Tägliche Sicherung");
+  assert.ok(main.lastBackup, "die Sicherung nach main wird zugeordnet");
+  assert.equal(main.backupOk, true);
+  assert.ok(main.lastGc, "und der Aufräumlauf auch");
+  assert.equal(main.lastVerify, null, "geprüft wurde main noch nie — das ist keine Null, sondern ein Nie");
+
+  assert.equal(archiv.wartung, "read-only");
+  assert.equal(archiv.verifyOk, false, "der fehlgeschlagene Verify hängt am Archiv");
+  assert.equal(archiv.lastBackup, null, "„vm/101“ ist kein Datastore und wird keinem zugeschlagen");
+});
+
+/* PBS rechnet selbst aus, wann ein Datastore voll ist. Diese Zahl ist die
+   einzige, die eine Nacht vorher warnt — aber nur, wo es sie gibt. */
+test("Bald voll heißt gelb, und ohne Schätzung wird nichts geschätzt", async () => {
+  const r = await collectPbs({ id: "pbs", url }, cred);
+  const main = r.stores.find(s => s.name === "main");
+  assert.equal(main.vollInTagen, 9);
+  assert.ok(main.vollAm);
+  assert.equal(r.stores.find(s => s.name === "nas-archive").vollInTagen, null,
+    "„estimated-full-date: 0“ heißt keine Schätzung, nicht „heute“");
+});
+
 test("PMG-Sammler liest die Tagesstatistik", async () => {
   const r = await collectPmg({ id: "pmg", url }, { tokenId: "ro", secret: "1a2b3c4d-0000-1111-2222-333344445555", user: "leitstand@pve" });
   assert.equal(r.in24, 1840);

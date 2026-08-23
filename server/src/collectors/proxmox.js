@@ -327,34 +327,157 @@ function pickNode(nodes, host) {
 /* ---------- Proxmox Backup Server ---------- */
 export async function collectPbs(host, cred, settings) {
   const grenze = schwellenFuer(host, settings);
-  const [useRes, taskRes, verRes] = await Promise.all([
+  /* Zwei Aufgabenlisten, weil sie zwei verschiedene Fragen beantworten:
+     die gefilterte findet Fehler auch dann, wenn hundert geglückte
+     Sicherungen davorstehen; die ungefilterte sagt, wann ein Datastore
+     zuletzt gesichert, aufgeräumt und geprüft wurde. Eine Liste allein
+     könnte immer nur das eine. */
+  const [useRes, fehlRes, alleRes, verRes, dsRes] = await Promise.all([
     api(host, "pbs", cred, "/status/datastore-usage"),
     api(host, "pbs", cred, "/nodes/localhost/tasks?limit=60&errors=1"),
-    api(host, "pbs", cred, "/version")
+    api(host, "pbs", cred, "/nodes/localhost/tasks?limit=200"),
+    api(host, "pbs", cred, "/version"),
+    api(host, "pbs", cred, "/admin/datastore")
   ]);
   if (!useRes.ok) return { error: useRes.error, note: useRes.error };
 
-  const stores = (useRes.data?.data || []).map(d => ({
-    name: d.store,
-    used: d.total ? pct(d.used / d.total) : null
-  }));
-  const out = { version: verRes.ok ? verRes.data?.data?.version : null, datastores: stores.length, stores, schwellen: grenze };
+  /* Was der Betreiber am Datastore hinterlegt hat: Kommentar und, wenn
+     gesetzt, der Wartungsmodus. Fehlt das Recht dafür, fehlt eben die
+     Beschriftung — die Belegung steht davon unberührt. */
+  const beschriftung = new Map();
+  for (const d of (dsRes.ok ? dsRes.data?.data || [] : [])) {
+    if (!d?.store) continue;
+    beschriftung.set(d.store, {
+      comment: d.comment || null,
+      wartung: wartungsText(d.maintenance ?? d["maintenance-mode"])
+    });
+  }
+
+  const alle = alleRes.ok ? (alleRes.data?.data || []) : [];
+  const namen = new Set((useRes.data?.data || []).map(d => d.store).filter(Boolean));
+
+  const stores = (useRes.data?.data || []).map(d => {
+    const b = beschriftung.get(d.store) || {};
+    const letzte = letzteAufgaben(alle, d.store, namen);
+    return {
+      name: d.store,
+      used: d.total ? pct(d.used / d.total) : null,
+      usedBytes: zahl(d.used), totalBytes: zahl(d.total),
+      /* PBS meldet den freien Platz selbst; ihn aus total − used zu
+         rechnen wäre bei ZFS mit Reservierungen schlicht falsch. */
+      availBytes: zahl(d.avail),
+      /* Wann der Datastore voll ist, schätzt PBS aus seinem eigenen
+         Verlauf. Ohne diese Angabe bleibt es bei null: eine Hochrechnung
+         über zwei Messpunkte wäre geraten, nicht gewusst. */
+      vollAm: vollDatum(d),
+      vollInTagen: vollTage(d),
+      comment: b.comment || null,
+      wartung: b.wartung || null,
+      ...letzte
+    };
+  });
+
+  const out = {
+    version: verRes.ok ? verRes.data?.data?.version : null,
+    datastores: stores.length, stores, schwellen: grenze
+  };
   const fullest = stores.filter(s => s.used != null).sort((a, b) => b.used - a.used)[0];
   out.used = fullest ? fullest.used : null;
 
-  const tasks = taskRes.ok ? (taskRes.data?.data || []) : [];
+  const tasks = fehlRes.ok ? (fehlRes.data?.data || []) : [];
   const failed = tasks.filter(t => t.status && t.status !== "OK" && t.endtime && (Date.now() / 1000 - t.endtime) < 86400);
   out.failed = failed.length;
+
+  /* Bald voll ist etwas anderes als voll: die Zahl kommt von PBS, und sie
+     ist die einzige, die eine Nacht im Voraus warnt statt am Morgen
+     danach zu melden. Rot wird davon nichts — dafür ist die Belegung da. */
+  const knapp = stores.filter(s => s.vollInTagen != null && s.vollInTagen <= 14)
+    .sort((a, b) => a.vollInTagen - b.vollInTagen)[0];
+
   if (failed.length) {
     const f = failed[0];
     out.status = "crit";
     out.note = `${failed.length} fehlgeschlagene Aufgabe(n) in 24 h — zuletzt ${f.worker_type || "Job"} ${f.worker_id || ""}`.trim();
   } else if (fullest && fullest.used >= grenze.disk_crit) { out.status = "crit"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt (kritisch ab ${grenze.disk_crit} %)`; }
   else if (fullest && fullest.used >= grenze.disk_warn) { out.status = "warn"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt`; }
+  else if (knapp) {
+    out.status = "warn";
+    out.note = knapp.vollInTagen <= 0
+      ? `Datastore ${knapp.name} ist nach eigener Schätzung von PBS voll`
+      : `Datastore ${knapp.name} ist in ${knapp.vollInTagen} Tag(en) voll — geschätzt von PBS selbst`;
+  }
+
   const ok = tasks.find(t => t.status === "OK" && t.endtime);
   out.lastGood = ok ? new Date(ok.endtime * 1000).toISOString() : null;
+  /* Der letzte Erfolg steht in der gefilterten Liste nur zufällig — die
+     ungefilterte kennt ihn immer. */
+  if (!out.lastGood) {
+    const jung = alle.filter(t => t.status === "OK" && t.endtime).sort((a, b) => b.endtime - a.endtime)[0];
+    out.lastGood = jung ? new Date(jung.endtime * 1000).toISOString() : null;
+  }
   return out;
 }
+
+/* PBS hängt den Datastore vor die Kennung der Aufgabe:
+     backup   → „main:host/web-01/2026-08-23T01:00:00Z"
+     verify   → „main" oder „main:snapshot"
+     gc       → „main"
+   Alles vor dem ersten Doppelpunkt ist der Datastore — aber nur, wenn es
+   auch einer ist. Sonst hieße ein Sicherungslauf namens „vm/101" ein
+   Datastore, und die Zeile stünde beim falschen. */
+export function storeAus(workerId, namen) {
+  const s = String(workerId || "").split(":")[0].trim();
+  if (!s) return null;
+  if (namen && !namen.has(s)) return null;
+  return s;
+}
+
+const ART = [
+  ["lastBackup", "backupOk", t => /^backup$/.test(t)],
+  ["lastGc", "gcOk", t => /garbage/.test(t)],
+  ["lastVerify", "verifyOk", t => /^verif/.test(t)],
+  ["lastPrune", "pruneOk", t => /^prune$/.test(t)]
+];
+
+/* Wann an diesem Datastore zuletzt gesichert, aufgeräumt und geprüft
+   wurde — und ob es glückte. Läuft eine Art noch nie, bleibt sie null:
+   „noch nie aufgeräumt" ist eine Auskunft, „vor 0 Tagen" wäre eine
+   Falschmeldung. */
+export function letzteAufgaben(tasks, store, namen) {
+  const out = {};
+  for (const [feld, okFeld] of ART) { out[feld] = null; out[okFeld] = null; }
+  const meine = (tasks || [])
+    .filter(t => t?.endtime && storeAus(t.worker_id ?? t.id, namen) === store)
+    .sort((a, b) => b.endtime - a.endtime);
+  for (const [feld, okFeld, passt] of ART) {
+    const t = meine.find(x => passt(String(x.worker_type ?? x.type ?? "")));
+    if (!t) continue;
+    out[feld] = new Date(t.endtime * 1000).toISOString();
+    out[okFeld] = t.status === "OK";
+  }
+  return out;
+}
+
+/* PBS schätzt selbst, wann ein Datastore voll ist — als Zeitstempel in
+   Sekunden, und 0 heißt „keine Schätzung möglich". */
+function vollDatum(d) {
+  const ts = zahl(d?.["estimated-full-date"] ?? d?.estimated_full_date);
+  return ts > 0 ? new Date(ts * 1000).toISOString() : null;
+}
+function vollTage(d) {
+  const ts = zahl(d?.["estimated-full-date"] ?? d?.estimated_full_date);
+  if (!(ts > 0)) return null;
+  return Math.max(0, Math.round((ts * 1000 - Date.now()) / 86400000));
+}
+
+/* Der Wartungsmodus kommt je nach Fassung als Text oder als Objekt. */
+function wartungsText(m) {
+  if (!m) return null;
+  if (typeof m === "string") return m;
+  if (typeof m === "object") return m.type || m.mode || null;
+  return null;
+}
+
 
 /* ---------- Proxmox Mail Gateway ---------- */
 export async function collectPmg(host, cred) {

@@ -6,6 +6,7 @@
    wird als Strich angezeigt — nie als Fantasiewert. */
 
 import { TYPES, schwellenFuer } from "./inventory.js";
+import { frischerPeer } from "./engine.js";
 import { buildInfo } from "./version.js";
 
 const uiStatus = s => (s === "unknown" ? "idle" : s);
@@ -89,8 +90,14 @@ function peerViews(inv, engine) {
      womöglich anders) zu bestimmen. */
   const streckeJePeer = new Map();
   for (const t of inv.tunnels) {
-    const p = engine.tunnels.get(t.id)?.peer;
-    if (p) streckeJePeer.set(`${p.host}|${p.iface || ""}|${p.key || p.name}`, t.id);
+    const st = engine.tunnels.get(t.id);
+    /* Beide Enden, nicht nur eines: eine Strecke hat zwei, und jede
+       Firewall meldet die andere Seite. Wäre hier nur das erste Ende
+       eingetragen, stünde die Gegenzeile in dieser Tabelle für immer
+       auf „keiner Strecke zugeordnet" — mitten in einer Strecke. */
+    for (const p of [st?.peer, st?.peerB]) {
+      if (p) streckeJePeer.set(`${p.host}|${p.iface || ""}|${p.key || p.name}`, t.id);
+    }
   }
 
   const out = [];
@@ -105,6 +112,11 @@ function peerViews(inv, engine) {
         name: p.name,
         device: p.allowed ? "erlaubt: " + p.allowed : (p.iface || ""),
         site: h.site, von: h.id, iface: p.iface || null,
+        /* Die erlaubten Netze, aufgeteilt in das, was eine Adresse im
+           Tunnel ist, und das, was dahinter liegt. Damit muss niemand
+           mehr abschreiben, was die Firewall ohnehin weiß. */
+        allowed: p.allowed || null,
+        ...netzeAus(p.allowed),
         /* Ruhend ist nicht gestört: ein Endgerät darf aus sein. Gemeldet
            wird das Handshake-Alter, bewertet wird es zurückhaltend. */
         status: p.handshake == null ? "idle"
@@ -163,6 +175,9 @@ function hostView(h, st = {}, settings = {}) {
       wesentlich: !!c.wesentlich
     })),
     tls: st.tls || null,
+    /* Ob dieses System sein Zertifikat bewertet bekommt — das Formular
+       braucht die Stellung des Schalters, die Zertifikatsliste den Grund. */
+    tlsIgnore: !!h.tls_ignore,
     /* aus einem Sammler, sonst null */
     cpu: x.cpu ?? null, ram: x.ram ?? null, disk: x.disk ?? null,
     vms: x.vms ?? null, lxc: x.lxc ?? null, running: x.running ?? null, stopped: x.stopped ?? null,
@@ -253,9 +268,16 @@ function shortOf(s) {
    Handshake und Mengen. */
 function tunnelView(t, st = {}) {
   const p = st.peer || null;
+  const pb = st.peerB || null;
+  /* Für Handshake und Mengen zählt das frischere Ende — genau wie im
+     Kern, der daraus den Zustand ableitet. Zwei Stellen, die dieselbe
+     Frage verschieden beantworten, wären schlimmer als eine Zahl weniger. */
+  const frisch = frischerPeer(p, pb);
+  const a = peerBlock(t.peer, p, st.peerNote);
+  const b = peerBlock(t.peerB, pb, st.peerBNote);
   return {
     id: t.id, a: t.a, b: t.b,
-    iface: p?.iface || t.iface || "wg0",
+    iface: p?.iface || pb?.iface || t.iface || "wg0",
     net: t.net || "—",
     status: uiStatus(st.status || "unknown"),
     rtt: st.ms ?? null,
@@ -263,20 +285,18 @@ function tunnelView(t, st = {}) {
     quelle: t.probe?.ip ? "probe" : "handshake",
     /* Handshake-Alter in Sekunden, sobald ein Peer verknüpft und gefunden
        ist — sonst weiterhin null, nicht null-als-Zahl. */
-    handshake: p?.handshake ?? null,
-    rx: bytes(p?.rx), tx: bytes(p?.tx),
-    peer: t.peer ? {
-      host: t.peer.host,
-      name: p?.name || t.peer.name || null,
-      key: p?.key || t.peer.key || null,
-      iface: p?.iface || t.peer.iface || null,
-      endpoint: p?.endpoint || null,
-      allowed: p?.allowed || null,
-      seit: p?.seit || null,
-      keepalive: p?.keepalive || null,
-      gefunden: !!p,
-      note: st.peerNote || null
-    } : null,
+    handshake: frisch?.handshake ?? null,
+    rx: bytes(frisch?.rx), tx: bytes(frisch?.tx),
+    peer: a,
+    peerB: b,
+    /* Wie weit die beiden Enden auseinanderliegen. Null heißt „nichts zu
+       vergleichen", nicht „einig". */
+    peerAbstand: st.peerAbstand ?? null,
+    /* Was die Firewalls über die Strecke selbst wissen: die Adressen im
+       Transfernetz und die Netze dahinter. Beides steht in den erlaubten
+       Netzen der Peers und musste bisher von Hand abgeschrieben werden. */
+    ips: vereinen(a?.ips, b?.ips),
+    netze: vereinen(a?.netze, b?.netze),
     mtu: t.mtu || null, keepalive: t.keepalive || null,
     probe: t.probe?.ip || null,
     /* Damit das Formular den Port beim Bearbeiten nicht verliert. */
@@ -286,6 +306,54 @@ function tunnelView(t, st = {}) {
     note: st.note || null
   };
 }
+
+/* Ein Ende der Strecke: was hinterlegt ist, ergänzt um das, was die
+   Firewall gerade meldet. Ohne Hinterlegung gibt es kein Ende — dann
+   steht hier null und nicht ein Objekt voller Striche. */
+function peerBlock(ref, p, note) {
+  if (!ref) return null;
+  const allowed = p?.allowed || null;
+  const { ips, netze } = netzeAus(allowed);
+  return {
+    host: ref.host,
+    name: p?.name || ref.name || null,
+    key: p?.key || ref.key || null,
+    iface: p?.iface || ref.iface || null,
+    endpoint: p?.endpoint || null,
+    allowed,
+    ips, netze,
+    handshake: p?.handshake ?? null,
+    rx: bytes(p?.rx), tx: bytes(p?.tx),
+    seit: p?.seit || null,
+    keepalive: p?.keepalive || null,
+    gefunden: !!p,
+    note: note || null
+  };
+}
+
+/* Was eine Firewall als „allowed-ips" meldet, ist zweierlei in einer
+   Zeile: die Adresse des anderen Endes im Transfernetz — eine /32
+   beziehungsweise /128 — und die Netze, die dahinter geroutet werden.
+   Getrennt ausgewiesen, weil man das eine anpingt und das andere nicht.
+
+   Ohne Präfix gilt die Angabe als einzelne Adresse: so schreibt es
+   niemand, aber wenn doch, ist sie eher ein Host als ein Netz. */
+export function netzeAus(allowed) {
+  const ips = [], netze = [];
+  for (const teil of String(allowed || "").split(/[,\s]+/)) {
+    const t = teil.trim();
+    if (!t) continue;
+    const [adr, praefix] = t.split("/");
+    if (!adr) continue;
+    const p = Number(praefix);
+    const voll = adr.includes(":") ? 128 : 32;
+    if (praefix === undefined || p === voll) ips.push(adr);
+    else if (Number.isFinite(p)) netze.push(t);
+  }
+  return { ips, netze };
+}
+
+const vereinen = (...listen) => [...new Set(listen.flat().filter(Boolean))];
 
 function incidentViews(engine) {
   const now = Date.now();
@@ -308,6 +376,9 @@ function incidentViews(engine) {
 }
 const sevRank = s => ({ crit: 0, warn: 1, info: 2 }[s] ?? 3);
 
+/* Ein nicht bewertetes Zertifikat verschwindet nicht aus der Liste — es
+   verliert nur seine Ampel. Wer wissen will, was da abgelaufen ist,
+   findet es weiter; wer auf Farben schaut, wird nicht davon abgelenkt. */
 function certViews(hosts) {
   return hosts
     .filter(h => h.tls && h.tls.days != null)
@@ -317,7 +388,9 @@ function certViews(hosts) {
       days: h.tls.days,
       where: `${h.name}${h.tls.port ? ":" + h.tls.port : ""}`,
       selfSigned: !!h.tls.selfSigned,
-      status: h.tls.days <= 14 ? "crit" : h.tls.days <= 30 ? "warn" : "ok"
+      bewertet: h.tls.bewertet !== false,
+      status: h.tls.bewertet === false ? "idle"
+        : h.tls.days <= 14 ? "crit" : h.tls.days <= 30 ? "warn" : "ok"
     }))
     .sort((a, b) => a.days - b.days);
 }

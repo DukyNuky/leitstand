@@ -1224,3 +1224,171 @@ test("Die Typen der Oberfläche stimmen mit denen des Dienstes überein", async 
       `„${id}“ hat im Dienst ${TYPES[id].api ? "einen" : "keinen"} Sammler — die Oberfläche sagt das Gegenteil`);
   }
 });
+
+/* ============================================================
+   Beide Enden einer Strecke in der Oberfläche
+   ============================================================ */
+
+const PEERZUSTAND2 = [
+  ...PEERZUSTAND,
+  { id: "fw2/wg0/nach-HQ", name: "nach-HQ", key: "Kx7Qd", iface: "wg0", von: "fw2", site: "hq",
+    device: "erlaubt: 10.99.0.1/32", status: "ok", handshake: 95, seit: "2026-08-20 14:15:41",
+    ip: "10.99.0.1/32", allowed: "10.99.0.1/32", ips: ["10.99.0.1"], netze: [],
+    endpoint: "203.0.113.5:51820", rx: "3.9 GB", tx: "1.1 GB", tunnel: "wg-hq-rz" }
+];
+
+async function mitBeidenEnden() {
+  const zustand = await echterZustand();
+  zustand.peers = PEERZUSTAND2.map(p => ({ ...p, ips: p.ips ?? [], netze: p.netze ?? [] }));
+  Object.assign(zustand.tunnels[0], {
+    handshake: 80, rx: "1.1 GB", tx: "3.9 GB",
+    ips: ["10.99.0.2", "10.99.0.1"], netze: ["192.168.20.0/24"],
+    peer: { host: "fw", name: "WG-Schweiz", key: "Aqujl", iface: "wg0", gefunden: true,
+      endpoint: "178.39.98.174:8909", allowed: "10.99.0.2/32, 192.168.20.0/24",
+      ips: ["10.99.0.2"], netze: ["192.168.20.0/24"], handshake: 80, rx: "1.1 GB", tx: "3.9 GB", note: null },
+    peerB: { host: "fw2", name: "nach-HQ", key: "Kx7Qd", iface: "wg0", gefunden: true,
+      endpoint: "203.0.113.5:51820", allowed: "10.99.0.1/32",
+      ips: ["10.99.0.1"], netze: [], handshake: 95, rx: "3.9 GB", tx: "1.1 GB", note: null }
+  });
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  return { sandbox, ziele, zustand };
+}
+
+test("Die Tunnelzeile nennt beide Firewalls, nicht nur eine", async () => {
+  const { sandbox, ziele } = await mitBeidenEnden();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "vpn";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /fw <span class="faint">↔<\/span> fw2|fw ↔ fw2/, "beide Enden stehen in der Zeile");
+  assert.ok(!/nur ein Ende/.test(html), "mit zwei Enden ist der Hinweis gegenstandslos");
+});
+
+/* Der Anlass: eine verknüpfte Strecke, und die Gegenzeile in der
+   Peertabelle behauptete, zu keiner zu gehören. */
+test("Beide Gegenstellen zeigen dieselbe Strecke", async () => {
+  const { sandbox, ziele } = await mitBeidenEnden();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "vpn";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  const treffer = html.match(/data-kind="tunnel" data-id="wg-hq-rz"/g) || [];
+  assert.ok(treffer.length >= 2, `nur ${treffer.length} Verweis(e) auf die Strecke — beide Enden gehören dazu`);
+});
+
+test("Mit nur einem Ende sagt die Zeile, dass das zweite fehlt", async () => {
+  const { sandbox, ziele } = await mitPeers();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "vpn";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML, /nur ein Ende/);
+});
+
+test("Der Tunnel-Inspektor zeigt beide Enden und die gelesenen Adressen", async () => {
+  const { sandbox, ziele } = await mitBeidenEnden();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.inspector = { kind: "tunnel", id: "wg-hq-rz" };
+  ui.render();
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /WG-Schweiz/);
+  assert.match(html, /nach-HQ/);
+  assert.match(html, /10\.99\.0\.2/, "die Adressen im Tunnel, von der Firewall gelesen");
+  assert.match(html, /192\.168\.20\.0\/24/, "und die Netze dahinter");
+});
+
+test("Das Tunnelformular bietet beide Enden an und die gelesenen Adressen zur Übernahme", async () => {
+  const { sandbox, ziele } = await mitBeidenEnden();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /data-field="peerRef"/);
+  assert.match(html, /data-field="peerBRef"/);
+  assert.match(html, /data-action="form-set" *\n? *data-field="probeIp" data-value="10\.99\.0\.1"/,
+    "eine gelesene Adresse lässt sich als Gegenstelle übernehmen");
+});
+
+test("Beide Enden werden gespeichert, und ein gelöstes zweites geht als null", async () => {
+  const { sandbox } = await mitBeidenEnden();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.peer.key, "Aqujl");
+  assert.equal(p.peerB.key, "Kx7Qd");
+
+  vm.runInContext(`state.form.data.peerBRef = "";`, sandbox);
+  const q = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(q.peerB, null, "ein fehlendes Feld ließe die alte Verknüpfung stehen");
+});
+
+/* ============================================================
+   Datastores des Backup Servers
+   ============================================================ */
+
+async function mitBackupServer(ab = {}) {
+  const zustand = await echterZustand();
+  zustand.hosts.push({
+    id: "pbs-01", name: "pbs-01", type: "pbs", site: "hq", status: "ok", monitored: true,
+    checks: [], hist: [], schwellen: { disk_warn: 80, disk_crit: 90, ram_warn: 85, ram_crit: 95 },
+    used: 90, failed: 0, lastGood: "2026-08-23T01:00:00.000Z", datastores: 2,
+    stores: [
+      { name: "main", used: 74, usedBytes: 3_700_000_000_000, totalBytes: 5_000_000_000_000,
+        availBytes: 1_100_000_000_000, vollInTagen: 9, vollAm: "2026-09-01T00:00:00.000Z",
+        comment: "Tägliche Sicherung", wartung: null,
+        lastBackup: "2026-08-23T01:00:00.000Z", backupOk: true,
+        lastGc: "2026-08-22T03:00:00.000Z", gcOk: true, lastVerify: null, verifyOk: null },
+      { name: "nas-archive", used: 90, usedBytes: 900_000_000_000, totalBytes: 1_000_000_000_000,
+        availBytes: 100_000_000_000, vollInTagen: null, vollAm: null, comment: null, wartung: "read-only",
+        lastBackup: null, backupOk: null, lastGc: null, gcOk: null,
+        lastVerify: "2026-08-23T02:00:00.000Z", verifyOk: false }
+    ],
+    ...ab
+  });
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  return { sandbox, ziele };
+}
+
+test("Jeder Datastore steht mit Belegung, freiem Platz und seinen Läufen da", async () => {
+  const { sandbox, ziele } = await mitBackupServer();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "compute";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.match(html, /main/);
+  assert.match(html, /nas-archive/);
+  assert.match(html, /Tägliche Sicherung/);
+  assert.match(html, /in 9 T/, "die Schätzung von PBS, wann er voll ist");
+  assert.match(html, /nie/, "nie geprüft ist eine Auskunft, kein Strich");
+  assert.ok(!/undefined|NaN/.test(html));
+});
+
+test("Ein Datastore ohne Schätzung bekommt keine erfundene", async () => {
+  const { sandbox, ziele } = await mitBackupServer();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "compute";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  /* nas-archive hat keine — dort steht ein Strich, nicht „in 0 T". */
+  assert.ok(!/in 0 T/.test(html));
+});
+
+/* ============================================================
+   Zertifikate ohne Ampel
+   ============================================================ */
+
+test("Ein nicht bewertetes Zertifikat steht da, ohne zu leuchten", async () => {
+  const zustand = await echterZustand();
+  zustand.certs = [
+    { cn: "fw.local", issuer: "eigensigniert", days: -40, where: "fw:443",
+      selfSigned: true, bewertet: false, status: "idle" }
+  ];
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "dienste";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /seit 40 T abgelaufen/, "verschwiegen wird nichts");
+  assert.match(html, /nicht bewertet/);
+  assert.match(html, /tls_selfsigned_ignore/, "und wo man es umstellt");
+});

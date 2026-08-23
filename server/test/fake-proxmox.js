@@ -89,13 +89,28 @@ export function fakeProxmox() {
           { Package: "openssl", OldVersion: "3.0.14", Version: "3.0.15", Title: "Kryptobibliothek" }
         ]);
       case "/api2/json/status/datastore-usage":
+        /* So, wie PBS es liefert: `avail` steht daneben und ist bei ZFS
+           nicht total − used. Die Schätzung, wann es voll ist, gibt es
+           nur, wo genug Verlauf da ist — beim Archiv fehlt sie. */
         return send(200, [
-          { store: "main", used: 3_700_000_000_000, total: 5_000_000_000_000 },
-          { store: "nas-archive", used: 900_000_000_000, total: 1_000_000_000_000 }
+          { store: "main", used: 3_700_000_000_000, total: 5_000_000_000_000, avail: 1_100_000_000_000,
+            "estimated-full-date": Math.floor(Date.now() / 1000) + 9 * 86400 },
+          { store: "nas-archive", used: 900_000_000_000, total: 1_000_000_000_000, avail: 100_000_000_000,
+            "estimated-full-date": 0 }
+        ]);
+      case "/api2/json/admin/datastore":
+        return send(200, [
+          { store: "main", comment: "Tägliche Sicherung" },
+          { store: "nas-archive", comment: null, maintenance: "read-only" }
         ]);
       case "/api2/json/nodes/localhost/tasks":
+        /* Die Kennung einer Aufgabe trägt den Datastore vorn — außer bei
+           älteren Sicherungsläufen, die nur den Gast nennen. Genau daran
+           darf sich der Sammler keinen Datastore ausdenken. */
         return send(200, [
           { worker_type: "verify", worker_id: "nas-archive", status: "verification failed", endtime: Math.floor(Date.now() / 1000) - 3600 },
+          { worker_type: "backup", worker_id: "main:host/web-01/2026-08-23T01:00:00Z", status: "OK", endtime: Math.floor(Date.now() / 1000) - 5400 },
+          { worker_type: "garbage_collection", worker_id: "main", status: "OK", endtime: Math.floor(Date.now() / 1000) - 86_400 },
           { worker_type: "backup", worker_id: "vm/101", status: "OK", endtime: Math.floor(Date.now() / 1000) - 7200 }
         ]);
       case "/api2/json/statistics/mail":

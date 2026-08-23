@@ -30,7 +30,19 @@ export const DEFAULTS = {
   verlauf_takt: 60, verlauf_tage: 30,
   /* Wie oft eine Kachel der Startseite ihre Adresse abruft, wenn dort
      „prüfen" gesetzt ist. Fremde Seiten alle 15 s abzurufen wäre unhöflich. */
-  link_takt: 60
+  link_takt: 60,
+  /* Ein eigensigniertes Zertifikat bezeugt keine Herkunft — es trägt nur
+     einen Schlüssel. Läuft es ab, ändert sich für den Betrieb nichts:
+     wer es gestern angenommen hat, nimmt es heute an, und geprüft hat es
+     ohnehin niemand. Eine rote Ampel dafür ist keine Störung, sondern
+     genau die Meldung, die man zu übergehen lernt — und mit ihr die
+     nächste, die zählt.
+
+     Deshalb bleibt es hier unbewertet. Angezeigt wird es weiter, in der
+     Zertifikatsliste ausdrücklich als „nicht bewertet": verschwiegen wird
+     nichts, es leuchtet nur nicht. Wer die Ampel doch will, setzt `false`;
+     Zertifikate einer echten Ausgabestelle sind davon nie betroffen. */
+  tls_selfsigned_ignore: true
 };
 
 /* Welche Prüfungen ein Systemtyp von Haus aus bekommt, wenn nichts
@@ -147,6 +159,11 @@ export function normalizeHost(h) {
   host.monitor = host.monitor !== false;
   const schwellen = normalizeSchwellen(host.schwellen);
   if (schwellen) host.schwellen = schwellen; else delete host.schwellen;
+  /* Ein einzelnes System, dessen Zertifikat nie eine Ampel bekommt —
+     unabhängig davon, wer es ausgestellt hat. Gemessen und angezeigt wird
+     es weiter; nur bewertet nicht. Falsch steht in der Datei nur, was
+     gesetzt ist: ein `tls_ignore: false` an jedem Eintrag wäre Lärm. */
+  if (host.tls_ignore) host.tls_ignore = true; else delete host.tls_ignore;
   if (!host.url && host.ip) {
     const port = TYPES[host.type]?.port ?? 443;
     host.url = `https://${host.ip}${port === 443 ? "" : ":" + port}`;
@@ -156,9 +173,20 @@ export function normalizeHost(h) {
 }
 
 /* ---------- Tunnel ----------
-   Ein Tunnel darf einen WireGuard-Peer benennen, den eine Firewall meldet:
+   Ein Tunnel darf WireGuard-Peers benennen, die eine Firewall meldet:
 
-     peer: { host: fw-01, iface: wg0, name: WG-Schweiz, key: Aqujl… }
+     peer:  { host: fw-01, iface: wg0, name: WG-Schweiz, key: Aqujl… }
+     peerB: { host: fw-02, iface: wg0, name: WG-Köln,    key: Kx7Qd… }
+
+   Zwei, weil eine Strecke zwei Enden hat. Jede Firewall kennt nur die
+   jeweils andere Seite: fw-01 meldet einen Peer namens „Schweiz", fw-02
+   einen namens „Köln" — dasselbe Kabel, zweimal beschrieben. Wer nur ein
+   Ende verknüpft, bekommt in der Gegenstellenliste eine Zeile, die
+   „keiner Strecke zugeordnet" behauptet, obwohl sie mitten in einer
+   liegt. Mit beiden Enden stimmt die Zuordnung in beide Richtungen, und
+   die Angaben lassen sich gegeneinander halten: sagt das eine Ende
+   „Handshake vor 20 Sekunden" und das andere „vor zwei Stunden", ist die
+   Verknüpfung falsch oder es sind zwei verschiedene Tunnel.
 
    Der öffentliche Schlüssel ist die belastbare Kennung — er bleibt, wenn
    der Peer auf der Firewall umbenannt wird. Name und Interface stehen
@@ -171,15 +199,26 @@ export function normalizeHost(h) {
    soll sich die Prüfung beschweren, statt ihn stillschweigend fallen zu
    lassen. Wer von Hand etwas Halbes einträgt, hat eine Meldung verdient
    und keine Verknüpfung, die einfach nicht da ist. */
+export const PEERFELDER = ["host", "iface", "name", "key"];
+
+function normalizePeer(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+  const out = {};
+  for (const k of PEERFELDER) if (p[k]) out[k] = String(p[k]);
+  return Object.keys(out).length ? out : null;
+}
+
 export function normalizeTunnel(t) {
   const o = { ...t, id: String(t.id) };
-  const p = o.peer;
-  const leer = !p || typeof p !== "object" || Array.isArray(p)
-    || !["host", "iface", "name", "key"].some(k => p[k]);
-  if (leer) delete o.peer;
+  const a = normalizePeer(o.peer);
+  const b = normalizePeer(o.peerB);
+  /* Ein zweites Ende ohne erstes gibt es nicht: wer nur das ferne Ende
+     verknüpft, hat kein halbes Paar, sondern schlicht einen Peer. Der
+     rückt auf, damit alles Weitere sich auf `peer` verlassen darf. */
+  if (!a && b) { o.peer = b; delete o.peerB; }
   else {
-    o.peer = {};
-    for (const k of ["host", "iface", "name", "key"]) if (p[k]) o.peer[k] = String(p[k]);
+    if (a) o.peer = a; else delete o.peer;
+    if (b) o.peerB = b; else delete o.peerB;
   }
   if (o.probe && !o.probe.ip) delete o.probe;
   return o;
@@ -271,11 +310,17 @@ export function validate(inv) {
   }
   for (const t of inv.tunnels) {
     if (!siteIds.has(t.a) || !siteIds.has(t.b)) errs.push(`Tunnel ${t.id}: Standort a oder b ist nicht angelegt.`);
-    if (t.peer) {
-      if (!t.peer.host) errs.push(`Tunnel ${t.id}: Beim Peer fehlt das System, das ihn meldet (peer.host).`);
-      else if (!hostIds.has(t.peer.host)) errs.push(`Tunnel ${t.id}: Der Peer soll von „${t.peer.host}“ gelesen werden — dieses System ist nicht angelegt.`);
-      if (!t.peer.key && !t.peer.name) errs.push(`Tunnel ${t.id}: Der Peer hat keine Kennung — es braucht den öffentlichen Schlüssel oder wenigstens den Namen.`);
+    for (const [feld, p] of [["peer", t.peer], ["peerB", t.peerB]]) {
+      if (!p) continue;
+      const wo = feld === "peer" ? "Der Peer" : "Der Peer am anderen Ende";
+      if (!p.host) errs.push(`Tunnel ${t.id}: Beim Peer fehlt das System, das ihn meldet (${feld}.host).`);
+      else if (!hostIds.has(p.host)) errs.push(`Tunnel ${t.id}: ${wo} soll von „${p.host}“ gelesen werden — dieses System ist nicht angelegt.`);
+      if (!p.key && !p.name) errs.push(`Tunnel ${t.id}: ${wo} hat keine Kennung — es braucht den öffentlichen Schlüssel oder wenigstens den Namen.`);
     }
+    /* Beide Enden auf demselben Gerät wären nicht zwei Enden, sondern
+       zweimal dasselbe — und die Gegenprobe zwischen ihnen wertlos. */
+    if (t.peer && t.peerB && t.peer.host === t.peerB.host && t.peer.key === t.peerB.key && t.peer.name === t.peerB.name)
+      errs.push(`Tunnel ${t.id}: Beide Enden zeigen auf denselben Peer auf ${t.peer.host} — das andere Ende meldet eine andere Firewall.`);
     /* Eines von beidem muss es sein: entweder wird durch den Tunnel
        gemessen, oder die Firewall meldet den Handshake. Ohne beides gäbe
        es zu dieser Strecke schlicht nichts zu sagen. */

@@ -65,7 +65,9 @@ const PFADE = {
   pbs: [
     { pfad: "/version", zweck: "erreichbar und angemeldet" },
     { pfad: "/status/datastore-usage", zweck: "Belegung je Datastore" },
-    { pfad: "/nodes/localhost/tasks?limit=60&errors=1", zweck: "fehlgeschlagene Aufträge", optional: true }
+    { pfad: "/admin/datastore", zweck: "Datastores mit Kommentar und Wartungsmodus", optional: true },
+    { pfad: "/nodes/localhost/tasks?limit=60&errors=1", zweck: "fehlgeschlagene Aufträge", optional: true },
+    { pfad: "/nodes/localhost/tasks?limit=200", zweck: "letzte Sicherung, Aufräumen und Prüfung je Datastore", optional: true }
   ],
   pmg: [
     { pfad: "/version", zweck: "erreichbar und angemeldet" },
