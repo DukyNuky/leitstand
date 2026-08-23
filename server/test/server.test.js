@@ -409,3 +409,23 @@ test("Der Zustand darf nicht im Zwischenspeicher des Browsers landen", async () 
   const seite = await fetch(base + "/");
   assert.match(seite.headers.get("cache-control") || "", /no-cache/);
 });
+
+/* Beim Schreiben abgefangen, beim Lesen durchgelassen: ein Netz als
+   Messziel ist ein Fehler, aber keiner, für den der Dienst nicht mehr
+   starten darf. Genau daran ist er einmal gescheitert. */
+test("Ein Netz als Messziel wird beim Anlegen abgelehnt", async () => {
+  const r = await call("POST", "/api/admin/tunnels", {
+    id: "wg-krumm", a: "hq", b: "rz", probe: { ip: "10.99.0.0/30" }
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /Netz/);
+});
+
+test("Ein Messziel mit Leerzeichen wird beim Anlegen weggeräumt", async () => {
+  const r = await call("POST", "/api/admin/tunnels", {
+    id: "wg-rand", a: "hq", b: "rz", probe: { ip: " 10.99.0.2 " }
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.item.probe.ip, "10.99.0.2");
+  await call("DELETE", "/api/admin/tunnels/wg-rand");
+});

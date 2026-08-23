@@ -238,6 +238,10 @@ export function createServer(opts = {}) {
           if (grund) return json(res, 400, { error: grund });
           body.short = Inv.normalizeKuerzel(body.short);
         }
+        if (key === "tunnels") {
+          const grund = Inv.pruefeProbeIp(body.probe?.ip);
+          if (grund) return json(res, 400, { error: `Gegenstelle im Tunnel: ${grund}` });
+        }
         const item = key === "hosts" ? Inv.normalizeHost(body)
           : key === "tunnels" ? Inv.normalizeTunnel(body) : body;
         commit({ ...inv, [key]: [...inv[key], item] });
@@ -258,6 +262,13 @@ export function createServer(opts = {}) {
             const grund = Inv.pruefeKuerzel(body.short);
             if (grund) return json(res, 400, { error: grund });
             merged.short = Inv.normalizeKuerzel(body.short);
+          }
+          /* Nur, wenn das Messziel Teil der Änderung ist — sonst ließe
+             sich ein Tunnel mit krummem Eintrag nicht mehr anfassen,
+             ohne ihn zugleich zu berichtigen. */
+          if (key === "tunnels" && "probe" in body) {
+            const grund = Inv.pruefeProbeIp(body.probe?.ip);
+            if (grund) return json(res, 400, { error: `Gegenstelle im Tunnel: ${grund}` });
           }
           /* Der Tunnel wird hier mitgeräumt: löst man die Peer-Verknüpfung,
              schickt die Oberfläche `peer: null` — das gehört entfernt und

@@ -498,14 +498,34 @@ test("„Zertifikat nicht bewerten“ steht nur da, wenn es gesetzt ist", () => 
   assert.equal("tls_ignore" in aus, false, "ein false an jedem Eintrag wäre Lärm in der Datei");
 });
 
-/* Gemessen wird eine Adresse, kein Netz. Ein „10.99.0.0/30" im Feld lässt
-   ping mit „Name nicht auflösbar" scheitern — und das sieht in der Zeile
-   aus wie eine tote Strecke. */
-test("Ein Netz als Messziel wird abgelehnt", () => {
-  assert.throws(() => Inv.normalize({
+/* Gemessen wird eine Adresse, kein Netz. Geprüft wird das aber beim
+   SCHREIBEN und nicht beim Lesen — ein bestehender Bestand muss weiter
+   starten, auch wenn dort etwas Krummes steht. Sonst nähme eine Formalie
+   die ganze Überwachung mit, und der Dienst, der Ausfälle melden soll,
+   wäre selbst der Ausfall. Genau das ist einmal passiert. */
+test("Ein krummes Messziel hält den Dienst nicht auf", () => {
+  const inv = Inv.normalize({
     settings: {}, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
     hosts: [{ id: "fw", type: "opnsense", site: "hq", ip: "10.0.0.1" }],
     tunnels: [{ id: "t", a: "hq", b: "hq", probe: { ip: "10.99.0.0/30" } }],
     links: []
-  }), /keine einzelne Adresse/);
+  });
+  assert.equal(inv.tunnels[0].probe.ip, "10.99.0.0/30", "unverändert übernommen, aber gelesen");
+});
+
+/* Ein Leerzeichen vor der Adresse ist kein Fehler, sondern ein
+   Tippfehler — und einer, der `ping` mit „Name nicht auflösbar"
+   scheitern lässt. Gemeint war offensichtlich die Adresse. */
+test("Leerzeichen um das Messziel werden stillschweigend weggeräumt", () => {
+  const t = Inv.normalizeTunnel({ id: "t", a: "hq", b: "rz", probe: { ip: " 192.168.255.6 ", port: 22 } });
+  assert.equal(t.probe.ip, "192.168.255.6");
+  assert.equal(t.probe.port, 22, "der Port bleibt dabei stehen");
+});
+
+test("Beim Schreiben wird ein Netz als Messziel abgelehnt", () => {
+  assert.match(Inv.pruefeProbeIp("10.99.0.0/30"), /Netz/);
+  assert.match(Inv.pruefeProbeIp("10.99.0.2 10.99.0.3"), /Leerzeichen/);
+  assert.equal(Inv.pruefeProbeIp(" 10.99.0.2 "), null, "Ränder zählen nicht — die räumt die Normalisierung weg");
+  assert.equal(Inv.pruefeProbeIp(""), null, "kein Messziel ist erlaubt");
+  assert.equal(Inv.pruefeProbeIp(null), null);
 });

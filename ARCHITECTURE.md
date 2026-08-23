@@ -438,3 +438,18 @@ Für Tunnel hat das eine Folge, die man kennen muss: hat eine Strecke nur ICMP
 und keinen `probe.port`, ist nach einer übersprungenen ICMP-Prüfung *nichts*
 mehr auswertbar. Sie steht dann auf Grau mit „keine auswertbare Prüfung" — und
 nicht auf Grün, was die gefährlichere Anzeige wäre.
+
+**Eine Formalie darf nie die Überwachung mitnehmen.** Für Standortkürzel steht
+das weiter oben; es einmal an anderer Stelle vergessen zu haben, hat den Dienst
+gekostet: ein Messziel mit einem Leerzeichen davor ließ `validate` beim *Lesen*
+scheitern, und damit startete der Leitstand nicht mehr — wegen eines
+Leerzeichens, während er dafür da ist, Ausfälle zu melden.
+
+Die Regel gilt deshalb allgemein: was beim **Schreiben** geprüft wird, darf
+beim **Lesen** höchstens zurechtgerückt werden. `normalizeTunnel` schneidet
+Leerzeichen ab (gemeint war offensichtlich die Adresse), und ob ein Messziel
+eine Adresse und kein Netz ist, prüft `pruefeProbeIp` — aufgerufen im
+Schreibpfad des Servers, wie `pruefeKuerzel` auch. Ein bestehender Bestand
+startet immer. Was darin krumm ist, sagt die Oberfläche an der Stelle, an der
+es auffällt: im Tunnel-Inspektor steht dann „Name nicht auflösbar" an der
+ICMP-Prüfung, und das ist die Auskunft, die weiterhilft.

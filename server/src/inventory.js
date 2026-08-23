@@ -80,6 +80,23 @@ export function normalizeKuerzel(s) {
 }
 
 /* Gibt den Grund zurück, warum es nicht taugt — oder null, wenn es passt. */
+/* Gemessen wird eine Adresse, kein Netz: „10.99.0.0/30" lässt `ping` mit
+   „Name nicht auflösbar" scheitern, und das sieht in der Tunnelzeile aus
+   wie eine tote Strecke.
+
+   Geprüft wird — wie beim Standortkürzel — **beim Schreiben, nicht beim
+   Lesen**. Ein bestehender Bestand muss weiter starten, auch wenn dort
+   etwas Krummes steht. Sonst nähme eine Formalie die ganze Überwachung
+   mit, und der Dienst, der Ausfälle melden soll, wäre selbst der Ausfall.
+   Gibt den Grund zurück oder null. */
+export function pruefeProbeIp(ip) {
+  const s = String(ip ?? "").trim();
+  if (!s) return null;                      /* kein Messziel ist erlaubt */
+  if (s.includes("/")) return `„${s}" ist ein Netz — gemessen wird eine einzelne Adresse, die Maske gehört weg.`;
+  if (/\s/.test(s)) return `„${s}" enthält ein Leerzeichen — es gehört genau eine Adresse in dieses Feld.`;
+  return null;
+}
+
 export function pruefeKuerzel(short) {
   const k = normalizeKuerzel(short);
   if (!k) return "Kürzel fehlt — vier Stellen, Land und Stadt (z. B. DEKO für Deutschland/Köln).";
@@ -220,6 +237,11 @@ export function normalizeTunnel(t) {
     if (a) o.peer = a; else delete o.peer;
     if (b) o.peerB = b; else delete o.peerB;
   }
+  /* Leerzeichen vor oder hinter der Adresse sind kein Fehler, sondern ein
+     Tippfehler — und einer, der `ping` mit „Name nicht auflösbar"
+     scheitern lässt. Er wird hier stillschweigend weggeräumt statt
+     gemeldet: gemeint war offensichtlich die Adresse. */
+  if (o.probe?.ip) o.probe = { ...o.probe, ip: String(o.probe.ip).trim() };
   if (o.probe && !o.probe.ip) delete o.probe;
   /* Das Interface steht in der Datei nur, wenn es von Hand gesetzt wurde.
      Bei einer Verknüpfung meldet es die Firewall — und die Oberfläche
@@ -326,11 +348,6 @@ export function validate(inv) {
        zweimal dasselbe — und die Gegenprobe zwischen ihnen wertlos. */
     if (t.peer && t.peerB && t.peer.host === t.peerB.host && t.peer.key === t.peerB.key && t.peer.name === t.peerB.name)
       errs.push(`Tunnel ${t.id}: Beide Enden zeigen auf denselben Peer auf ${t.peer.host} — das andere Ende meldet eine andere Firewall.`);
-    /* Gemessen wird eine Adresse, kein Netz. Ein „10.99.0.0/30" im Feld
-       lässt `ping` mit „Name nicht auflösbar" scheitern — und das sieht
-       in der Zeile aus wie eine tote Strecke. */
-    if (t.probe?.ip && /[/\s]/.test(String(t.probe.ip)))
-      errs.push(`Tunnel ${t.id}: probe.ip „${t.probe.ip}“ ist keine einzelne Adresse — die Netzmaske gehört weg.`);
     /* Eines von beidem muss es sein: entweder wird durch den Tunnel
        gemessen, oder die Firewall meldet den Handshake. Ohne beides gäbe
        es zu dieser Strecke schlicht nichts zu sagen. */

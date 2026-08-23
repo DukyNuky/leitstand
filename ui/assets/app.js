@@ -3981,7 +3981,7 @@ function collectForm() {
 function formPayload() {
   const f = state.form, d = { ...f.data };
   if (f.kind === "tunnels") {
-    d.probe = { ip: d.probeIp };
+    d.probe = { ip: String(d.probeIp ?? "").trim() };
     if (d.probePort) d.probe.port = Number(d.probePort);
     delete d.probeIp; delete d.probePort;
 
