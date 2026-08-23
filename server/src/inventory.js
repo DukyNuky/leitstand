@@ -326,6 +326,11 @@ export function validate(inv) {
        zweimal dasselbe — und die Gegenprobe zwischen ihnen wertlos. */
     if (t.peer && t.peerB && t.peer.host === t.peerB.host && t.peer.key === t.peerB.key && t.peer.name === t.peerB.name)
       errs.push(`Tunnel ${t.id}: Beide Enden zeigen auf denselben Peer auf ${t.peer.host} — das andere Ende meldet eine andere Firewall.`);
+    /* Gemessen wird eine Adresse, kein Netz. Ein „10.99.0.0/30" im Feld
+       lässt `ping` mit „Name nicht auflösbar" scheitern — und das sieht
+       in der Zeile aus wie eine tote Strecke. */
+    if (t.probe?.ip && /[/\s]/.test(String(t.probe.ip)))
+      errs.push(`Tunnel ${t.id}: probe.ip „${t.probe.ip}“ ist keine einzelne Adresse — die Netzmaske gehört weg.`);
     /* Eines von beidem muss es sein: entweder wird durch den Tunnel
        gemessen, oder die Firewall meldet den Handshake. Ohne beides gäbe
        es zu dieser Strecke schlicht nichts zu sagen. */

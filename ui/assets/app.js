@@ -1606,6 +1606,32 @@ function handshakeZelle(t) {
     gemeldet.length < enden.length ? " · das andere Ende meldet ihn nicht" : ""}">${esc(hs(t.handshake))}</span>`;
 }
 
+/* Welche Prüfung was gesagt hat — dieselbe Auskunft, die ein System
+   längst gibt. „Antwortet nicht" ohne diese Zeile lässt offen, ob das
+   Ziel schweigt oder ob gar nicht gefragt wurde: eine übersprungene
+   ICMP-Prüfung ist keine Aussage über die Strecke, sieht aber genauso
+   rot aus, wenn sie die einzige war. */
+function tunnelPruefungen(t) {
+  const cs = t.checks || [];
+  if (!cs.length) return t.probe
+    ? `<div><div class="sec-title">Prüfungen</div>
+        <p class="admin-hint" style="margin:0">Noch kein Durchlauf.</p></div>`
+    : "";
+  const uebersprungen = cs.filter(c => c.skipped);
+  return `<div><div class="sec-title">Prüfungen</div>
+    <div class="col" style="gap:6px">
+      ${cs.map(c => `<div class="row" style="gap:8px;align-items:flex-start">
+        ${c.skipped ? dot("idle") : dot(c.ok ? "ok" : "crit")}
+        <span class="mono" style="font-size:12px;min-width:64px">${esc(c.kind + (c.port ? "/" + c.port : ""))}</span>
+        <span style="font-size:13px;min-width:0">${esc(c.detail || (c.ok ? "antwortet" : "keine Antwort"))}</span>
+        <span class="spacer"></span><span class="mono faint" style="font-size:11px">${c.ms != null ? c.ms + " ms" : ""}</span>
+      </div>`).join("")}
+    </div>
+    ${uebersprungen.length === cs.length ? `<p class="admin-hint" style="margin:6px 0 0">Keine dieser Prüfungen ist
+      gelaufen — über diese Strecke ist damit nichts gemessen, und die Ampel steht auf Grau, nicht auf Grün.</p>` : ""}
+  </div>`;
+}
+
 /* Der verknüpfte Peer im Tunnel-Inspektor. Drei Fälle, die nicht
    miteinander verwechselt werden dürfen: keine Verknüpfung, eine
    Verknüpfung ins Leere, ein gemeldeter Peer. */
@@ -3042,6 +3068,7 @@ function inspectorContent(kind, id) {
           <dt>Latenz</dt><dd class="mono">${esc(nz(t.rtt, " ms"))}</dd>
           <dt>Zuletzt erreicht</dt><dd>${esc(fmtWhen(t.lastSeen) || "nie")}</dd>
         </dl></div>
+        ${tunnelPruefungen(t)}
         ${tunnelPeerBlock(t)}
         ${(t.hist || []).length ? `<div><div class="sec-title">Latenzverlauf</div>${spark(t.hist, { w:460, h:70, color:`var(--${t.status === "ok" ? "ok" : t.status})` })}</div>` : ""}
         <p class="admin-hint" style="margin:0">${t.probe

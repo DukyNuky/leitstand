@@ -418,3 +418,23 @@ ausgenommen sind, ob ICMP übersprungen wird. Ohne diesen Absatz wäre das Grün
 eine Behauptung über Dinge, die gar nicht gemessen werden — der Fehler, an dem
 Überwachungen still scheitern. Ist wirklich keine Lücke da, steht auch das da;
 dann ist es eine Aussage und keine Auslassung.
+
+**„Darf nicht" ist keine Antwort des Ziels.** Der Dienst läuft im Abbild als
+unprivilegierter Benutzer (`USER node`). Fehlt dem Behälter `NET_RAW` — oder
+erlaubt der Wirt unprivilegierte ICMP-Sockets nicht —, scheitert `ping` mit
+„Operation not permitted", **ohne ein einziges Paket zu senden**. Das als
+„keine Antwort" zu melden, ist eine Falschaussage über das Ziel: die Strecke
+steht rot da, und dieselbe Adresse lässt sich aus demselben Behälter von Hand
+anpingen — von Hand nämlich als root.
+
+Ein Rechteproblem zählt deshalb als **übersprungen**, wie ein fehlendes `ping`
+auch, und die Oberfläche nennt den Grund. Gemerkt wird es zusätzlich: es geht
+nicht vorbei, und ohne diese Notiz liefe der Prober bei jedem System aufs Neue
+in denselben Fehler. Geprüft wird die Benutzbarkeit beim ersten Mal mit einem
+echten Paket an die eigene Adresse, nicht mit `ping -V`: dass die Datei da ist,
+sagt nichts darüber, ob dieser Prozess sie benutzen darf.
+
+Für Tunnel hat das eine Folge, die man kennen muss: hat eine Strecke nur ICMP
+und keinen `probe.port`, ist nach einer übersprungenen ICMP-Prüfung *nichts*
+mehr auswertbar. Sie steht dann auf Grau mit „keine auswertbare Prüfung" — und
+nicht auf Grün, was die gefährlichere Anzeige wäre.

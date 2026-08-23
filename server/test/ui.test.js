@@ -1771,3 +1771,39 @@ test("Die Kurzlage trägt keine Suchleiste und keinen Kürzelknopf", async () =>
   assert.ok(!/Nur Probleme/.test(html));
   assert.match(html, /data-action="site"/, "der Standortfilter bleibt");
 });
+
+/* Der Anlass: eine Strecke stand rot da, und dieselbe Adresse ließ sich
+   aus dem Behälter von Hand anpingen. Der Inspektor muss sagen, welche
+   Prüfung was gesagt hat — sonst rät man. */
+test("Der Tunnel-Inspektor zeigt jede Prüfung einzeln", async () => {
+  const zustand = await echterZustand();
+  Object.assign(zustand.tunnels[0], {
+    checks: [
+      { kind: "tcp", port: 22, ok: false, ms: null, detail: "Zeitüberschreitung", skipped: false },
+      { kind: "icmp", port: null, ok: null, ms: null, skipped: true,
+        detail: "ICMP nicht erlaubt — der Dienst läuft unprivilegiert. Dem Behälter fehlt NET_RAW" }
+    ]
+  });
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.inspector = { kind: "tunnel", id: "wg-hq-rz" };
+  ui.render();
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /Prüfungen/);
+  assert.match(html, /Zeitüberschreitung/);
+  assert.match(html, /NET_RAW/, "warum ICMP nicht lief, gehört dazu");
+});
+
+test("Ist keine Prüfung gelaufen, sagt der Inspektor, dass nichts gemessen wurde", async () => {
+  const zustand = await echterZustand();
+  Object.assign(zustand.tunnels[0], {
+    checks: [{ kind: "icmp", port: null, ok: null, ms: null, skipped: true, detail: "ICMP nicht erlaubt" }]
+  });
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.inspector = { kind: "tunnel", id: "wg-hq-rz" };
+  ui.render();
+  assert.match(ziele.get("#overlays").innerHTML, /nichts gemessen/);
+});

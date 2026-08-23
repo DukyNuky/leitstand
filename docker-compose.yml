@@ -40,6 +40,16 @@ services:
     # ICMP an Ziele im eigenen Netz: Alpine erlaubt unprivilegiertes ping
     # nur mit dieser Fähigkeit. Ohne sie prüft der Leitstand nur TCP —
     # das genügt für Weboberflächen, nicht für reine Ping-Ziele.
+    #
+    # Fehlt sie, sagt der Leitstand das: die ICMP-Prüfung gilt als
+    # ÜBERSPRUNGEN und nicht als fehlgeschlagen, und in den Einstellungen
+    # sowie in der Kurzlage steht der Grund. Wichtig für Tunnel: hat eine
+    # Strecke nur ICMP und keinen probe.port, wird über sie dann GAR
+    # NICHTS gemessen — sie steht auf Grau, nicht auf Grün.
+    #
+    # Zur Probe im laufenden Behälter, und zwar als der Benutzer, unter
+    # dem der Dienst läuft — als root sagt der Test nichts:
+    #   docker exec -u node leitstand ping -c1 10.99.0.2
     cap_add:
       - NET_RAW
 

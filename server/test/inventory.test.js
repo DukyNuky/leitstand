@@ -497,3 +497,15 @@ test("„Zertifikat nicht bewerten“ steht nur da, wenn es gesetzt ist", () => 
   assert.equal(an.tls_ignore, true);
   assert.equal("tls_ignore" in aus, false, "ein false an jedem Eintrag wäre Lärm in der Datei");
 });
+
+/* Gemessen wird eine Adresse, kein Netz. Ein „10.99.0.0/30" im Feld lässt
+   ping mit „Name nicht auflösbar" scheitern — und das sieht in der Zeile
+   aus wie eine tote Strecke. */
+test("Ein Netz als Messziel wird abgelehnt", () => {
+  assert.throws(() => Inv.normalize({
+    settings: {}, sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "fw", type: "opnsense", site: "hq", ip: "10.0.0.1" }],
+    tunnels: [{ id: "t", a: "hq", b: "hq", probe: { ip: "10.99.0.0/30" } }],
+    links: []
+  }), /keine einzelne Adresse/);
+});

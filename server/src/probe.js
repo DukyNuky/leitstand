@@ -247,12 +247,56 @@ export async function dnsCheck(opt) {
 
 /* ---- ICMP: nutzt das System-ping, weil roher ICMP root bräuchte ---- */
 let pingAvailable = null;
+/* Ob `ping` benutzbar ist — und zwar von diesem Prozess.
+
+   Geprüft wird mit einem echten Paket an die eigene Adresse, nicht mit
+   `ping -V`: dass die Datei da ist, sagt nichts darüber, ob der Prozess
+   sie benutzen darf. Genau daran hing der Fehler, der eine Strecke rot
+   meldete, die man aus demselben Behälter von Hand anpingen konnte —
+   von Hand nämlich als root. */
 export async function hasPing() {
   if (pingAvailable !== null) return pingAvailable;
-  try { await execFileP("ping", ["-V"], { timeout: 2000 }); pingAvailable = true; }
-  catch { try { await execFileP("ping", ["-c", "1", "-W", "1", "127.0.0.1"], { timeout: 3000 }); pingAvailable = true; }
-          catch { pingAvailable = false; } }
+  try {
+    await execFileP("ping", ["-n", "-c", "1", "-W", "1", "127.0.0.1"], { timeout: 3000 });
+    pingAvailable = true;
+  } catch (e) {
+    if (icmpGrund(`${e.stderr || ""} ${e.stdout || ""} ${e.message || ""}`) === "recht") pingAvailable = false;
+    else {
+      /* Loopback-ICMP kann auch aus anderen Gründen scheitern. Dann
+         entscheidet, ob es das Programm überhaupt gibt. */
+      try { await execFileP("ping", ["-V"], { timeout: 2000 }); pingAvailable = true; }
+      catch { pingAvailable = false; }
+    }
+  }
   return pingAvailable;
+}
+
+/* Warum `ping` nicht konnte, ist keine Nebensache.
+
+   Drei Ausgänge, die nichts miteinander zu tun haben, und lange sahen
+   zwei davon gleich aus:
+
+   1. Das Ziel schweigt — eine Auskunft über das Netz. Exit 1.
+   2. Der Name ist nicht auflösbar — eine Auskunft über den Eintrag.
+   3. `ping` darf nicht. Der Dienst läuft unprivilegiert (USER node im
+      Abbild); fehlt dem Behälter NET_RAW oder erlaubt der Wirt
+      unprivilegierte ICMP-Sockets nicht, scheitert der Aufruf mit
+      „Operation not permitted" — **ohne ein einziges Paket zu senden.**
+
+   Der dritte Fall als „keine Antwort" gemeldet ist eine Falschaussage
+   über das Ziel: eine Strecke steht rot da, die man aus demselben
+   Behälter von Hand anpingen kann (als root nämlich, und der darf).
+   Er zählt deshalb als übersprungen, wie ein fehlendes `ping` auch — und
+   sagt in der Oberfläche, woran es liegt.
+
+   Gemerkt wird es außerdem: ein Rechteproblem geht nicht vorbei, und
+   ohne diese Notiz liefe der Prober bei jedem System aufs Neue in
+   denselben Fehler. */
+export function icmpGrund(text) {
+  const t = String(text || "");
+  if (/unknown host|name or service|not known|cannot resolve/i.test(t)) return "name";
+  if (/operation not permitted|permission denied|must be root|lacking privilege|socket: address family/i.test(t)) return "recht";
+  return null;
 }
 
 export async function icmpCheck({ host, timeout = 4000 }) {
@@ -264,7 +308,15 @@ export async function icmpCheck({ host, timeout = 4000 }) {
     const m = stdout.match(/time[=<]\s*([\d.]+)\s*ms/i);
     return pass(m ? Math.round(parseFloat(m[1])) : Date.now() - t0, "antwortet");
   } catch (e) {
-    return fail(/unknown host|Name or service/i.test(e.stderr || "") ? "Name nicht auflösbar" : "keine Antwort", Date.now() - t0);
+    const grund = icmpGrund(`${e.stderr || ""} ${e.stdout || ""} ${e.message || ""}`);
+    if (grund === "name") return fail("Name nicht auflösbar", Date.now() - t0);
+    if (grund === "recht") {
+      pingAvailable = false;
+      return { ok: null, ms: null, skipped: true,
+        detail: "ICMP nicht erlaubt — der Dienst läuft unprivilegiert. Dem Behälter fehlt NET_RAW "
+          + "(in docker-compose.yml: cap_add: [NET_RAW]). Gesendet wurde kein einziges Paket." };
+    }
+    return fail("keine Antwort", Date.now() - t0);
   }
 }
 

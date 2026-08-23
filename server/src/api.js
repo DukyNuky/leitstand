@@ -301,6 +301,14 @@ function tunnelView(t, st = {}) {
        Netzen der Peers und musste bisher von Hand abgeschrieben werden. */
     ips: vereinen(a?.ips, b?.ips),
     netze: vereinen(a?.netze, b?.netze),
+    /* Die Einzelprüfungen dieser Strecke — dieselbe Form wie bei einem
+       System. Ohne sie steht im Inspektor „antwortet nicht" und nirgends,
+       welche der beiden Prüfungen das sagt und warum: eine übersprungene
+       ICMP-Prüfung sieht dann aus wie eine gescheiterte. */
+    checks: (st.checks || []).map(c => ({
+      kind: c.kind, port: c.port || null, ok: c.ok, ms: c.ms ?? null,
+      detail: c.detail || null, skipped: !!c.skipped
+    })),
     mtu: t.mtu || null, keepalive: t.keepalive || null,
     probe: t.probe?.ip || null,
     /* Damit das Formular den Port beim Bearbeiten nicht verliert. */

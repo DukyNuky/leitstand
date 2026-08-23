@@ -163,3 +163,20 @@ test("Ein nicht bewertetes Zertifikat bleibt in der Liste, verliert aber die Amp
   assert.equal(eigen.days, -40, "verschwiegen wird nichts");
   assert.equal(certs.find(c => c.cn === "fw-b.local").status, "crit");
 });
+
+/* Ohne die Einzelprüfungen steht im Tunnel-Inspektor „antwortet nicht"
+   und nirgends, welche Prüfung das sagt. Eine übersprungene ICMP-Prüfung
+   ist aber gar keine Aussage über die Strecke. */
+test("Die Prüfungen einer Strecke stehen in ihrer Ansicht", () => {
+  const { e } = zustand({ peer: { host: "fw", key: "Aqujl" } });
+  e.tunnels.get("wg").checks = [
+    { kind: "tcp", port: 22, ok: false, ms: null, detail: "Zeitüberschreitung" },
+    { kind: "icmp", ok: null, ms: null, skipped: true, detail: "ICMP nicht erlaubt — der Dienst läuft unprivilegiert" }
+  ];
+  const t = buildState(e, null).tunnels[0];
+  assert.equal(t.checks.length, 2);
+  assert.equal(t.checks[0].ok, false);
+  assert.equal(t.checks[1].skipped, true);
+  assert.equal(t.checks[1].ok, null, "übersprungen ist nicht fehlgeschlagen");
+  assert.match(t.checks[1].detail, /nicht erlaubt/);
+});
