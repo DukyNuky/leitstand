@@ -221,6 +221,11 @@ export function normalizeTunnel(t) {
     if (b) o.peerB = b; else delete o.peerB;
   }
   if (o.probe && !o.probe.ip) delete o.probe;
+  /* Das Interface steht in der Datei nur, wenn es von Hand gesetzt wurde.
+     Bei einer Verknüpfung meldet es die Firewall — und die Oberfläche
+     schickt dann ausdrücklich `null`, damit die alte, getippte Angabe
+     nicht als zweite Quelle danebenstehen bleibt. */
+  if (o.iface === null || o.iface === undefined || o.iface === "") delete o.iface;
   return o;
 }
 

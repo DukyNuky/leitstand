@@ -196,7 +196,10 @@ const state = {
   offline: null,              /* Fehlertext, wenn der Dienst nicht antwortet */
   incidents: [],
   hosts: [],
-  tunnels: []
+  tunnels: [],
+  /* Sortierung je Tabelle: { spalte, richtung }. Leer heißt „so, wie die
+     Ansicht sie ordnet" — und das ist meist nach Dringlichkeit. */
+  sort: {}
 };
 
 const inSite = o => state.site === "all" || o.site === state.site;
@@ -3072,9 +3075,204 @@ function render() {
     const el = $(focus.sel);
     if (el) { el.focus(); try { el.setSelectionRange(focus.pos, focus.pos); } catch {} }
   }
+  sortierungAnwenden();
   const pq = $("#pq");
   if (pq) { pq.focus(); pq.setSelectionRange(pq.value.length, pq.value.length); }
 }
+
+/* ---------- Spalten sortieren ----------
+
+   Sortiert wird, was dasteht — nicht, was dahinter liegt. Das klingt nach
+   einer Abkürzung und ist eine Entscheidung: die Ansichten sind reine
+   Funktionen von Zustand nach HTML, und jede Tabelle bräuchte sonst eine
+   eigene Liste von Vergleichsfunktionen, die zu dem passt, was sie gerade
+   anzeigt. Zwanzig solcher Listen wären zwanzig Gelegenheiten, dass die
+   Spalte anders sortiert, als sie beschriftet ist.
+
+   Was in einer Zelle steht, ist deshalb der Wert — und der Vergleich
+   versteht die Schreibweisen, die in diesem Werkzeug vorkommen: Mengen mit
+   Einheit („1.1 GB"), Zeiten („12 ms", „3 T"), Prozente, Zeitpunkte
+   („14:15", „23.08. 14:15"). Eine Zelle ohne Text ist die Ampel; dann
+   gilt der Zustand der Zeile, nach Dringlichkeit geordnet.
+
+   Ein Strich bleibt hinten, in beiden Richtungen. Er ist keine Null, und
+   eine Spalte, die mit lauter Unbekanntem anfängt, hätte niemandem
+   geholfen. */
+const SEV_RANG = { crit: 0, warn: 1, info: 2, ok: 3, idle: 4, unknown: 5 };
+
+const EINHEIT = {
+  "%": 1,
+  b: 1, kb: 1024, mb: 1048576, gb: 1073741824, tb: 1099511627776, pb: 1125899906842624,
+  ms: 1, s: 1000, min: 60000, h: 3600000, t: 86400000
+};
+
+/* Eine Zahl am Anfang, höchstens hinter einem kurzen Wörtchen („in 9 T",
+   „vor 3 min"). Ein Name wie „pve-hq-01" fällt hier bewusst durch: dort
+   steht die Ziffer nicht für eine Menge. */
+const ZAHL = /^(?:[a-zäöüß~]{1,5}\s+)?([-+]?\d+(?:[.,]\d+)?)\s*([%a-zA-Z]*)/i;
+
+/* „14:15" ist von heute, „23.08. 14:15" von einem früheren Tag. Ohne
+   Jahr — für eine Tabelle, die Stunden und Tage vergleicht, genügt das,
+   und mehr steht in der Zelle auch nicht. */
+const HEUTE = 12_000_000;
+function zeitWert(t) {
+  let m = /^(\d{1,2}):(\d{2})$/.exec(t);
+  if (m) return HEUTE + Number(m[1]) * 60 + Number(m[2]);
+  m = /^(\d{1,2})\.(\d{1,2})\.\s*(\d{1,2}):(\d{2})$/.exec(t);
+  if (m) return Number(m[2]) * 100000 + Number(m[1]) * 1000 + Number(m[3]) * 60 + Number(m[4]);
+  return null;
+}
+
+function sortWert(text, sev) {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return sev ? { n: SEV_RANG[sev] ?? 9 } : { leer: true };
+  if (/^[—–-]$/.test(t)) return { leer: true };
+  const z = zeitWert(t);
+  if (z != null) return { n: z };
+  const m = ZAHL.exec(t);
+  if (m) return { n: Number(m[1].replace(",", ".")) * (EINHEIT[m[2].toLowerCase()] ?? 1) };
+  return { s: t.toLowerCase() };
+}
+
+/* Zahlen vor Text: mischt eine Spalte beides, ist die Zahl die Auskunft
+   und das Wort der Ersatz dafür („nie", „nicht gemeldet"). */
+function sortPaar(a, b) {
+  if (a.n != null && b.n != null) return a.n - b.n;
+  if (a.n != null) return -1;
+  if (b.n != null) return 1;
+  return String(a.s).localeCompare(String(b.s), "de");
+}
+
+/* Gibt die neue Reihenfolge als Liste von Indizes zurück — die Zeilen
+   selbst rührt erst die Anzeige an. Gleiche Werte behalten die
+   Reihenfolge der Ansicht. */
+function sortReihenfolge(zellen, richtung) {
+  return zellen
+    .map((z, i) => ({ w: sortWert(z.text, z.sev), i }))
+    .sort((a, b) => {
+      if (a.w.leer && b.w.leer) return a.i - b.i;
+      if (a.w.leer) return 1;
+      if (b.w.leer) return -1;
+      return sortPaar(a.w, b.w) * richtung || a.i - b.i;
+    })
+    .map(x => x.i);
+}
+
+/* Auf, ab, gar nicht. Die dritte Runde stellt die Ordnung der Ansicht
+   wieder her — und die ist meist die nach Dringlichkeit, also die
+   einzige, die von selbst das Wichtige nach oben bringt. */
+function sortKlick(id, spalte) {
+  const st = state.sort[id];
+  if (!st || st.spalte !== spalte) state.sort[id] = { spalte, richtung: 1 };
+  else if (st.richtung > 0) state.sort[id] = { spalte, richtung: -1 };
+  else delete state.sort[id];
+  return state.sort[id] || null;
+}
+
+/* Eine Tabelle wiedererkennen, ohne dass jede Ansicht ihr einen Namen
+   geben muss: Ansicht und Spaltenüberschriften. Ändert sich die Tabelle,
+   fällt ihre Sortierung weg — das ist richtig so, sie meinte etwas
+   anderes. */
+function tabellenId(kopf) {
+  return [state.view, state.adminTab || "", ...kopf].join("|");
+}
+
+/* Die einzige Stelle, die den Baum anfasst: Kopfzellen anklickbar machen
+   und die Zeilen in die gemerkte Reihenfolge bringen. Läuft nach jedem
+   Zeichnen, weil jedes Zeichnen die Tabelle neu aufbaut. */
+function sortierungAnwenden() {
+  const wrap = $("#wrap");
+  if (!wrap || typeof wrap.querySelectorAll !== "function") return;
+  for (const tab of wrap.querySelectorAll("table.t")) {
+    const kopf = tab.querySelector("thead tr");
+    const body = tab.querySelector("tbody");
+    if (!kopf || !body) continue;
+    const spalten = [...kopf.children];
+    /* Nur echte Datenzeilen: die Zeile „nichts angelegt" ist eine einzige
+       Zelle über die ganze Breite und gehört nirgendwohin sortiert. */
+    const zeilen = [...body.children].filter(tr => tr.children.length === spalten.length);
+    if (zeilen.length < 2) continue;
+
+    const id = tabellenId(spalten.map(th => th.textContent.trim()));
+    const st = state.sort[id];
+    spalten.forEach((th, i) => {
+      /* Die erste Spalte trägt die Ampel und hat deshalb keine
+         Überschrift — sie ist trotzdem die nützlichste zum Sortieren.
+         Eine andere Spalte ohne Überschrift trägt Knöpfe; die nach ihrer
+         Beschriftung zu ordnen, ergäbe nichts. */
+      if (i > 0 && !th.textContent.trim()) return;
+      th.dataset.action = "sort";
+      th.dataset.tab = id;
+      th.dataset.spalte = String(i);
+      if (i === 0 && !th.textContent.trim()) th.title = "nach Ampel sortieren";
+      if (st && st.spalte === i) {
+        th.setAttribute("aria-sort", st.richtung > 0 ? "ascending" : "descending");
+        th.innerHTML += `<span class="th-pfeil">${st.richtung > 0 ? "▲" : "▼"}</span>`;
+      }
+    });
+    if (!st) continue;
+
+    const zellen = zeilen.map(tr => ({
+      text: tr.children[st.spalte]?.dataset?.sort ?? tr.children[st.spalte]?.textContent ?? "",
+      sev: tr.dataset?.sev || null
+    }));
+    for (const i of sortReihenfolge(zellen, st.richtung)) body.appendChild(zeilen[i]);
+  }
+}
+
+/* ---------- Neuzeichnen aus dem Netz: nicht mitten in eine Auswahl ----------
+
+   Alle 15 Sekunden kommt ein neuer Zustand und die Seite wird neu
+   gezeichnet. Getippte Eingaben überleben das — `render` sichert sie und
+   setzt Fokus und Schreibmarke zurück. Ein aufgeklapptes Auswahlmenü
+   überlebt es nicht: es hängt am Knoten des <select>, und mit dem ist es
+   weg. Wer eine Gegenstelle aus einer langen Liste sucht, wird also alle
+   15 Sekunden herausgeworfen — und zwar aus dem einen Formular, in dem
+   Sorgfalt am nötigsten ist.
+
+   Zurücksetzen lässt sich ein offenes Menü nicht; ein Browser öffnet es
+   nur auf eine echte Geste hin. Aufgeschoben wird deshalb das Bild, nicht
+   die Daten: die stehen bereits im Zustand, und der nächste Strich holt
+   sie ein. Sobald die Auswahl vorbei ist — Wert gewählt oder Fokus
+   weiter —, wird nachgezeichnet.
+
+   Die Obergrenze ist gegen den Fall, dass jemand ein Menü aufklappt und
+   weggeht: eine Überwachung, die stehenbleibt und dabei aktuell aussieht,
+   wäre das schlechtere Übel. Nur der Zustandsstrom wird aufgeschoben —
+   was der Benutzer selbst auslöst, zeichnet sofort. */
+const AUFSCHUB_MAX = 120000;
+let aufschubSeit = 0, aufgeschoben = false;
+
+function waehltGerade() {
+  const a = document.activeElement;
+  return !!a && String(a.tagName || "").toLowerCase() === "select";
+}
+
+function renderLive(jetzt = false) {
+  if (!jetzt && waehltGerade()) {
+    if (!aufschubSeit) aufschubSeit = Date.now();
+    if (Date.now() - aufschubSeit < AUFSCHUB_MAX) { aufgeschoben = true; return; }
+  }
+  aufschubSeit = 0;
+  aufgeschoben = false;
+  render();
+}
+
+/* Ein gewählter Wert schließt das Menü — dann darf sofort nachgezogen
+   werden, ohne auf den Fokuswechsel zu warten.
+
+   Eine Auswahl im Formular zieht ohnehin ein Neuzeichnen nach sich: unter
+   ihr steht, was von ihr abhängt — die Zugangsfelder zum gewählten Typ,
+   die Adressen aus dem gewählten Peer. Ohne das stünde dort bis zum
+   nächsten Zustand aus dem Netz die Antwort auf die vorige Frage. */
+document.addEventListener("change", ev => {
+  if (state.form?.open && ev.target?.dataset?.field) { renderLive(true); return; }
+  if (aufgeschoben) renderLive(true);
+});
+/* `focusout` statt `blur`: nur das steigt auf und ist von hier zu hören.
+   Der Umweg über die Ereigniswarteschlange, damit erst der Fokus steht
+   und dann gezeichnet wird. */
+document.addEventListener("focusout", () => { if (aufgeschoben) setTimeout(() => renderLive(true), 0); });
 
 /* Die Adresszeile trägt die Ansicht — und bei der Detailseite auch den
    Gegenstand. Damit ist ein einzelnes System verlinkbar und der Zurück-
@@ -3260,6 +3458,10 @@ document.addEventListener("click", ev => {
       f.data[el.dataset.field] = !f.data[el.dataset.field];
       render(); break;
     }
+    /* Auf, ab, gar nicht. Die dritte Runde stellt die Ordnung der Ansicht
+       wieder her — und die ist meist die nach Dringlichkeit, also die
+       einzige, die von selbst das Wichtige nach oben bringt. */
+    case "sort": sortKlick(el.dataset.tab, Number(el.dataset.spalte)); render(); break;
     case "form-set": {
       const f = state.form; if (!f) break;
       collectForm();
@@ -3337,7 +3539,7 @@ function applyLive(st) {
   merkeFassung(st.meta?.runtime?.build || null, st.meta?.runtime || null);
   state.connecting = false;
   state.offline = null;
-  render();
+  renderLive();
   markSource();
 
   /* Der Verlauf hängt nicht am Zustandsstrom — er wird beim Öffnen der
@@ -3445,8 +3647,8 @@ function markSource() {
     render();
     markSource();
     L.onState(st => { applyLive(st); if (!state.adminLoaded) loadAdmin(); });
-    L.onFail(msg => { state.connecting = false; state.offline = msg; render(); markSource(); });
-    L.onStale(() => { render(); markSource(); });
+    L.onFail(msg => { state.connecting = false; state.offline = msg; renderLive(); markSource(); });
+    L.onStale(() => { renderLive(); markSource(); });
   } else {
     state.offline = (L && L.error) || "Kein Dienst erreichbar";
     render();
@@ -3499,7 +3701,16 @@ function openForm(kind, mode, id) {
     } else {
       const t = byId(state.tunnels, id);
       if (!t) return;
-      data = { id: t.id, a: t.a, b: t.b, iface: t.iface || "", net: t.net || "",
+      /* `t.iface` ist der geltende Name — bei einer Verknüpfung der von
+         der Firewall gelesene. Ins Formular gehört nur, was von Hand
+         gesetzt wurde: sonst schriebe das nächste Speichern den gelesenen
+         Namen als eigene Angabe fest. */
+      const eigenesIface = t.peer ? "" : (t.iface || "");
+      data = { id: t.id, a: t.a, b: t.b, iface: eigenesIface, net: t.net || "",
+        /* Steht der Name unter dem, was die Firewalls melden, ist er
+           auswählbar — sonst wurde er getippt und bleibt es. */
+        ifaceWahl: !eigenesIface ? ""
+          : PEERS.some(p => p.iface === eigenesIface) ? eigenesIface : "__frei",
         probeIp: t.probe || "", probePort: t.probePort || "",
         /* Der hinterlegte Peer bleibt im Formular erhalten, auch wenn die
            Firewall ihn gerade nicht meldet — sonst löschte allein das
@@ -3513,7 +3724,11 @@ function openForm(kind, mode, id) {
     const erster = (SITES[0] || {}).id;
     if (kind === "hosts") data = { type: "pve", site: erster, monitor: true };
     if (kind === "sites") data = { primary: !SITES.length };   /* der erste Standort ist der Hauptstandort */
-    if (kind === "tunnels") data = { a: erster, b: (SITES[1] || SITES[0] || {}).id, iface: "wg0" };
+    /* Kein vorgetragenes „wg0" mehr: das Interface kommt entweder vom
+       verknüpften Peer oder aus dem, was die Firewalls melden. Ein
+       Vorschlag im Feld wäre eine Behauptung über ein Gerät, das der
+       Leitstand noch gar nicht kennt. */
+    if (kind === "tunnels") data = { a: erster, b: (SITES[1] || SITES[0] || {}).id, ifaceWahl: "" };
   }
   state.form = { open: true, kind, mode, data, test: null, error: null, busy: false, cred: {} };
   render();
@@ -3552,9 +3767,21 @@ function formPayload() {
     };
     const a = aus(d.peerRef, f.data.peerOrig);
     const b = aus(d.peerBRef, f.data.peerBOrig);
-    delete d.peerRef; delete d.peerOrig; delete d.peerBRef; delete d.peerBOrig;
+    delete d.peerRef; delete d.peerBRef; delete d.peerOrig; delete d.peerBOrig;
     d.peer = a;
     d.peerB = b;
+
+    /* Das Interface hat drei Herkünfte, und nur eine davon gehört in die
+       Bestandsdatei: die selbst eingetragene. Meldet ein verknüpfter Peer
+       einen Namen, wird die eigene Angabe ausdrücklich gelöscht — sie
+       stünde sonst als zweite Quelle daneben und veraltete still, sobald
+       jemand am Gerät etwas verschiebt. */
+    const herkunft = ifaceHerkunft(f.data);
+    const wahl = f.data.ifaceWahl;
+    delete d.ifaceWahl;
+    if (herkunft === "peer") d.iface = null;
+    else if (herkunft === "auswahl") d.iface = wahl || null;
+    else d.iface = d.iface || null;
   }
   if (f.kind === "hosts") {
     /* Die vier Felder wandern in ein `schwellen`-Objekt. Ausdrücklich
@@ -3595,7 +3822,7 @@ async function formSave() {
   collectForm();
   const f = state.form;
   if (!f.data.id) { f.error = "Kennung fehlt."; render(); return; }
-  if (f.kind === "tunnels" && !String(f.data.probeIp || "").trim() && !f.data.peerRef) {
+  if (f.kind === "tunnels" && !String(f.data.probeIp || "").trim() && !f.data.peerRef && !f.data.peerBRef) {
     f.error = "Ohne Gegenstelle im Tunnel und ohne verknüpften Peer gäbe es nichts zu messen — eines von beidem muss sein.";
     render(); return;
   }
@@ -4341,6 +4568,73 @@ function gelesenFeld(d) {
       <b>anderen</b> Standorts.</p></div>`;
 }
 
+/* ---------- Tunnel: das Interface ----------
+
+   Früher stand hier ein leeres Textfeld. Seit ein Tunnel seine Enden
+   benennt, ist die Frage in den meisten Fällen überflüssig: die Firewall
+   meldet, auf welchem Interface der Peer liegt, und genau das steht
+   danach in der Tunnelzeile. Zwei Quellen für dieselbe Angabe wären eine
+   zu viel — die getippte veraltet still, sobald jemand am Gerät etwas
+   verschiebt.
+
+   Bleibt der Fall, in dem der Leitstand es nicht wissen kann: das andere
+   Ende gehört jemand anderem, es gibt keinen Zugang, kein Peer zu
+   verknüpfen. Dann ist es wieder eine Eingabe — aber als Auswahl über
+   das, was die erreichbaren Firewalls melden, statt als leeres Feld.
+   Steht der gesuchte Name nicht dabei, führt „andere" zurück zum Tippen.
+
+   Drei Zustände, und jeder sagt, woher seine Angabe kommt. */
+/* Die verknüpften Peers dieses Formulars, so wie die Firewalls sie
+   melden — und die Interfaces daraus. Beides brauchen Anzeige und
+   Speichern, und beide müssen dasselbe sehen. */
+function gewaehltePeers(d) {
+  return [d.peerRef, d.peerBRef].map(r => PEERS.find(p => p.id === r)).filter(Boolean);
+}
+function gelesenesIface(d) {
+  return [...new Set(gewaehltePeers(d).map(p => p.iface).filter(Boolean))];
+}
+
+/* Welche der drei Herkünfte gerade gilt. Anzeige und Speichern fragen
+   dieselbe Stelle — sonst zeigte das Formular eine Auswahl und schriebe
+   das Textfeld zurück, und niemand sähe, welche der beiden gewann. */
+function ifaceHerkunft(d) {
+  if (gelesenesIface(d).length) return "peer";
+  const bekannt = [...new Set(PEERS.map(p => p.iface).filter(Boolean))];
+  return bekannt.length && d.ifaceWahl !== "__frei" ? "auswahl" : "frei";
+}
+
+function ifaceFeld(inp, d) {
+  const gewaehlt = gewaehltePeers(d);
+  const gelesen = gelesenesIface(d);
+  const herkunft = ifaceHerkunft(d);
+
+  /* 1. Ein verknüpfter Peer meldet es — dann gibt es nichts zu fragen. */
+  if (herkunft === "peer") return `<label class="admin-field">
+    <span class="admin-label">Interface</span>
+    <div class="admin-input" style="color:var(--dim);background:var(--panel-3)">${esc(gelesen.join(" · "))}</div>
+    <span class="admin-hint">Von ${esc([...new Set(gewaehlt.map(p => p.von))].join(" und "))} gelesen — dort liegt
+      der verknüpfte Peer. Eine getippte Angabe wäre eine zweite Quelle, die still veraltet.</span></label>`;
+
+  const bekannt = [...new Set(PEERS.map(p => p.iface).filter(Boolean))].sort();
+  const melder = [...new Set(PEERS.filter(p => p.iface).map(p => p.von))];
+
+  /* 3. Nichts gemeldet oder ausdrücklich selbst eingetragen. */
+  if (herkunft === "frei")
+    return inp("iface", "Interface", bekannt.length
+      ? "selbst eingetragen — keine Firewall meldet diesen Namen"
+      : "wie auf der Firewall; sobald ein Peer verknüpft ist, kommt es von dort", { ph: "wg0" });
+
+  /* 2. Zur Auswahl steht, was die erreichbaren Firewalls melden. */
+  const opts = [`<option value="">— ohne Angabe —</option>`];
+  for (const i of bekannt) opts.push(`<option value="${esc(i)}" ${d.ifaceWahl === i ? "selected" : ""}>${esc(i)}</option>`);
+  opts.push(`<option value="__frei">— andere, selbst eintragen —</option>`);
+  return `<label class="admin-field">
+    <span class="admin-label">Interface</span>
+    <select class="admin-input" data-field="ifaceWahl">${opts.join("")}</select>
+    <span class="admin-hint">Gemeldet von ${esc(melder.join(", "))}. Für eine Strecke, deren anderes Ende dem
+      Leitstand nicht offensteht — ist ein Peer verknüpft, kommt der Name von dort.</span></label>`;
+}
+
 /* Die Kennung des gemeldeten Peers zu einer hinterlegten Verknüpfung —
    zuerst über den Schlüssel, wie im Dienst auch. */
 function peerRefOf(peer) {
@@ -4450,7 +4744,7 @@ function renderAdminForm() {
       ${inp("id", "Kennung", "", { req: true, ro: f.mode === "edit", ph: "wg-hq-rz" })}
       ${sel("a", "Von", SITES.map(s => [s.id, s.name]))}
       ${sel("b", "Nach", SITES.map(s => [s.id, s.name]))}
-      ${inp("iface", "Interface", "wie auf der Firewall", { ph: "wg0" })}
+      ${ifaceFeld(inp, d)}
       ${inp("net", "Transfernetz", "", { ph: "10.99.0.0/30" })}
       ${inp("probeIp", "Gegenstelle im Tunnel", "diese Adresse wird gemessen", { ph: "10.99.0.2" })}
       ${inp("probePort", "Port der Gegenstelle", "leer: nur ICMP", { ph: "22" })}

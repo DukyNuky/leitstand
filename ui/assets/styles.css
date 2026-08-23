@@ -266,6 +266,11 @@ table.t th {
   letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
   padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--panel-2);
 }
+/* Sortierbare Kopfzelle. Der Pfeil steht nur an der Spalte, nach der
+   gerade sortiert wird — ein Pfeilpaar an jeder Spalte wäre Lärm. */
+table.t thead th[data-action="sort"] { cursor: pointer; user-select: none; }
+table.t thead th[data-action="sort"]:hover { color: var(--dim); }
+.th-pfeil { margin-left: 5px; font-size: 8px; color: var(--accent); vertical-align: 1px; }
 table.t td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
 table.t tr:last-child td { border-bottom: 0; }
 table.t tbody tr { cursor: pointer; }

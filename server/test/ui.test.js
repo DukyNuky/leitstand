@@ -1392,3 +1392,197 @@ test("Ein nicht bewertetes Zertifikat steht da, ohne zu leuchten", async () => {
   assert.match(html, /nicht bewertet/);
   assert.match(html, /tls_selfsigned_ignore/, "und wo man es umstellt");
 });
+
+/* ============================================================
+   Das Interface: gelesen, ausgewählt, getippt
+   ============================================================ */
+
+/* Ist ein Peer verknüpft, weiß die Firewall den Namen besser als jede
+   Eingabe — dann gehört die Frage weg, nicht bloß vorbelegt. */
+test("Mit verknüpftem Peer wird das Interface gelesen, nicht gefragt", async () => {
+  const { sandbox, ziele } = await mitPeers();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.ok(!/data-field="iface"/.test(html), "ein zweites Feld für dieselbe Angabe wäre eines zu viel");
+  assert.ok(!/data-field="ifaceWahl"/.test(html));
+  assert.match(html, /gelesen/);
+});
+
+/* Und wenn das andere Ende niemandem hier gehört: keine leere Zeile,
+   sondern die Auswahl über das, was die erreichbaren Geräte melden. */
+test("Ohne Verknüpfung wird das Interface zur Auswahl statt zum leeren Feld", async () => {
+  const { sandbox, ziele } = await mitPeers(null);
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /data-field="ifaceWahl"/);
+  assert.match(html, /<option value="wg0" selected>/, "der hinterlegte Name ist vorgewählt");
+  assert.match(html, /<option value="wg1"/, "auch das, was sonst noch gemeldet wird");
+  assert.match(html, /__frei/, "und ein Weg zum eigenen Namen");
+});
+
+test("„Andere“ führt zurück zum Textfeld", async () => {
+  const { sandbox, ziele } = await mitPeers(null);
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz"); state.form.data.ifaceWahl = "__frei"; render();`, sandbox);
+  assert.match(ziele.get("#overlays").innerHTML, /data-field="iface"/);
+});
+
+test("Meldet die Firewall das Interface, wird die getippte Angabe gelöscht", async () => {
+  const { sandbox } = await mitPeers();
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz")`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.iface, null, "sonst stünde eine zweite Quelle daneben, die still veraltet");
+});
+
+test("Ohne Verknüpfung wird der ausgewählte Name gespeichert", async () => {
+  const { sandbox } = await mitPeers(null);
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz"); state.form.data.ifaceWahl = "wg1";`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.iface, "wg1");
+});
+
+/* ============================================================
+   Neuzeichnen aus dem Netz
+   ============================================================ */
+
+/* Alle 15 Sekunden kommt ein Zustand. Ein aufgeklapptes Auswahlmenü hängt
+   am Knoten des <select> und ist mit dem nächsten Strich weg — mitten im
+   Auswählen. Aufgeschoben wird deshalb das Bild, nicht die Daten. */
+test("Während einer Auswahl wird nicht neu gezeichnet", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+
+  sandbox.document.activeElement = { tagName: "SELECT", dataset: {} };
+  ziele.get("#wrap").innerHTML = "MARKE";
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  assert.equal(ziele.get("#wrap").innerHTML, "MARKE", "das Neuzeichnen hätte die Auswahl zugeworfen");
+
+  /* Ist die Auswahl vorbei, wird nachgeholt — die Daten waren die ganze
+     Zeit da, nur das Bild stand still. */
+  sandbox.document.activeElement = null;
+  vm.runInContext("renderLive()", sandbox);
+  assert.notEqual(ziele.get("#wrap").innerHTML, "MARKE");
+});
+
+test("Was der Benutzer selbst auslöst, zeichnet sofort", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+
+  sandbox.document.activeElement = { tagName: "SELECT", dataset: {} };
+  ziele.get("#wrap").innerHTML = "MARKE";
+  vm.runInContext(`state.view = "vpn"; render();`, sandbox);
+  assert.notEqual(ziele.get("#wrap").innerHTML, "MARKE", "ein Klick darf nicht auf den nächsten Zustand warten");
+});
+
+test("„Ohne Angabe“ löscht den früher getippten Namen", async () => {
+  const { sandbox } = await mitPeers(null);
+  vm.runInContext(`openForm("tunnels", "edit", "wg-hq-rz"); state.form.data.ifaceWahl = "";`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.iface, null, "die Auswahl gilt, nicht der Wert von vorhin");
+});
+
+test("Ohne gemeldete Interfaces bleibt es beim Textfeld", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  vm.runInContext(`openForm("tunnels", "new", null)`, sandbox);
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /data-field="iface"/);
+  assert.ok(!/data-field="ifaceWahl"/.test(html), "eine leere Auswahlliste hilft niemandem");
+
+  vm.runInContext(`state.form.data.iface = "wg7";`, sandbox);
+  const p = JSON.parse(vm.runInContext("JSON.stringify(formPayload())", sandbox));
+  assert.equal(p.iface, "wg7");
+});
+
+/* ============================================================
+   Spalten sortieren
+
+   Sortiert wird, was in der Zelle steht — geprüft wird deshalb der
+   Vergleich, nicht der DOM-Griff drumherum. Er muss die Schreibweisen
+   verstehen, die in diesem Werkzeug vorkommen, und vor allem darf ein
+   Strich nicht als Null durchgehen.
+   ============================================================ */
+
+function sortiert(sandbox, zellen, richtung = 1) {
+  const code = `JSON.stringify(sortReihenfolge(${JSON.stringify(zellen)}, ${richtung}))`;
+  return JSON.parse(vm.runInContext(code, sandbox)).map(i => zellen[i].text);
+}
+
+test("Mengen mit Einheit werden als Mengen verglichen, nicht als Text", async () => {
+  const { sandbox } = ladeUi();
+  assert.deepEqual(
+    sortiert(sandbox, [{ text: "1.1 GB" }, { text: "536 MB" }, { text: "2.4 TB" }, { text: "980 B" }]),
+    ["980 B", "536 MB", "1.1 GB", "2.4 TB"]);
+});
+
+test("Zeiten auch — eine Minute ist mehr als 900 Millisekunden", async () => {
+  const { sandbox } = ladeUi();
+  assert.deepEqual(
+    sortiert(sandbox, [{ text: "3 T" }, { text: "900 ms" }, { text: "1 min 20 s" }, { text: "5 h" }]),
+    ["900 ms", "1 min 20 s", "5 h", "3 T"]);
+});
+
+test("Ein Strich bleibt hinten — in beide Richtungen", async () => {
+  const { sandbox } = ladeUi();
+  const zellen = [{ text: "—" }, { text: "74 %" }, { text: "12 %" }, { text: "—" }];
+  assert.deepEqual(sortiert(sandbox, zellen, 1), ["12 %", "74 %", "—", "—"]);
+  assert.deepEqual(sortiert(sandbox, zellen, -1), ["74 %", "12 %", "—", "—"],
+    "ein Unbekanntes ist keine Null und darf keine Spalte anführen");
+});
+
+test("Eine leere Zelle ist die Ampel — dann gilt die Dringlichkeit der Zeile", async () => {
+  const { sandbox } = ladeUi();
+  const zellen = [{ text: "", sev: "ok" }, { text: "", sev: "crit" }, { text: "", sev: "warn" }];
+  const code = `JSON.stringify(sortReihenfolge(${JSON.stringify(zellen)}, 1))`;
+  assert.deepEqual(JSON.parse(vm.runInContext(code, sandbox)).map(i => zellen[i].sev),
+    ["crit", "warn", "ok"]);
+});
+
+test("Zeitpunkte: heute steht hinter gestern, und der Tag zählt vor der Uhrzeit", async () => {
+  const { sandbox } = ladeUi();
+  assert.deepEqual(
+    sortiert(sandbox, [{ text: "14:15" }, { text: "23.08. 09:00" }, { text: "22.08. 23:59" }, { text: "09:00" }]),
+    ["22.08. 23:59", "23.08. 09:00", "09:00", "14:15"]);
+});
+
+test("Ein Name mit Ziffern bleibt ein Name", async () => {
+  const { sandbox } = ladeUi();
+  assert.deepEqual(
+    sortiert(sandbox, [{ text: "pve-hq-02" }, { text: "pve-hq-01" }, { text: "fw-01" }]),
+    ["fw-01", "pve-hq-01", "pve-hq-02"]);
+});
+
+test("Zahlen stehen vor dem Wort, das für eine fehlende steht", async () => {
+  const { sandbox } = ladeUi();
+  assert.deepEqual(
+    sortiert(sandbox, [{ text: "nie" }, { text: "in 9 T" }, { text: "in 2 T" }]),
+    ["in 2 T", "in 9 T", "nie"]);
+});
+
+test("Gleiche Werte behalten die Reihenfolge der Ansicht", async () => {
+  const { sandbox } = ladeUi();
+  const zellen = [{ text: "80 %" }, { text: "80 %" }, { text: "10 %" }];
+  const code = `JSON.stringify(sortReihenfolge(${JSON.stringify(zellen)}, 1))`;
+  assert.deepEqual(JSON.parse(vm.runInContext(code, sandbox)), [2, 0, 1]);
+});
+
+/* Dreimal klicken heißt: auf, ab, und wieder die Ordnung der Ansicht —
+   die ist nach Dringlichkeit und damit die einzige, die von selbst das
+   Wichtige nach oben bringt. */
+test("Der dritte Klick nimmt die Sortierung zurück", async () => {
+  const { sandbox } = ladeUi();
+  const lauf = vm.runInContext(`
+    const a = sortKlick("t", 2);
+    const b = sortKlick("t", 2);
+    const c = sortKlick("t", 2);
+    const d = sortKlick("t", 3);
+    JSON.stringify([a, b, c, d, Object.keys(state.sort)])`, sandbox);
+  const [a, b, c, d, schluessel] = JSON.parse(lauf);
+  assert.deepEqual(a, { spalte: 2, richtung: 1 });
+  assert.deepEqual(b, { spalte: 2, richtung: -1 });
+  assert.equal(c, null);
+  assert.deepEqual(d, { spalte: 3, richtung: 1 }, "eine andere Spalte fängt wieder aufsteigend an");
+  assert.deepEqual(schluessel, ["t"]);
+});

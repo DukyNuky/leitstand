@@ -325,12 +325,57 @@ nicht liefert — Gateways bei OPNsense, der ZFS-Cache bei pfSense —, bleibt d
 Zeile weg statt leer dazustehen: ein „CARP: —" an einem Gerät, bei dem CARP
 gar nicht abgefragt wird, wäre eine Aussage über etwas, wonach niemand gefragt
 hat. Die Rechnung von Zählerständen auf Durchsatz steht deshalb auch nur
-einmal da (`collectors/durchsatz.js`) — zweimal wäre sie zweimal falsch.
-
-**Ein gestoppter Gast hat keine Auslastung.**
+einmal da (`collectors/firewall.js`) — zweimal wäre sie zweimal falsch.
 
 **Ein gestoppter Gast hat keine Auslastung.** Proxmox meldet für ihn cpu 0 und
 mem 0 — das ist die Abwesenheit einer Messung. Als „0 %" angezeigt sähe eine
 ausgeschaltete Maschine aus wie eine, die sich langweilt. Ebenso bleibt die
 Plattenbelegung einer VM leer: der Wirt kennt sie nicht und schreibt 0 hin. Bei
 Containern ist dieselbe Zahl echt.
+
+**Gefragt wird nur, was der Leitstand nicht wissen kann.** Das Interface eines
+Tunnels stand früher als leeres Textfeld im Formular. Ist ein Peer verknüpft,
+meldet die Firewall es ohnehin — dann verschwindet die Frage, und in der
+Bestandsdatei steht kein `iface` mehr: eine getippte Angabe daneben wäre eine
+zweite Quelle, die still veraltet, sobald jemand am Gerät etwas verschiebt.
+Bleibt der Fall, den er *nicht* wissen kann: eine Strecke, deren anderes Ende
+jemand anderem gehört. Dann ist es wieder eine Eingabe, aber als Auswahl über
+die Namen, die die erreichbaren Firewalls melden — und „andere" führt zurück
+zum Tippen, denn eine Liste aus dem eigenen Netz ist keine Aussage über ein
+fremdes.
+
+**Ein Neuzeichnen aus dem Netz darf keine Eingabe unterbrechen.** Alle 15
+Sekunden kommt ein Zustand und die Seite wird neu gezeichnet. Getippte Werte
+überleben das — `render` sichert sie und setzt Fokus und Schreibmarke zurück.
+Ein aufgeklapptes Auswahlmenü überlebt es nicht: es hängt am Knoten des
+`<select>`, und ein Browser öffnet es nur auf eine echte Geste hin, also lässt
+es sich auch nicht wiederherstellen. Wer aus einer langen Peerliste sucht, wurde
+so alle 15 Sekunden herausgeworfen — ausgerechnet in dem Formular, in dem
+Sorgfalt am nötigsten ist.
+
+Aufgeschoben wird deshalb das *Bild*, nicht die Daten: die stehen längst im
+Zustand, und der nächste Strich holt sie ein. Sobald die Auswahl vorbei ist —
+Wert gewählt oder Fokus weiter —, wird nachgezeichnet. Nur der Zustandsstrom
+wird aufgeschoben; was der Benutzer selbst auslöst, zeichnet sofort. Und weil
+eine Überwachung, die stehenbleibt und dabei aktuell aussieht, das schlechtere
+Übel wäre, gibt es eine Obergrenze von zwei Minuten — für den Fall, dass jemand
+ein Menü aufklappt und weggeht.
+
+**Sortiert wird, was dasteht.** Jede Spalte jeder Tabelle lässt sich anklicken.
+Das klingt nach einer Abkürzung und ist eine Entscheidung: die Ansichten sind
+reine Funktionen von Zustand nach HTML, und jede Tabelle bräuchte sonst eine
+eigene Liste von Vergleichsfunktionen, passend zu dem, was sie gerade anzeigt.
+Zwanzig solcher Listen wären zwanzig Gelegenheiten, dass eine Spalte anders
+sortiert, als sie beschriftet ist.
+
+Der Vergleich versteht deshalb die Schreibweisen, die hier vorkommen: Mengen mit
+Einheit („1.1 GB"), Zeiten („900 ms", „3 T"), Prozente, Zeitpunkte („14:15",
+„23.08. 09:00"). Eine Zelle ohne Text ist die Ampel — dann gilt der Zustand der
+Zeile, nach Dringlichkeit geordnet. Ein Name mit Ziffern (`pve-hq-01`) bleibt
+ein Name. Und ein Strich bleibt hinten, in beiden Richtungen: er ist keine Null,
+und eine Spalte, die mit lauter Unbekanntem anfängt, hätte niemandem geholfen.
+
+Der dritte Klick nimmt die Sortierung zurück statt eine dritte Richtung zu
+erfinden. Die Ordnung der Ansicht ist meist die nach Dringlichkeit, und das ist
+die einzige, die von selbst das Wichtige nach oben bringt — man muss zu ihr
+zurückfinden können.

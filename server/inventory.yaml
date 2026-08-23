@@ -199,9 +199,13 @@ hosts:
 #  `net` und `probe.ip` muss man nicht abschreiben: sie stehen in den
 #  erlaubten Netzen der Peers, und die Verwaltung bietet sie zur Übernahme
 #  an, sobald ein Peer gewählt ist.
+#
+#  `iface` steht hier nur, solange kein Peer verknüpft ist. Mit einer
+#  Verknüpfung meldet die Firewall, auf welchem Interface der Peer liegt —
+#  ein getippter Name daneben wäre eine zweite Quelle, die still veraltet.
 # ============================================================
 tunnels:
-  - { id: wg-hq-rz, a: hq, b: rz, iface: wg0, net: 10.99.0.0/30,
+  - { id: wg-hq-rz, a: hq, b: rz, net: 10.99.0.0/30,
       probe: { ip: 10.99.0.2, port: 22 },
       peer:  { host: fw-01, iface: wg0, name: WG-Zweitstandort },
       peerB: { host: fw-02, iface: wg0, name: WG-Hauptstandort } }

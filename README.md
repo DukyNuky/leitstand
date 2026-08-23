@@ -154,6 +154,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **pfSense** | dasselbe — **aber nur mit dem Fremdpaket `pfSense-pkg-API`**. Das steht nicht im Paketverzeichnis von pfSense und ist für neuere Fassungen nicht immer zu haben; ohne es bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat. Der Sammler ist gebaut und geprüft und wartet darauf, dass das Paket da ist |
 | **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** und **ob er über UDP/53 wirklich auflöst** |
 | **Portainer** | Umgebungen erreichbar/gesamt, Stacks, Container laufend/gestoppt, `unhealthy`, Neustartschleifen und Exit 137 (Speichergrenze) — mit dem **Namen** des Containers, der klemmt |
+| **Sortierbare Spalten** | jede Tabelle, jede Spalte — nach Menge, Zeit, Prozent oder Zeitpunkt, wie sie dasteht; ein Klick auf die Ampelspalte sortiert nach Dringlichkeit. Ein Strich bleibt in beiden Richtungen hinten: er ist keine Null. Der dritte Klick stellt die Ordnung der Ansicht wieder her |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
 | **Startseite** | Kacheln tragen die Ampel des verknüpften Systems; ein Lesezeichen ohne System kann auf Wunsch selbst geprüft werden — ein GET je Minute, Ampel ohne Störung |
@@ -235,7 +236,7 @@ einen Texteditor:
 |---|---|
 | **Systeme** | anlegen, ändern, löschen · Typ, Adresse, Beschreibung · Überwachung abschalten · API-Zugangsdaten hinterlegen · **Verbindung testen** mit Einzelschritten |
 | **Standorte** | anlegen, ändern, löschen · **vierstelliges Kürzel** (Land + Stadt, z. B. `DEKO`), Ort, Anschluss, WAN · **Hauptstandort** festlegen (Mitte der Topologie) |
-| **Tunnel** | anlegen, ändern, löschen · Strecke, Interface, Transfernetz, Gegenstelle im Tunnel · **beide WireGuard-Enden** auswählen, Transfernetz und Gegenstelle aus den Peers übernehmen |
+| **Tunnel** | anlegen, ändern, löschen · Strecke, Transfernetz, Gegenstelle im Tunnel · **beide WireGuard-Enden** auswählen, Transfernetz und Gegenstelle aus den Peers übernehmen · das Interface wird vom verknüpften Peer **gelesen** und nur dort gefragt, wo es niemand melden kann — dann als Auswahl über die gemeldeten Namen |
 | **Startseite** | Gruppen anlegen, umbenennen, sortieren · Verknüpfungen hinzufügen, mit System verbinden, sortieren, löschen |
 | **Schwellwerte** | Intervall, Zeitlimit, Fehlschläge bis Rot, „langsam“, Zertifikatsfristen, eigensignierte Zertifikate bewerten oder übergehen, Verlaufslänge, ICMP |
 | **Sicherung** | frühere Stände ansehen — Sicherung und Tagesauszüge, je mit Inhalt — und einen davon **zurückholen** |
