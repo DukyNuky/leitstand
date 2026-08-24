@@ -2174,3 +2174,90 @@ test("Ohne eigene Liste geht eine leere hinaus — das heißt „wieder ableiten
   ui.state.form.data.checksEigen = false;
   assert.deepEqual(nutzlast(sandbox).checks, []);
 });
+
+/* ============================================================
+   Die WAN-Adresse in der Oberfläche
+   ============================================================ */
+
+test("Die gelesene WAN-Adresse steht am Standort, und eine Abweichung fällt auf", async () => {
+  const zustand = await echterZustand();
+  Object.assign(zustand.sites[0], {
+    wan: "203.0.113.9", wanIst: "203.0.113.17", wan6Ist: "2001:db8::17",
+    wanQuelle: "fw-01", wanIface: "wan", wanPrivat: false, wanAliase: 2
+  });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+
+  ui.state.view = "lage";
+  ui.render();
+  const lage = ziele.get("#wrap").innerHTML;
+  assert.match(lage, /203\.0\.113\.17/, "gezeigt wird das Gemessene");
+  assert.ok(!/undefined|NaN/.test(lage));
+
+  ui.state.inspector = { kind: "site", id: zustand.sites[0].id };
+  ui.render();
+  const insp = ziele.get("#overlays").innerHTML;
+  assert.match(insp, /203\.0\.113\.17/);
+  assert.match(insp, /eingetragen steht 203\.0\.113\.9/, "die Abweichung gehört benannt");
+  assert.match(insp, /gelesen von fw-01/);
+  assert.match(insp, /\+2 Alias/);
+});
+
+test("Ohne gelesene Adresse steht da, dass sie nur eingetragen ist", async () => {
+  const zustand = await echterZustand();
+  Object.assign(zustand.sites[0], { wan: "203.0.113.9" });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.inspector = { kind: "site", id: zustand.sites[0].id };
+  ui.render();
+  assert.match(ziele.get("#overlays").innerHTML, /eingetragen, nicht gelesen/);
+});
+
+/* Eine private Adresse am WAN sagt: die Firewall hängt hinter einem
+   Modem-Router. Wer das übersieht, sucht den Standort im Internet unter
+   einer Adresse, unter der er nie zu finden war. */
+test("Eine private WAN-Adresse wird als solche gekennzeichnet", async () => {
+  const zustand = await echterZustand();
+  Object.assign(zustand.sites[0], { wanIst: "192.168.100.2", wanQuelle: "fw-01", wanPrivat: true });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.inspector = { kind: "site", id: zustand.sites[0].id };
+  ui.render();
+  assert.match(ziele.get("#overlays").innerHTML, /privat/);
+});
+
+test("Auf der Seite der Firewall steht jeder Anschluss mit seinen Adressen", async () => {
+  const zustand = await echterZustand();
+  const fw = zustand.hosts.find(h => h.type === "opnsense");
+  Object.assign(fw, {
+    version: "26.1", ram: 41, disk: 22,
+    wan: "203.0.113.17", wanPraefix: 29, wanIface: "wan", wanAliase: 2, wanPrivat: false,
+    uplinks: [{
+      name: "wan", geraet: "vtnet1", beschreibung: "Uplink Glasfaser", zustand: "up", art: "dhcp",
+      gateways: ["WAN_GW"],
+      ipv4: { ip: "203.0.113.17", praefix: 29, privat: false },
+      ipv6: { ip: "2001:db8::17", praefix: 64, privat: false },
+      aliase: [
+        { ip: "203.0.113.18", praefix: 29, privat: false },
+        { ip: "203.0.113.19", praefix: 29, privat: false, vhid: "10", carp: "master" }
+      ]
+    }]
+  });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.openSystem(fw.id);
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = null;
+  ui.render();
+  const seite = ziele.get("#wrap").innerHTML;
+  assert.match(seite, /Uplink Glasfaser/);
+  assert.match(seite, /203\.0\.113\.18/, "der Alias gehört sichtbar dazu");
+  assert.match(seite, /CARP 10/, "eine geteilte Adresse ist als solche gekennzeichnet");
+  assert.match(seite, /WAN_GW/);
+  assert.match(seite, /Nach außen/);
+  assert.ok(!/undefined|NaN/.test(seite));
+});

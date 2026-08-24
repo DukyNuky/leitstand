@@ -695,6 +695,33 @@ function viewLage() {
   </div>`;
 }
 
+/* ---------- Die Adressen nach außen ----------
+   Getippt und gelesen nebeneinander. Wo beides dasteht und
+   auseinanderläuft, wird es gesagt: ein Eintrag, den seit dem Anlegen
+   niemand angefasst hat, sieht sonst genauso aus wie einer, der stimmt. */
+function wanZeile(s) {
+  const getippt = s.wan && s.wan !== "—" ? s.wan : null;
+  const gelesen = s.wanIst || null;
+  if (!gelesen) return getippt ? `<span class="mono">${esc(getippt)}</span>
+    <span class="faint">— eingetragen, nicht gelesen</span>` : '<span class="faint">—</span>';
+  const abweichung = getippt && getippt !== gelesen;
+  return `<span class="mono">${esc(gelesen)}</span>${s.wanPrivat
+      ? ' <span class="chip chip--warn" title="Eine private Adresse ist nicht die, unter der dieser Standort im Internet zu finden ist">privat</span>' : ""}
+    ${s.wanAliase ? `<span class="chip chip--plain">+${s.wanAliase} Alias(e)</span>` : ""}
+    <div class="faint" style="font-size:11.5px">gelesen von ${esc(s.wanQuelle)}${s.wanIface ? ` · ${esc(s.wanIface)}` : ""}${
+      abweichung ? ` · <span style="color:var(--warn)">eingetragen steht ${esc(getippt)}</span>` : ""}</div>`;
+}
+
+/* Für die Kachel: nur die Adresse, aber die richtige. */
+function wanKurz(s) {
+  const gelesen = s.wanIst || null;
+  const getippt = s.wan && s.wan !== "—" ? s.wan : null;
+  if (!gelesen) return getippt ? esc(getippt) : "—";
+  const abweichung = getippt && getippt !== gelesen;
+  return `<span title="${esc(abweichung ? `eingetragen: ${getippt} — gelesen von ${s.wanQuelle}` : `gelesen von ${s.wanQuelle}`)}">${esc(gelesen)}${
+    abweichung ? ' <span style="color:var(--warn)">≠</span>' : ""}</span>`;
+}
+
 /* `down` setzt der Server, wenn kein überwachtes System des Standorts mehr
    antwortet — dieselbe Bedingung, aus der die Standort-Bündelung entsteht. */
 function siteCard(s) {
@@ -702,7 +729,6 @@ function siteCard(s) {
   const bad = hosts.filter(h => isProblem(h.status)).length;
   const tuns = state.tunnels.filter(t => t.a === s.id || t.b === s.id);
   const st = s.down ? "crit" : bad ? "warn" : hosts.length ? "ok" : "idle";
-  const wan = s.wan && s.wan !== "—" ? s.wan : null;
   const untertitel = [s.place, s.isp].filter(x => x && x !== "—").join(" · ");
   return `<div class="card" data-action="inspect" data-kind="site" data-id="${esc(s.id)}">
     <div class="card-head">
@@ -714,7 +740,7 @@ function siteCard(s) {
       <div class="spacer"></div>${chip("plain", s.short)}
     </div>
     <div class="stat-row">
-      ${stat("WAN", nz(wan))}
+      <div class="stat"><span class="stat-k">WAN</span><span class="stat-v">${wanKurz(s)}</span></div>
       <div class="stat"><span class="stat-k">Systeme</span><span class="stat-v">${hosts.length}${bad ? ` <span style="color:var(--warn)">▲${bad}</span>` : ""}</span></div>
       <div class="stat"><span class="stat-k">Tunnel</span><span class="stat-v">${tuns.length ? `${tuns.filter(t => t.status === "ok").length}/${tuns.length}` : "—"}</span></div>
       <div class="stat"><span class="stat-k">Meldungen</span><span class="stat-v">${state.incidents.filter(i => i.site === s.id).length || "—"}</span></div>
@@ -836,7 +862,7 @@ function viewSites() {
         ${dot(s.down ? "crit" : hosts.some(h => isProblem(h.status)) ? "warn" : "ok")}
         <h3>${esc(s.name)}</h3><span class="hint">${esc(s.place)}</span>
         <div class="spacer"></div>
-        <span class="mono faint" style="font-size:11.5px">${esc(s.isp)} · WAN ${esc(s.wan)} · IPv6 ${esc(s.wan6)}</span>
+        <span class="mono faint" style="font-size:11.5px">${esc(s.isp)} · WAN ${wanKurz(s)} · IPv6 ${esc(s.wan6Ist || s.wan6)}</span>
       </div>
       <div class="panel-body panel-body--flush tablewrap">
         <table class="t"><thead><tr><th style="width:34px"></th><th>System</th><th>Typ</th><th>Adresse</th><th>Version</th><th>Auslastung</th><th class="right">Antwortzeit</th></tr></thead><tbody>
@@ -1413,6 +1439,49 @@ const FIREWALL = new Set(["opnsense", "pfsense"]);
    verrät, und sie sagt mehr als „erreichbar": „online mit 0,4 % Verlust"
    ist etwas anderes als „down", und beides sieht von außen gleich aus,
    solange die Firewall selbst antwortet. */
+/* ---------- Die Anschlüsse nach außen ----------
+   Welche Schnittstelle nach draußen geht, entscheidet ihr Gateway und
+   nicht ihr Name — und was dort an Adressen hängt, gehört vollständig
+   hin: eine zweite öffentliche Adresse auf derselben Leitung (IP-Alias)
+   ist von außen genauso echt wie die erste. Wer einen Dienst darauf
+   veröffentlicht hat und hier nur die erste sieht, sucht im Zweifel am
+   falschen Ende. */
+function uplinkTabelle(h) {
+  const liste = h.uplinks;
+  if (!liste || !liste.length) return "";
+  const adr = a => `<span class="mono">${esc(a.ip)}${a.praefix != null ? "/" + a.praefix : ""}</span>${
+    a.privat ? ' <span class="chip chip--warn">privat</span>' : ""}${
+    a.vhid ? ` <span class="chip chip--plain">CARP ${esc(a.vhid)}${a.carp ? " · " + esc(a.carp) : ""}</span>` : ""}`;
+  return `<div class="panel-body panel-body--flush tablewrap">
+    <table class="t"><thead><tr>
+      <th style="width:34px"></th><th>Anschluss</th><th>Art</th><th>Adresse</th><th>Weitere Adressen</th><th>Gateway</th>
+    </tr></thead><tbody>
+    ${liste.map(u => {
+      const ampel = u.zustand == null ? "idle" : u.zustand === "up" ? "ok" : "crit";
+      return `<tr data-sev="${ampel}">
+        <td class="sev">${dot(ampel)}</td>
+        <td><div class="mono">${esc(u.beschreibung || u.name)}</div>
+          <div class="t-sub">${esc(u.name)}${u.geraet && u.geraet !== u.name ? " · " + esc(u.geraet) : ""}</div></td>
+        <td class="faint">${esc(u.art || "—")}</td>
+        <td>${u.ipv4 ? adr(u.ipv4) : '<span class="faint">—</span>'}
+          ${u.ipv6 ? `<div style="margin-top:3px">${adr(u.ipv6)}</div>` : ""}</td>
+        <td>${(u.aliase || []).length
+          ? u.aliase.map(a => `<div>${adr(a)}</div>`).join("")
+          : '<span class="faint">—</span>'}</td>
+        <td class="mono faint">${esc((u.gateways || []).join(", ") || "—")}</td>
+      </tr>`;
+    }).join("")}
+    </tbody></table>
+  </div>
+  <div class="panel-note">Als Anschluss nach außen gilt, woran ein <b>Gateway</b> hängt — nicht, was „WAN" heißt.
+    Ein zweiter Anschluss trägt selten diesen Namen, und ein ungewöhnlich benannter wäre sonst unsichtbar.
+    <b>IP-Aliase</b> stehen als weitere Adressen dabei: für alles, was von außen kommt, sind sie genauso echt wie
+    die erste. Eine mit <b>CARP</b> gekennzeichnete gehört diesem Gerät nur, solange es MASTER ist.
+    ${liste.some(u => u.ipv4?.privat) ? `<br>Eine als <b>privat</b> gekennzeichnete Adresse ist die Wahrheit über
+      die Schnittstelle und <em>nicht</em> die Adresse, unter der dieser Standort im Internet zu finden ist —
+      davor hängt ein Modem oder Router, der die eigentliche trägt.` : ""}</div>`;
+}
+
 function gatewayTabelle(h) {
   const gws = h.gateways || [];
   if (!gws.length) return "";
@@ -3289,11 +3358,19 @@ function kennzahlenPanel(h) {
            gar nicht gefragt wurde. */
         h.statesPct != null ? ["Zustandstabelle", `${h.states} von ${h.statesMax} belegt (${h.statesPct} %)`] : null,
         h.carp ? ["CARP", `${esc(h.carp)}${h.carpWartung ? " · Wartungsmodus" : ""}`] : null,
+        /* Was die Firewall selbst über ihre Außenseite sagt — die Zahl,
+           die am Standort bisher nur getippt dastand. */
+        h.wan ? ["Nach außen", `<span class="mono">${esc(h.wan)}${h.wanPraefix != null ? "/" + h.wanPraefix : ""}</span>`
+          + (h.wanPrivat ? ' <span class="chip chip--warn">privat</span>' : "")
+          + (h.wanIface ? ` <span class="faint">über ${esc(h.wanIface)}</span>` : "")
+          + (h.wanAliase ? ` · ${h.wanAliase} weitere Adresse(n)` : "")
+          + (h.wan6 ? `<br><span class="mono">${esc(h.wan6)}</span>` : "")] : null,
         ["WireGuard", h.wgPeers == null ? "—"
           : `${h.wgPeers} Peer(s) auf ${nz(h.wgIfaces)} Schnittstelle(n)${h.wgStill ? `, ${h.wgStill} still` : ""}`
             + (h.wgHandshakeUnbekannt ? ' <span style="color:var(--warn)">— ohne Handshake-Alter</span>' : "")],
         ["Schwellwerte", schwellenZeile(h)]
       ])}</div>
+      ${uplinkTabelle(h)}
       ${gatewayTabelle(h)}
       ${h.wgNote ? `<div class="panel-note">${esc(h.wgNote)}</div>` : ""}
       <div class="panel-note">Durchsatz, Pakete und Fehler je Leitung stehen weiter oben unter
@@ -3822,8 +3899,10 @@ function inspectorContent(kind, id) {
           <dt>Kennung</dt><dd class="mono">${esc(s.id)}</dd>
           <dt>Ort</dt><dd>${esc(s.place || "—")}</dd>
           <dt>Anschluss</dt><dd>${esc(s.isp || "—")}</dd>
-          <dt>WAN IPv4</dt><dd class="mono">${esc(s.wan || "—")}</dd>
-          <dt>WAN IPv6</dt><dd class="mono">${esc(s.wan6 || "—")}</dd>
+          <dt>WAN IPv4</dt><dd>${wanZeile(s)}</dd>
+          <dt>WAN IPv6</dt><dd class="mono">${esc(s.wan6Ist || s.wan6 || "—")}${
+            s.wan6Ist && s.wan6 && s.wan6 !== "—" && s.wan6 !== s.wan6Ist
+              ? ` <span class="faint" style="color:var(--warn)">eingetragen steht ${esc(s.wan6)}</span>` : ""}</dd>
           <dt>Rolle</dt><dd>${s.primary ? "Hauptstandort" : "Außenstandort"}</dd>
         </dl></div>
         <div><div class="sec-title">Systeme (${hosts.length})</div>
@@ -5913,8 +5992,8 @@ function renderAdminForm() {
       ${inp("short", "Kürzel", "vier Stellen: Land + Stadt", { req: true, ph: "DEKO", maxlength: 4, gross: true })}
       ${inp("place", "Ort", "rein informativ", { ph: "Köln" })}
       ${inp("isp", "Anschluss", "rein informativ", { ph: "Kabel 1000/50" })}
-      ${inp("wan", "WAN IPv4", "rein informativ — wird nicht geprüft", { ph: "203.0.113.17" })}
-      ${inp("wan6", "WAN IPv6", "rein informativ", { ph: "2001:db8::/56" })}
+      ${inp("wan", "WAN IPv4", "wird mit dem verglichen, was die Firewall meldet", { ph: "203.0.113.17" })}
+      ${inp("wan6", "WAN IPv6", "leer lassen, wenn die Firewall sie meldet", { ph: "2001:db8::/56" })}
     </div>
     <label class="row" style="gap:9px;cursor:pointer">
       <span class="switch" role="switch" aria-checked="${!!d.primary}" data-action="form-toggle" data-field="primary"></span>

@@ -66,6 +66,10 @@ settings:
 #  `primary: true` markiert den Hauptstandort; er steht in der
 #  Topologie in der Mitte.
 # ============================================================
+# Am Standort darf `wan:` stehen — es ist aber nur der Vergleichswert.
+# Hängt dort eine OPNsense mit hinterlegtem Zugang, liest der Leitstand die
+# Adresse selbst aus der Schnittstellenübersicht und zeigt beides
+# nebeneinander; eine Abweichung wird benannt statt übergangen.
 sites:
   # Das Kürzel hat vier Stellen: Land + Stadt. DEKO = Deutschland/Köln,
   # ATWI = Österreich/Wien. Feste Breite, weil es in der Filterleiste, in

@@ -102,9 +102,20 @@ function opnsense(ab = {}) {
       /* Ältere Fassungen kennen diesen Endpunkt nicht — dann fehlen
          Zustand und Beschreibung, die Zähler kommen trotzdem. */
       if (ab.uebersicht === false) return send(404, { message: "not found" });
+      /* So, wie OPNsense es liefert: `addr4` ist die erste Adresse,
+         `ipv4[]` trägt sie noch einmal und dazu jede weitere auf
+         derselben Schnittstelle — IP-Aliase und CARP-Adressen. Am LAN
+         hängt kein Gateway, am Uplink zwei Adressen und eine geteilte. */
       return send(200, ab.uebersicht ?? [
-        { device: "vtnet0", description: "LAN", status: "up", enabled: true, mtu: 1500 },
-        { device: "vtnet1", description: "Uplink Glasfaser", status: "down", enabled: true, mtu: 1492 }
+        { device: "vtnet0", identifier: "lan", description: "LAN", status: "up", enabled: true, mtu: 1500,
+          link_type: "static", addr4: "10.10.0.1/24", ipv4: [{ ipaddr: "10.10.0.1/24" }], gateways: [] },
+        { device: "vtnet1", identifier: "wan", description: "Uplink Glasfaser", status: "down", enabled: true,
+          mtu: 1492, link_type: "dhcp", addr4: "203.0.113.17/29", addr6: "2001:db8:1::17/64",
+          ipv4: [{ ipaddr: "203.0.113.17/29" },
+                 { ipaddr: "203.0.113.18/29" },
+                 { ipaddr: "203.0.113.19/29", vhid: "10", status: "MASTER" }],
+          ipv6: [{ ipaddr: "2001:db8:1::17/64" }],
+          gateways: ["WAN_GW"] }
       ]);
     }
 
@@ -735,5 +746,101 @@ test("Eine virtuelle Adresse ohne CARP zählt nicht als Rolle", async () => {
   });
   try {
     assert.equal((await collectOpnsense(host, CRED, GRENZE)).carp, null);
+  } finally { srv.close(); }
+});
+
+/* ============================================================
+   Die Adressen nach außen
+
+   Am Standort stand die WAN-Adresse bisher so, wie sie jemand einmal
+   eingetragen hat. Bei einem Anschluss, der sich täglich eine neue
+   holt, ist das nach 24 Stunden eine Zahl ohne Bedeutung — und niemand
+   merkt es, weil sie nie geprüft wurde.
+   ============================================================ */
+
+test("Die WAN-Adresse wird gelesen, nicht abgeschrieben", async () => {
+  const { srv, host } = await an();
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.wan, "203.0.113.17");
+    assert.equal(r.wanPraefix, 29);
+    assert.equal(r.wan6, "2001:db8:1::17");
+    assert.equal(r.wanIface, "wan");
+    assert.equal(r.wanPrivat, false);
+  } finally { srv.close(); }
+});
+
+/* Ein Dienst auf einer zweiten öffentlichen Adresse ist von außen
+   genauso erreichbar wie einer auf der ersten. Wer hier nur die erste
+   sieht, sucht im Zweifel am falschen Ende. */
+test("IP-Aliase auf der WAN-Schnittstelle zählen mit", async () => {
+  const { srv, host } = await an();
+  try {
+  const r = await collectOpnsense(host, CRED);
+  const wan = r.uplinks.find(u => u.name === "wan");
+  assert.equal(wan.aliase.length, 2, "die erste Adresse ist keine weitere");
+  assert.deepEqual(wan.aliase.map(a => a.ip), ["203.0.113.18", "203.0.113.19"]);
+  assert.equal(r.wanAliase, 2);
+  assert.equal(wan.ipv6.ip, "2001:db8:1::17", "die IPv6 steht als eigene Adresse, nicht als Alias");
+
+  /* Eine geteilte Adresse gehört diesem Gerät nur, solange es MASTER
+     ist — das gehört dazugeschrieben und nicht verschwiegen. */
+  const carp = wan.aliase.find(a => a.ip === "203.0.113.19");
+  assert.equal(carp.vhid, "10");
+  assert.equal(carp.carp, "master");
+  } finally { srv.close(); }
+});
+
+/* Nicht der Name entscheidet, sondern das Gateway: ein zweiter Anschluss
+   heißt selten „WAN", und ein ungewöhnlich benannter wäre sonst
+   unsichtbar. */
+test("Als Anschluss nach außen gilt, woran ein Gateway hängt", async () => {
+  const a = await an();
+  try {
+    const r = await collectOpnsense(a.host, CRED);
+    assert.deepEqual(r.uplinks.map(u => u.name), ["wan"], "das LAN hat kein Gateway");
+  } finally { a.srv.close(); }
+
+  const b = await an({
+    uebersicht: [
+      { device: "igb0", identifier: "opt3", description: "Glasfaser Köln", status: "up",
+        link_type: "pppoe", addr4: "198.51.100.44/32", ipv4: [{ ipaddr: "198.51.100.44/32" }],
+        gateways: ["FTTH_GW"] },
+      { device: "igb1", identifier: "lan", description: "LAN", status: "up",
+        addr4: "10.0.0.1/24", ipv4: [{ ipaddr: "10.0.0.1/24" }], gateways: [] }
+    ]
+  });
+  try {
+    const umbenannt = await collectOpnsense(b.host, CRED);
+    assert.deepEqual(umbenannt.uplinks.map(u => u.name), ["opt3"]);
+    assert.equal(umbenannt.wan, "198.51.100.44");
+    assert.equal(umbenannt.uplinks[0].art, "pppoe");
+  } finally { b.srv.close(); }
+});
+
+/* Eine private Adresse am WAN ist die Wahrheit über die Schnittstelle
+   und nicht die Adresse, unter der der Standort im Internet zu finden
+   ist. Wer das verschweigt, führt genauso in die Irre wie ein veralteter
+   Eintrag von Hand. */
+test("Eine private Adresse am Anschluss wird als solche gemeldet", async () => {
+  const { srv, host } = await an({
+    uebersicht: [
+      { device: "vtnet1", identifier: "wan", description: "WAN", status: "up", link_type: "dhcp",
+        addr4: "192.168.100.2/24", ipv4: [{ ipaddr: "192.168.100.2/24" }], gateways: ["WAN_GW"] }
+    ]
+  });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.wan, "192.168.100.2");
+    assert.equal(r.wanPrivat, true);
+  } finally { srv.close(); }
+});
+
+test("Ohne Schnittstellenübersicht wird keine Adresse erfunden", async () => {
+  const { srv, host } = await an({ uebersicht: false });
+  try {
+    const r = await collectOpnsense(host, CRED);
+    assert.equal(r.uplinks, null);
+    assert.equal(r.wan, undefined, "lieber eine Lücke als eine geratene Adresse");
   } finally { srv.close(); }
 });

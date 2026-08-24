@@ -180,3 +180,51 @@ test("Die Prüfungen einer Strecke stehen in ihrer Ansicht", () => {
   assert.equal(t.checks[1].ok, null, "übersprungen ist nicht fehlgeschlagen");
   assert.match(t.checks[1].detail, /nicht erlaubt/);
 });
+
+/* ============================================================
+   Die WAN-Adresse am Standort: getippt und gelesen
+
+   Eingetragen wird sie einmal beim Anlegen. Bei einem Anschluss, der
+   sich täglich eine neue holt, steht dort nach 24 Stunden eine Zahl ohne
+   Bedeutung — und niemand merkt es, weil sie nie geprüft wurde.
+   ============================================================ */
+
+function standortMitFirewall(extra, wanGetippt) {
+  const inv = Inv.normalize({
+    settings: { icmp: false, timeout: 1 },
+    sites: [{ id: "hq", name: "HQ", short: "DEKO", ...(wanGetippt ? { wan: wanGetippt } : {}) }],
+    hosts: [{ id: "fw", type: "opnsense", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: 1 }] }],
+    tunnels: [], links: []
+  });
+  const e = new Engine(inv);
+  e.hosts.get("fw").extra = extra;
+  return buildState(e, null).sites[0];
+}
+
+test("Was die Firewall meldet, steht am Standort neben dem Eingetragenen", () => {
+  const s = standortMitFirewall(
+    { wan: "203.0.113.17", wan6: "2001:db8::17", wanIface: "wan", wanPrivat: false, wanAliase: 2 },
+    "203.0.113.9"
+  );
+  assert.equal(s.wan, "203.0.113.9", "das Eingetragene bleibt stehen");
+  assert.equal(s.wanIst, "203.0.113.17", "und daneben, was gemessen wurde");
+  assert.equal(s.wan6Ist, "2001:db8::17");
+  assert.equal(s.wanQuelle, "fw", "mit dem Gerät, das es gelesen hat");
+  assert.equal(s.wanAliase, 2);
+});
+
+test("Ohne Firewall mit Sammler bleibt es beim Eingetragenen — ohne Behauptung", () => {
+  const s = standortMitFirewall({}, "203.0.113.9");
+  assert.equal(s.wan, "203.0.113.9");
+  assert.equal(s.wanIst, undefined, "nichts gelesen heißt nichts gelesen");
+});
+
+/* Eine private Adresse am WAN ist die Wahrheit über die Schnittstelle
+   und nicht die Adresse, unter der der Standort im Internet zu finden
+   ist. Das gehört mitgereicht, sonst führt die gelesene Adresse genauso
+   in die Irre wie eine veraltete getippte. */
+test("Eine private Adresse wird als solche weitergereicht", () => {
+  const s = standortMitFirewall({ wan: "192.168.100.2", wanPrivat: true }, null);
+  assert.equal(s.wanIst, "192.168.100.2");
+  assert.equal(s.wanPrivat, true);
+});

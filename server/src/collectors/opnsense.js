@@ -71,7 +71,7 @@ export const PFADE = [
   },
   {
     pfad: "/api/interfaces/overview/export",
-    zweck: "Schnittstellen: Beschreibung, Verbindungszustand, MTU — die Zähler sagen nichts über einen toten Link",
+    zweck: "Schnittstellen: Beschreibung, Verbindungszustand, MTU — und die Adressen nach außen samt IP-Aliasen",
     optional: true,
     fehlendOk: "Diese Fassung kennt den Endpunkt nicht — dann fehlen Beschreibung und Verbindungszustand, "
       + "die Zähler und der Durchsatz kommen trotzdem"
@@ -220,6 +220,7 @@ export async function collectOpnsense(host, cred, settings) {
   platte(out, disk.ok ? disk.data : null);
   laufzeit(out, sys.ok ? sys.data : null, zeit.ok ? zeit.data : null);
   schnittstellen(out, host, ifs.ok ? ifs.data : null, uebersicht.ok ? uebersicht.data : null);
+  uplinks(out, uebersicht.ok ? uebersicht.data : null);
   wireguard(out, wg.ok ? wg.data : null, wg.status);
   gateways(out, gws);
   zustandstabelle(out, states);
@@ -415,6 +416,122 @@ export function schnittstellenUebersicht(d) {
     });
   }
   return map;
+}
+
+
+/* ---------- Die Adressen nach außen ----------
+
+   Am Standort steht die WAN-Adresse bislang so, wie sie jemand einmal
+   eingetragen hat. Bei einem festen Anschluss geht das lange gut; bei
+   einem, der sich alle 24 Stunden neu holt, steht dort nach dem ersten
+   Tag eine Zahl, die nichts mehr bedeutet — und niemand merkt es, weil
+   sie nie geprüft wurde. Die Firewall weiß es besser: sie trägt die
+   Adresse.
+
+   **Welche Schnittstelle die nach außen ist**, entscheidet nicht ihr
+   Name, sondern ihr Gateway. Ein Gerät kann zwei Anschlüsse haben, und
+   die zweite heißt dann nicht „WAN", sondern „WAN2" oder „LTE". Wo ein
+   Gateway hängt, geht es hinaus — das gilt auch dann, wenn jemand die
+   Schnittstellen ungewöhnlich benannt hat. Nur wenn gar nichts ein
+   Gateway trägt (ältere Fassungen liefern die Liste nicht mit), fällt
+   die Erkennung auf die Kennung `wan` zurück.
+
+   **IP-Aliase zählen mit.** In OPNsense sind sie zusätzliche Adressen
+   auf derselben Schnittstelle — und für alles, was von außen kommt,
+   sind sie genauso echt wie die erste. Wer einen Dienst auf einer
+   zweiten öffentlichen Adresse veröffentlicht und hier nur die erste
+   sieht, sucht im Zweifel am falschen Ende. Sie stehen deshalb einzeln
+   dabei, und eine geteilte Adresse (CARP, also mit `vhid`) ist als
+   solche gekennzeichnet: sie gehört diesem Gerät nur, solange es
+   MASTER ist.
+
+   **Eine private Adresse wird als private gemeldet.** Steht am WAN
+   192.168.100.2, dann ist das die Wahrheit über die Schnittstelle und
+   *nicht* die Adresse, unter der dieser Standort im Internet zu finden
+   ist — davor hängt ein Modem-Router, der die eigentliche trägt. Diese
+   Unterscheidung gehört in die Anzeige, sonst führt die gelesene
+   Adresse genauso in die Irre wie die veraltete getippte. */
+export function uplinks(out, roh) {
+  const liste = Array.isArray(roh) ? roh
+    : Array.isArray(roh?.rows) ? roh.rows
+    : (roh && typeof roh === "object") ? Object.values(roh) : null;
+  if (!Array.isArray(liste)) { out.uplinks = null; return; }
+
+  const eintraege = liste.filter(e => e && typeof e === "object");
+  const mitGateway = eintraege.filter(e => Array.isArray(e.gateways) && e.gateways.length);
+  const gewaehlt = mitGateway.length
+    ? mitGateway
+    : eintraege.filter(e => String(e.identifier || "").toLowerCase() === "wan");
+  if (!gewaehlt.length) { out.uplinks = []; return; }
+
+  out.uplinks = gewaehlt.map(e => {
+    const v4 = adressen(e.ipv4, e.addr4);
+    const v6 = adressen(e.ipv6, e.addr6);
+    return {
+      name: e.identifier || e.device || "—",
+      geraet: e.device || null,
+      beschreibung: e.description || null,
+      zustand: e.status ? String(e.status).toLowerCase() : null,
+      /* „dhcp", „pppoe", „static" — sie sagt, ob eine Adresse überhaupt
+         wechseln kann. Bei „static" ist eine Abweichung vom Eingetragenen
+         ein Umbau, bei „dhcp" der Alltag. */
+      art: e.link_type && e.link_type !== "none" ? String(e.link_type) : null,
+      gateways: Array.isArray(e.gateways) ? e.gateways.map(String) : [],
+      ipv4: v4[0] || null,
+      ipv6: v6[0] || null,
+      aliase: [...v4.slice(1), ...v6.slice(1)]
+    };
+  });
+
+  /* Was am Standort steht, ist die erste Adresse des ersten Anschlusses,
+     der eine hat — mehr kann eine einzelne Zeile nicht tragen. Alles
+     Weitere steht auf der Seite des Geräts. */
+  const ersteV4 = out.uplinks.find(u => u.ipv4);
+  const ersteV6 = out.uplinks.find(u => u.ipv6);
+  out.wan = ersteV4?.ipv4?.ip || null;
+  out.wanPraefix = ersteV4?.ipv4?.praefix ?? null;
+  out.wanPrivat = ersteV4?.ipv4?.privat ?? null;
+  out.wanIface = ersteV4?.name || null;
+  out.wan6 = ersteV6?.ipv6?.ip || null;
+  out.wanAliase = out.uplinks.reduce((a, u) => a + u.aliase.length, 0);
+}
+
+/* OPNsense schreibt jede Adresse als „10.0.0.1/24"; eine mit `vhid` ist
+   eine CARP-Adresse und wird zwischen zwei Geräten gereicht. */
+function adressen(liste, primaer) {
+  const out = [];
+  const nimm = (text, extra = {}) => {
+    const roh = String(text || "").trim();
+    if (!roh) return;
+    const [ip, bits] = roh.split("/");
+    if (!ip || out.some(a => a.ip === ip)) return;
+    out.push({ ip, praefix: bits != null && bits !== "" ? Number(bits) : null, privat: istPrivat(ip), ...extra });
+  };
+  nimm(primaer);
+  for (const e of Array.isArray(liste) ? liste : []) {
+    if (!e) continue;
+    nimm(typeof e === "string" ? e : e.ipaddr, {
+      vhid: e?.vhid != null ? String(e.vhid) : null,
+      carp: e?.status ? String(e.status).toLowerCase() : null
+    });
+  }
+  return out;
+}
+
+/* Was nie aus dem Internet erreichbar ist. Die Liste ist kurz und
+   vollständig genug für die Frage, die sie beantwortet: „ist das die
+   Adresse, unter der uns die Welt sieht?" */
+export function istPrivat(ip) {
+  const s = String(ip || "");
+  if (/^10\./.test(s)) return true;
+  if (/^192\.168\./.test(s)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(s)) return true;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(s)) return true;   /* CGNAT */
+  if (/^169\.254\./.test(s)) return true;
+  if (/^127\./.test(s)) return true;
+  if (/^(fc|fd)/i.test(s)) return true;                                   /* ULA */
+  if (/^fe80:/i.test(s)) return true;
+  return false;
 }
 
 /* ---------- WireGuard ---------- */

@@ -226,6 +226,10 @@ function hostView(h, st = {}, settings = {}) {
     disks: x.disks || null, load: x.load || null,
     thrIn: x.thrIn ?? null, thrOut: x.thrOut ?? null, thrQuelle: x.thrQuelle || null,
     interfaces: x.interfaces || null,
+    /* Die Adressen nach außen — gelesen, nicht eingetragen. */
+    uplinks: x.uplinks || null, wan: x.wan || null, wan6: x.wan6 || null,
+    wanPraefix: x.wanPraefix ?? null, wanPrivat: x.wanPrivat ?? null,
+    wanIface: x.wanIface || null, wanAliase: x.wanAliase ?? null,
     wgPeers: x.wgPeers ?? null, wgIfaces: x.wgIfaces ?? null, wgStill: x.wgStill ?? null,
     wgHandshakeUnbekannt: x.wgHandshakeUnbekannt ?? null, wgNote: x.wgNote || null,
     /* pfSense — Gateways, Zustandstabelle und CARP kennt OPNsense hier
@@ -274,6 +278,28 @@ function hostView(h, st = {}, settings = {}) {
   };
 }
 
+/* Was am Standort steht, ist getippt; was die Firewall meldet, ist
+   gemessen. Beides gehört nebeneinander — und wo sie auseinanderlaufen,
+   gehört das gesagt. Ein Eintrag, den seit dem Anlegen niemand
+   angefasst hat, sieht sonst genauso aus wie einer, der stimmt.
+
+   Gelesen wird von der ersten Firewall des Standorts, die eine Adresse
+   nach außen meldet. Bei zweien wäre die Frage „welche denn?" nicht
+   allgemein zu beantworten; auf der Seite des Geräts steht jede
+   einzeln. */
+function wanGelesen(mine) {
+  const quelle = mine.find(h => h.wan || h.wan6);
+  if (!quelle) return {};
+  return {
+    wanIst: quelle.wan || null,
+    wan6Ist: quelle.wan6 || null,
+    wanQuelle: quelle.name || quelle.id,
+    wanIface: quelle.wanIface || null,
+    wanPrivat: !!quelle.wanPrivat,
+    wanAliase: quelle.wanAliase ?? null
+  };
+}
+
 function siteView(s, hosts, inv, engine) {
   const mine = hosts.filter(h => h.site === s.id);
   const tuns = inv.tunnels
@@ -285,6 +311,7 @@ function siteView(s, hosts, inv, engine) {
   return {
     id: s.id, name: s.name, short: s.short || shortOf(s), place: s.place || "",
     isp: s.isp || "—", wan: s.wan || "—", wan6: s.wan6 || "—",
+    ...wanGelesen(mine),
     primary: !!s.primary,
     uptimeDays: s.uptimeDays ?? null,
     down,
