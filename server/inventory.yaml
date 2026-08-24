@@ -114,9 +114,14 @@ hosts:
   - { id: pmg-01, type: pmg, site: rz, ip: 10.30.2.40, url: "https://10.30.2.40:8006",
       role: "Proxmox Mail Gateway" }
 
-  # Mailcow: eigene Prüfliste statt der abgeleiteten — so wird neben der
-  # Weboberfläche auch SMTP und IMAP geprüft. `servername` gehört dazu,
-  # wenn das Zertifikat auf einen Namen und nicht auf die IP lautet.
+  # Mailcow: Container, Warteschlange (mit dem Grund, warum eine Mail liegt),
+  # Platz der Postfachablage, Domänen, Postfächer und rspamd. Angemeldet wird
+  # mit einem API-Schlüssel („Read-Only" genügt) — und die Adresse des
+  # Leitstands gehört in dessen Feld „allow from", sonst antwortet mailcow mit
+  # derselben 401 wie bei einem falschen Schlüssel.
+  # Eigene Prüfliste statt der abgeleiteten — so wird neben der Weboberfläche
+  # auch SMTP und IMAP geprüft. `servername` gehört dazu, wenn das Zertifikat
+  # auf einen Namen und nicht auf die IP lautet.
   - { id: mailcow-01, type: mailcow, site: rz, ip: 10.30.2.50, url: "https://10.30.2.50",
       role: "Mailcow dockerized",
       checks: [ { kind: icmp },

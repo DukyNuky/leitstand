@@ -249,6 +249,27 @@ function hostView(h, st = {}, settings = {}) {
     restarting: x.restarting ?? null, oom: x.oom ?? null,
     umgebungen: x.umgebungen || null, probleme: x.probleme || null,
     containerNote: x.containerNote || null,
+    /* Mailcow. Warteschlange, Belegung und Ampelgrenzen teilen sich die
+       Felder mit dem Mail Gateway — „Mail hängt" ist dieselbe Frage,
+       egal welches Produkt sie beantwortet. Eigene Namen bekommt nur,
+       was es dort nicht gibt. */
+    containerListe: x.container || null, containerGesamt: x.containerGesamt ?? null,
+    containerLaufen: x.containerLaufen ?? null,
+    kernSteht: x.kernSteht || null, nebenSteht: x.nebenSteht || null,
+    queueGesamt: x.queueGesamt ?? null, queueGruende: x.queueGruende || null,
+    vmailPct: x.vmailPct ?? null, vmailBelegt: x.vmailBelegt || null,
+    vmailGesamt: x.vmailGesamt || null, vmailGeraet: x.vmailGeraet || null, vmailNote: x.vmailNote || null,
+    rspamdVersion: x.rspamdVersion || null, rspamdSeit: x.rspamdSeit ?? null, rspamdNote: x.rspamdNote || null,
+    geprueft: x.geprueft ?? null, ham: x.ham ?? null, gelernt: x.gelernt ?? null, aktionen: x.aktionen || null,
+    domainsGesamt: x.domainsGesamt ?? null, postfaecher: x.postfaecher ?? null,
+    belegt: x.belegt ?? null, nachrichten: x.nachrichten ?? null, domainNote: x.domainNote || null,
+    mailboxen: x.mailboxen || null, mailboxenGesamt: x.mailboxenGesamt ?? null,
+    mailboxenOhneQuote: x.mailboxenOhneQuote ?? null, mailboxVollste: x.mailboxVollste || null,
+    mailboxNote: x.mailboxNote || null,
+    quarantaene: x.quarantaene ?? null, quarantaeneViren: x.quarantaeneViren ?? null,
+    quarantaeneNeuste: x.quarantaeneNeuste || null,
+    gesperrt: x.gesperrt ?? null, gesperrtDauerhaft: x.gesperrtDauerhaft ?? null,
+    arch: x.arch || null,
     collectorError: x.error || null
   };
 }

@@ -44,6 +44,17 @@ export const DEFAULTS = {
      Signaturen und Paketstand im zweiten. Die Erreichbarkeit misst
      weiterhin der Prober in jedem Durchlauf. */
   pmg_takt: 60, pmg_takt_lang: 300,
+  /* Dasselbe für Mailcow, und aus demselben Grund — dort kommt einer
+     hinzu: mehrere Abfragen lassen mailcow einen Befehl *in* einem
+     Container ausführen (`mailq` in postfix, `df` in dovecot). Das ist
+     nichts, was man alle 15 Sekunden auslöst. */
+  mailcow_takt: 60, mailcow_takt_lang: 300,
+  /* Ab wann ein einzelnes Postfach auffällt. Ein volles Postfach weist
+     Mail ab, während der Dienst tadellos läuft — der Ausfall trifft
+     einen Menschen und niemanden sonst, und gemeldet wird er von
+     niemandem. Tiefer als die Plattengrenzen, weil hier nichts
+     nachwächst: die Quote ist gesetzt, nicht gewachsen. */
+  mailbox_voll_warn: 95,
   /* Ein eigensigniertes Zertifikat bezeugt keine Herkunft — es trägt nur
      einen Schlüssel. Läuft es ab, ändert sich für den Betrieb nichts:
      wer es gestern angenommen hat, nimmt es heute an, und geprüft hat es
@@ -68,7 +79,7 @@ export const TYPES = {
   opnsense:  { label: "OPNsense",             port: 443,  api: "opnsense",  zugang: "API-Schlüssel und Secret" },
   pfsense:   { label: "pfSense",              port: 443,  api: "pfsense",   zugang: "API-Schlüssel (Paket pfSense-pkg-API)" },
   truenas:   { label: "TrueNAS SCALE",        port: 443,  api: null },
-  mailcow:   { label: "Mailcow",              port: 443,  api: null },
+  mailcow:   { label: "Mailcow",              port: 443,  api: "mailcow",   zugang: "API-Schlüssel (Read-Only)" },
   adguard:   { label: "AdGuard Home",         port: 443,  api: "adguard",   zugang: "Benutzer und Passwort" },
   portainer: { label: "Portainer",            port: 9443, api: "portainer", zugang: "API-Token" },
   hass:      { label: "Home Assistant",       port: 8123, api: null },

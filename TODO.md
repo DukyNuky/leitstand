@@ -45,8 +45,8 @@ das ausdrücklich dasteht. Ein Test weist einen Aufruf ohne Nachweis mit 401 ab.
 
 ## 2. Mehr Details je System — die fehlenden Sammler
 
-**Warum.** Drei von elf Systemtypen werden bisher nur angepingt — AdGuard Home,
-Portainer und zuletzt der Mail Gateway sind dazugekommen. Sie stehen grün da, weil ein Port
+**Warum.** Zwei von elf Systemtypen werden bisher nur angepingt — AdGuard Home,
+Portainer, der Mail Gateway und zuletzt Mailcow sind dazugekommen. Sie stehen grün da, weil ein Port
 offen ist; was auf ihnen los ist, weiß der Leitstand nicht. Genau das ist der
 Unterschied zwischen „das Gerät antwortet" und „der Dienst tut, was er soll":
 ein TrueNAS mit einem degradierten Pool antwortet tadellos.
@@ -125,9 +125,25 @@ gebaut.
       Zweck des Geräts, und eine Ampel, die täglich leuchtet, ist nach zwei
       Wochen abtrainiert. Eigener Takt (`pmg_takt`, `pmg_takt_lang`), weil
       `qshape` je Abruf einen Prozess auf dem Gateway startet.
-- [ ] **2.4 Mailcow** — `/api/v1/get/mailq/all`, `/get/status/containers`,
-      `/get/status/vmail`. Warteschlange, Domains, Postfächer, Containerzustand.
-      Ampel: Queue > 25 gelb, > 100 rot.
+- [x] **2.4 Mailcow** — gebaut:
+      [`server/src/collectors/mailcow.js`](server/src/collectors/mailcow.js).
+      Container, Warteschlange, Platz der Postfachablage und Auslastung des
+      Wirts im Minutentakt; Domänen, Postfächer mit Quote, rspamd, Quarantäne
+      und Sperren alle fünf Minuten — mehrere dieser Abfragen lassen mailcow
+      einen Befehl **in** einem Container ausführen (`mailq` in Postfix, `df`
+      in Dovecot), das ist nichts für alle 15 Sekunden.
+      Der Fund, der die Anbindung prägt: **eine 401 heißt bei mailcow oft nicht
+      „falscher Schlüssel"**, sondern „diese Adresse steht nicht in *allow
+      from*" — welche Adresse mailcow gesehen hat, steht nur im Rumpf der
+      Antwort und landet jetzt im Hinweis. Der zweite: die Warteschlange trägt
+      **den Grund** je Nachricht (`Connection timed out`, `mailbox full`); das
+      gibt kein anderes angebundene System her, und es ist die Zeile, wegen der
+      man nachsieht. Ampel: Kern-Container steht, volle Ablage oder volle
+      Warteschlange → rot; Zusatz-Container, alte Mail, ein Postfach über
+      `mailbox_voll_warn` → gelb. **Aus der Quarantäne kommt die Zahl, nicht der
+      Inhalt** — Betreff, Absender und Empfänger bleiben auf dem Mailserver.
+      **Nicht gebaut:** die eigene RBL-Prüfung der ausgehenden Adresse; die
+      käme von keiner API des Systems und gehört zum Prober.
 - [ ] **2.5 Home Assistant** — `/api/states`, `/api/config`. Entitäten gesamt
       und `unavailable`, Automationen, Fassung. Nicht verfügbare Entitäten sind
       meist Information, keine Störung — gruppierte Ausfälle hinter einem

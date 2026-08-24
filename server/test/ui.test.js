@@ -1919,3 +1919,112 @@ test("Ohne hinterlegtes Konto steht in der Mail-Ansicht, was fehlt", async () =>
   assert.match(html, /Auditor/);
   assert.ok(!/undefined|NaN/.test(html));
 });
+
+/* ============================================================
+   Mailcow in der Oberfläche
+   ============================================================ */
+
+async function zustandMitMailcow(fakeOpt = {}) {
+  const { fakeMailcow, listen: hoere, KEY } = await import("./fake-mailcow.js");
+  const srv = fakeMailcow(fakeOpt);
+  const url = await hoere(srv);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-mailcow-"));
+  try {
+    fs.writeFileSync(path.join(dir, "inventory.yaml"), `
+settings: { interval: 3600, icmp: false, timeout: 2, mailcow_takt: 0, mailcow_takt_lang: 0 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: mailcow-01, type: mailcow, site: hq, url: "${url}", role: Mailserver }
+tunnels: []
+links: []
+`);
+    fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({ "mailcow-01": { apiKey: KEY } }));
+    const server = createServer({
+      inventory: path.join(dir, "inventory.yaml"),
+      secrets: path.join(dir, "secrets.json"),
+      state: path.join(dir, "incidents.json")
+    });
+    await server.engine.runOnce();
+    const { buildState } = await import("../src/api.js");
+    const zustand = buildState(server.engine, server.secrets);
+    server.engine.stop();
+    return zustand;
+  } finally {
+    await new Promise(r => srv.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Mailcow zeigt Container, Warteschlange mit Grund, Postfächer und Platz", async () => {
+  const zustand = await zustandMitMailcow();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "mail";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Mail-Ansicht");
+  assert.match(html, /2026-03a/, "die Fassung");
+  assert.match(html, /postfix-mailcow/, "die Container einzeln");
+  assert.match(html, /Connection timed out/, "warum eine Mail liegt — die Zeile, wegen der man nachsieht");
+  assert.match(html, /example\.de/, "Domänen mit Postfächern");
+  assert.match(html, /Postfachablage/, "der Platz, ohne den Dovecot nichts mehr annimmt");
+  assert.match(html, /seit dem Start von rspamd/, "die Filterzahlen ohne ihren Zeitraum wären eine Behauptung");
+
+  /* Und dieselben Zahlen auf der Detailseite. */
+  ui.openSystem("mailcow-01");
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = null;
+  ui.render();
+  const seite = ziele.get("#wrap").innerHTML;
+  assert.match(seite, /Mailcow im Einzelnen/);
+  assert.match(seite, /Warum es liegt/);
+  assert.ok(!/undefined|NaN/.test(seite));
+});
+
+test("Ein stehender Kern-Container färbt die Ampel rot, ein abgeschalteter Zusatz nur gelb", async () => {
+  const kaputt = await zustandMitMailcow({ containerAus: ["dovecot-mailcow"] });
+  const h = kaputt.hosts.find(x => x.id === "mailcow-01");
+  assert.equal(h.status, "crit");
+  assert.match(h.note, /dovecot-mailcow/);
+
+  const zusatz = await zustandMitMailcow({ containerAus: ["clamd-mailcow"] });
+  assert.equal(zusatz.hosts[0].status, "warn");
+
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(kaputt);
+  ui.state.view = "mail";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML, /Kern-Container stehen/);
+});
+
+/* Betreffzeilen fremder Post haben in einer Überwachung nichts zu
+   suchen — und was nicht in den Zustand kommt, kann auch nicht in der
+   Oberfläche landen. */
+test("Aus der Quarantäne kommt die Zahl, nicht der Inhalt", async () => {
+  const zustand = await zustandMitMailcow();
+  const roh = JSON.stringify(zustand);
+  assert.ok(!roh.includes("Ihre Rechnung"));
+  assert.ok(!roh.includes("spam@example.invalid"));
+  assert.equal(zustand.hosts[0].quarantaene, 3);
+});
+
+test("Ohne hinterlegten Schlüssel steht in der Mail-Ansicht, was fehlt", async () => {
+  const zustand = await zustandMitMailcow();
+  const h = zustand.hosts.find(x => x.id === "mailcow-01");
+  for (const k of ["containerGesamt", "containerLaufen", "queueDeferred", "queueAktiv", "queueHold",
+                   "vmailPct", "cpu", "ram", "disk", "quarantaene", "geprueft", "postfaecher"]) h[k] = null;
+  h.containerListe = null; h.warteschlange = null; h.domains = null; h.mailboxen = null;
+  h.kernSteht = null; h.nebenSteht = null; h.note = null;
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "mail";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /allow from/, "der häufigste Irrtum gehört genau hierhin");
+  assert.match(html, /Read-Only/);
+  assert.ok(!/undefined|NaN/.test(html));
+});

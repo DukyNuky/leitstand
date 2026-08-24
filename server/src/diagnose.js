@@ -22,6 +22,7 @@ import * as Adg from "./collectors/adguard.js";
 import * as Ptn from "./collectors/portainer.js";
 import * as Pfs from "./collectors/pfsense.js";
 import * as Pmg from "./collectors/pmg.js";
+import * as Mcw from "./collectors/mailcow.js";
 
 /* Sammler, die sich gleich verhalten: eine Kopfzeile zur Anmeldung, feste
    Pfade, JSON zurück. Für die gibt es einen gemeinsamen Weg (diagnoseEinfach)
@@ -31,6 +32,19 @@ const EINFACH = {
     modul: Adg, name: "AdGuard Home",
     fehlt: "Es ist kein Zugang hinterlegt. AdGuard meldet mit Benutzer und Passwort an — dieselben, mit denen "
       + "man sich an der Oberfläche anmeldet. Einzutragen unter Verwaltung → System bearbeiten."
+  },
+  /* Mailcow verhält sich wie AdGuard und Portainer — eine Kopfzeile,
+     feste Pfade, JSON. Der Unterschied steckt im Fehlerfall, und der
+     ist hier der halbe Grund für die Diagnose: eine 401 heißt bei
+     mailcow nicht unbedingt „falscher Schlüssel", sondern oft „diese
+     Adresse steht nicht in „allow from“" — welche Adresse mailcow
+     gesehen hat, steht im Rumpf der Antwort und landet über hintFor()
+     im Bericht. */
+  mailcow: {
+    modul: Mcw, name: "Mailcow",
+    fehlt: "Es ist kein API-Schlüssel hinterlegt. In mailcow unter Configuration → Access → API einen erzeugen — "
+      + "„Read-Only Access“ genügt — und die Adresse des Leitstands in „allow from“ eintragen. "
+      + "Danach unter Verwaltung → System bearbeiten hinterlegen."
   },
   portainer: {
     modul: Ptn, name: "Portainer",

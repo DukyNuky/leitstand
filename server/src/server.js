@@ -36,6 +36,7 @@ import { runCheck } from "./probe.js";
 import { buildInfo } from "./version.js";
 import { diagnoseHost, alsText } from "./diagnose.js";
 import { ticketVergessen, speicherVergessen } from "./collectors/pmg.js";
+import { speicherVergessen as mailcowVergessen } from "./collectors/mailcow.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const startedAt = new Date().toISOString();
@@ -146,7 +147,7 @@ export function createServer(opts = {}) {
      können. Der Mail Gateway hält ein Anmeldeticket und die zuletzt
      gelesenen Kennzahlen — nach geänderten Zugangsdaten wäre beides eine
      Auskunft über einen Zustand, den es nicht mehr gibt. */
-  const vergiss = id => { ticketVergessen(id); speicherVergessen(id); };
+  const vergiss = id => { ticketVergessen(id); speicherVergessen(id); mailcowVergessen(id); };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");

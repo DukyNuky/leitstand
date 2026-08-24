@@ -41,7 +41,8 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 ## Proxmox Mail Gateway
 
 > **Gebaut** — `server/src/collectors/pmg.js`, eigener Sammler mit eigener
-> Ansicht *Mail-Gateway*.
+> Ansicht *Mail* — dort steht die Warteschlange in einer Tabelle mit der von
+> Mailcow: es ist dieselbe Frage.
 
 > [!IMPORTANT]
 > **PMG kennt keine API-Token.** Die API-Dokumentation weist sie an jedem
@@ -177,13 +178,38 @@ Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
 
 ## Mailcow
 
+> **Gebaut** — `server/src/collectors/mailcow.js`, in derselben Ansicht *Mail*
+> wie der Mail Gateway. Die Warteschlange steht dort in **einer** Tabelle mit
+> der des Gateways: es ist dieselbe Frage, und beide führen Postfix-Queues.
+
+> [!IMPORTANT]
+> **Eine 401 von mailcow heißt oft nicht „falscher Schlüssel".** mailcow prüft
+> zusätzlich die Quell-IP gegen das Feld *allow from* des Schlüssels und
+> antwortet bei einer nicht eingetragenen Adresse mit derselben 401 — nur die
+> Meldung im Rumpf unterscheidet sich:
+> `{"type":"error","msg":"api access denied for ip 10.0.0.7"}`.
+> Diese Zeile nennt die Adresse, die mailcow **tatsächlich** gesehen hat; hinter
+> einem Reverse Proxy ist das dessen Adresse. Der Sammler hebt sie in den
+> Hinweis, statt sie hinter „401" verschwinden zu lassen.
+
 | | |
 |---|---|
-| Zugang | API-Key mit Leserecht, Header `X-API-Key` |
-| Endpunkte | `/api/v1/get/mailq/all`, `/api/v1/get/domain/all`, `/api/v1/get/status/containers`, `/api/v1/get/status/vmail` |
-| Kennzahlen | Warteschlange, Domains und Postfächer, Speicher, Containerzustand, Rspamd-Rate |
-| Zusätzlich | eigene RBL-Prüfung der ausgehenden IP (Spamhaus, UCEPROTECT, Barracuda) — kommt von keiner API des Systems selbst |
-| Ampel | Queue > 25 → gelb, > 100 → rot · RBL-Eintrag → gelb · Zertifikat < 14 Tage → rot |
+| Zugang | API-Schlüssel im Header `X-API-Key`, angelegt unter *Configuration → Access → API*. **„Read-Only Access" genügt** — mailcow sperrt damit `add`, `edit` und `delete` serverseitig. Der Schlüssel trägt intern die Rolle `admin`; ohne sie wären die Statusabfragen gar nicht lesbar |
+| Zweiter Teil des Zugangs | das Feld **allow from** am Schlüssel — siehe Kasten oben |
+| Endpunkte, jede Minute | `/api/v1/get/status/containers`, `/get/mailq/all`, `/get/status/vmail`, `/get/status/host` |
+| Endpunkte, alle 5 Minuten | `/get/status/version`, `/get/logs/rspamd-stats`, `/get/domain/all`, `/get/mailbox/reduced`, `/get/quarantine/all`, `/get/fail2ban` |
+| Warum zwei Takte | mehrere dieser Abfragen lassen mailcow einen Befehl **in** einem Container ausführen: `mailq` in Postfix, `df` in Dovecot. Das ist nichts, was man alle 15 s auslöst. Einstellbar als `mailcow_takt` und `mailcow_takt_lang` |
+| Kennzahlen Betrieb | Container mit Zustand, Abbild und Startzeit · Warteschlange je Queue mit Alter **und Grund** je Nachricht · Belegung von `/var/vmail` · CPU, RAM, Kerne und Laufzeit des Wirts |
+| Kennzahlen Bestand | Domänen mit Postfächern, Nachrichten und Belegung · Postfächer mit Quote (die vollsten zuerst) · rspamd: geprüft, Spam, Ham, gelernt, Aktionen · Umfang der Quarantäne · gesperrte Adressen aus fail2ban |
+| Der Grund, warum Mail liegt | steht **nur** hier: Postfix schreibt ihn je Empfänger in die Warteschlange (`Connection timed out`, `mailbox full`, `Host not found`), und mailcow reicht ihn durch. Der Mail Gateway gibt an dieser Stelle nur Zahlen heraus. Das ist die Zeile, wegen der man überhaupt nachsieht |
+| Ampel rot | ein **Kern-Container** läuft nicht (postfix, dovecot, mysql, nginx, php-fpm, rspamd, redis, **unbound**) · `/var/vmail` über `disk_crit` · Warteschlange ≥ `mail_queue_crit` · RAM über `ram_crit` |
+| Ampel gelb | ein Zusatz-Container steht (ClamAV, Solr, SOGo — **mit Namen**) · Warteschlange ≥ `mail_queue_warn` **oder** Mail liegt seit über zehn Stunden · `/var/vmail` über `disk_warn` · ein einzelnes Postfach über `mailbox_voll_warn` (Vorgabe 95 %) |
+| Warum `unbound` als Kern gilt | es klingt nach Namensauflösung und ist keine Nebensache: fällt es aus, findet Postfix keine Gegenstelle mehr, und ausgehende Mail bleibt liegen |
+| Warum ein volles Postfach zählt | es weist Mail ab, während der Dienst tadellos läuft. Der Ausfall trifft einen Menschen, und gemeldet wird er von niemandem. Postfächer **ohne** gesetzte Quote bleiben außen vor: dort gibt es keine Belegung in Prozent, und „0 %" wäre eine erfundene Zahl |
+| Quarantäne: gezählt, nicht gelesen | es gibt keinen Endpunkt, der nur zählt — die Liste wird abgerufen und davon die Zahl behalten. **Betreff, Absender und Empfänger verlassen den Sammler nicht**; was hier nicht ankommt, kann auch in keiner Zeitreihe und in keiner Meldung landen. Der teuerste Aufruf dieser Anbindung, deshalb im langsamen Takt |
+| rspamd zählt seit seinem Start | nicht seit Mitternacht. Die Laufzeit wird deshalb mitgeführt und steht in der Oberfläche dabei — ohne sie wäre die Spamquote eine Behauptung, und nach einem Neustart des Containers stünde dort eine beruhigende Null |
+| Bewusst nicht abgefragt | `/get/mailbox/all` — es fragt je Postfach ein halbes Dutzend zusätzlicher Dinge ab (Ratelimit, Domänenquote, Pushover, Sender-ACL), die hier niemand braucht; `reduced` liefert dasselbe ohne diesen Aufwand. Ebenso die Protokoll-Endpunkte: sie enthalten Mailinhalte |
+| Offen | eine eigene RBL-Prüfung der ausgehenden Adresse (Spamhaus, UCEPROTECT, Barracuda). Die käme von keiner API des Systems selbst und gehört zum Prober, nicht hierher |
 | Meldet per Mail | Watchdog-Benachrichtigungen an `alarm@` |
 
 ## Home Assistant
@@ -231,7 +257,7 @@ pfSense              nur mit dem Fremdpaket pfSense-pkg-API (nicht im Paketverze
 AdGuard              zusätzlicher Benutzer in AdGuardHome.yaml (users), Benutzer + Passwort eintragen
 Portainer            Benutzer leitstand, Rolle „read-only“ je Umgebung, Token unter My account → Access tokens
 TrueNAS              Credentials → API Keys
-Mailcow              Configuration → Access → API, „Read-Only“, Quell-IP einschränken
+Mailcow              Configuration → Access → API, „Read-Only“ — und die Adresse des Leitstands in „allow from“
 Home Assistant       Profil → Long-Lived Access Tokens
 ```
 
