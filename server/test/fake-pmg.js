@@ -8,6 +8,13 @@
      der Token freundlich annimmt, hätte die Anbindung grün gemeldet,
      während gegen das echte Gerät jeder Abruf mit 401 endet.
    - Ein Ticket gilt und wird als Cookie erwartet, nicht als Kopfzeile.
+   - **Ein Rumpf ohne `Content-Length` wird mit 501 abgewiesen.** Der
+     HTTP-Dienst von Proxmox nimmt `Transfer-Encoding: chunked` nicht an
+     (`$self->error($reqstate, 501, "chunked transfer encoding not
+     supported")`, pve-http-server) — und Node schickt genau das, wenn
+     man die Länge nicht ansagt. Ein Testserver, der chunked klaglos
+     annimmt, meldet Grün, während am echten Gerät jede Anmeldung mit
+     einer 501 endet, die wie ein Gerätefehler aussieht.
    - Ein Benutzername ohne Realm wird abgelehnt, wie es PMG tut: es hängt
      dann „@quarantine" an und findet das Konto nicht. */
 
@@ -32,6 +39,7 @@ export function fakePmg(opt = {}) {
        werden, weil sie aussehen wie gemessene. */
     kaputt: opt.kaputt ?? false,
     anmeldungen: 0,
+    chunked: 0,
     abrufe: []
   };
 
@@ -42,6 +50,12 @@ export function fakePmg(opt = {}) {
       res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(b) });
       res.end(b);
     };
+
+    /* So streng wie pmgproxy: die Länge des Rumpfs gehört angesagt. */
+    if (/chunked/i.test(req.headers["transfer-encoding"] || "")) {
+      zustand.chunked++;
+      return send(501, null);
+    }
 
     /* Anmeldung */
     if (u.pathname === "/api2/json/access/ticket" && req.method === "POST") {

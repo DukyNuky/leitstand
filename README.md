@@ -341,6 +341,12 @@ Ende. Angemeldet wird deshalb wie an der Oberfläche: Benutzer und Passwort gege
 Stunden, der Leitstand erneuert es nach 90 Minuten und bei einer 401 sofort —
 ein Anmeldevorgang je Durchlauf stünde alle 15 s im Syslog des Gateways.
 
+Der zweite Fallstrick sitzt in derselben Anfrage: ihr Rumpf **muss seine Länge
+ansagen**. Ohne `Content-Length` schickt Node ihn stückweise, und
+`pve-http-server` lehnt `Transfer-Encoding: chunked` mit einer **501** ab —
+noch bevor jemand die Zugangsdaten ansieht. Das sieht aus wie ein Gerätefehler
+und ist eine fehlende Kopfzeile.
+
 Anzulegen ist ein Konto unter *Configuration → User Management* im Realm
 `pmg`, Rolle **Auditor**. Sie deckt alles ab, was gelesen wird: Statistik,
 Warteschlange, Dienste, Quarantänegröße, Signaturstand. Der Benutzername gehört

@@ -7,6 +7,7 @@
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { fakePmg, listen, BENUTZER, PASSWORT } from "./fake-pmg.js";
 import { collectPmg, testConnection, anmelden, api, bauzeit,
   ticketVergessen, speicherVergessen } from "../src/collectors/pmg.js";
@@ -229,4 +230,27 @@ test("Ohne Realm im Benutzernamen sagt die Diagnose, warum PMG ablehnt", async (
   const { diagnoseHost } = await import("../src/diagnose.js");
   const bericht = await diagnoseHost({ ...host(), checks: [] }, { user: "leitstand", password: PASSWORT });
   assert.match(bericht.zugang.hinweis, /@quarantine/);
+});
+
+/* Der zweite Fallstrick derselben Anmeldung, und einer, den kein
+   gewöhnlicher Testserver zeigt: der HTTP-Dienst von Proxmox nimmt
+   `Transfer-Encoding: chunked` nicht an, sondern antwortet mit 501 —
+   noch bevor jemand die Zugangsdaten ansieht. Node schickt genau das,
+   wenn man die Länge des Rumpfs nicht ansagt. */
+test("Die Anmeldung sagt die Länge ihres Rumpfs an", async () => {
+  const vorher = srv.zustand.chunked;
+  const an = await anmelden(host(), cred);
+  assert.equal(an.ok, true);
+  assert.equal(srv.zustand.chunked - vorher, 0, "sonst weist pmgproxy sie mit 501 ab");
+
+  /* Und damit diese Prüfung nicht ins Leere greift: derselbe Aufruf ohne
+     angesagte Länge — Node schickt ihn dann stückweise. */
+  const stueckweise = await new Promise(fertig => {
+    const r = http.request(url + "/api2/json/access/ticket",
+      { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" } },
+      res => { res.resume(); fertig(res.statusCode); });
+    r.write(`username=${encodeURIComponent(BENUTZER)}&password=${PASSWORT}`);
+    r.end();
+  });
+  assert.equal(stueckweise, 501, "chunked lehnt der HTTP-Dienst von Proxmox ab");
 });

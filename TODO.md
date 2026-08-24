@@ -110,6 +110,11 @@ gebaut.
       weitere Fehler steckten in denselben vier Zahlen: `timespan=86400` ist
       kein Parameter dieses Endpunkts (er will `starttime`), und das Feld heißt
       `spamcount_in`, nicht `spamin`.
+      Nachgereicht, weil es erst am Gerät auffiel: der Rumpf des
+      Anmelde-POST muss seine **Länge ansagen** — ohne `Content-Length`
+      schickt Node ihn stückweise, und `pve-http-server` lehnt chunked mit
+      einer 501 ab, bevor es die Zugangsdaten ansieht. Der nachgebaute
+      Gateway tut das jetzt auch.
       Jetzt: Anmeldung per Ticket mit Wiederverwendung, Verkehr über 24 h,
       Warteschlange je Queue **mit Altersverteilung**, Quarantäne, Stand der
       ClamAV-Signaturen, alle Dienste, Verkehr je Domäne, Virenfunde mit Namen,

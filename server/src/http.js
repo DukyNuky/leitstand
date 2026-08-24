@@ -12,9 +12,30 @@ export function requestJson(url, { method = "GET", headers = {}, body = null, ti
     try { u = new URL(url); } catch { return resolve({ ok: false, error: `ungültige Adresse: ${url}` }); }
     const mod = u.protocol === "https:" ? https : http;
     const t0 = Date.now();
+
+    /* Der Rumpf wird **einmal** erzeugt und seine Länge angesagt.
+
+       Ohne `Content-Length` schickt Node ihn stückweise
+       (`Transfer-Encoding: chunked`) — und der HTTP-Dienst von Proxmox
+       nimmt das nicht an:
+
+         if ($te && lc($te) eq 'chunked') {
+             $self->error($reqstate, 501, "chunked transfer encoding not supported");
+         }
+         (pve-http-server, src/PVE/APIServer/AnyEvent.pm)
+
+       Die Antwort ist eine 501, noch bevor jemand die Zugangsdaten
+       ansieht. Das sieht aus wie ein Gerätefehler und ist doch nur eine
+       fehlende Kopfzeile — jeder gängige Testserver nimmt chunked
+       klaglos an, dieses Gerät nicht. */
+    const nutzlast = body == null ? null : (typeof body === "string" ? body : JSON.stringify(body));
+    const kopf = { accept: "application/json", "user-agent": "leitstand/0.1", ...headers };
+    if (nutzlast != null && !Object.keys(kopf).some(k => k.toLowerCase() === "content-length"))
+      kopf["content-length"] = Buffer.byteLength(nutzlast);
+
     const req = mod.request(u, {
       method,
-      headers: { accept: "application/json", "user-agent": "leitstand/0.1", ...headers },
+      headers: kopf,
       rejectUnauthorized: u.protocol === "https:" ? !insecure : undefined,
       timeout
     }, res => {
@@ -30,7 +51,7 @@ export function requestJson(url, { method = "GET", headers = {}, body = null, ti
     });
     req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: `Zeitüberschreitung nach ${timeout} ms` }); });
     req.on("error", e => resolve({ ok: false, error: netError(e) }));
-    if (body) req.write(typeof body === "string" ? body : JSON.stringify(body));
+    if (nutzlast != null) req.write(nutzlast);
     req.end();
   });
 }
@@ -39,6 +60,7 @@ function httpError(code) {
   if (code === 401) return "Zugangsdaten abgelehnt (401)";
   if (code === 403) return "Zugriff verweigert — Rechte des Tokens prüfen (403)";
   if (code === 404) return "Endpunkt nicht gefunden (404) — Version prüfen";
+  if (code === 501) return "Gerät lehnt die Form der Anfrage ab (501) — nicht die Zugangsdaten";
   if (code >= 500) return `Gerät meldet Fehler (${code})`;
   return `HTTP ${code}`;
 }

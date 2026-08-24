@@ -55,6 +55,7 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 | | |
 |---|---|
 | Zugang | Benutzer und Passwort gegen `POST /api2/json/access/ticket`, danach das Ticket als Cookie `PMGAuthCookie`. Es gilt **zwei Stunden**; erneuert wird nach 90 Minuten und bei einer 401 sofort. Port 8006 |
+| Fallstrick 2 | Der Rumpf dieses POST **muss seine Länge ansagen**. Ohne `Content-Length` schickt ihn jede gängige Bibliothek stückweise, und der HTTP-Dienst von Proxmox nimmt das nicht an: `$self->error($reqstate, 501, "chunked transfer encoding not supported")` (pve-http-server, `AnyEvent.pm`). Die Antwort ist eine **501, bevor jemand die Zugangsdaten ansieht** — sie sieht aus wie ein Gerätefehler und ist eine fehlende Kopfzeile |
 | Rechte | ein Konto unter *Configuration → User Management*, Realm `pmg`, Rolle **Auditor**. PMG kennt keine ACL-Pfade wie VE: der Benutzer trägt genau eine Rolle, und `audit` deckt alles ab, was hier gelesen wird. Der Benutzername gehört **mit Realm** eingetragen (`leitstand@pmg`) — sonst hängt PMG `@quarantine` an und findet das Konto nicht |
 | Endpunkte, jede Minute | `/nodes/{node}/status`, `/nodes/{node}/services`, `/nodes/{node}/postfix/qshape?queue=` für `deferred`, `active` und `hold` |
 | Endpunkte, alle 5 Minuten | `/statistics/mail?starttime=`, `/statistics/domains`, `/statistics/virus`, `/quarantine/spamstatus`, `/quarantine/virusstatus`, `/nodes/{node}/clamav/database`, `/nodes/{node}/apt/update`, `/version` |
