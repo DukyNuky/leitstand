@@ -4404,6 +4404,16 @@ document.addEventListener("click", ev => {
        wieder her — und die ist meist die nach Dringlichkeit, also die
        einzige, die von selbst das Wichtige nach oben bringt. */
     case "sort": sortKlick(el.dataset.tab, Number(el.dataset.spalte)); render(); break;
+    /* Eine Prüfung an- oder abwählen. Wie beim Schalter: erst einsammeln,
+       was in den Feldern steht, sonst geht es beim Neuzeichnen verloren. */
+    case "form-check": {
+      const f = state.form; if (!f) break;
+      collectForm();
+      const liste = new Set(f.data.pruef || []);
+      if (liste.has(el.dataset.id)) liste.delete(el.dataset.id); else liste.add(el.dataset.id);
+      f.data.pruef = [...liste];
+      render(); break;
+    }
     case "form-set": {
       const f = state.form; if (!f) break;
       collectForm();
@@ -4621,6 +4631,10 @@ async function loadAdmin() {
     state.settings = inv.settings || state.settings;
     state.invFile = inv.file || null;
     state.rawSites = inv.sites || [];
+    /* Die Ansicht führt Prüfungen als *Ergebnisse* — Art, Port, Ampel. Was
+       davon in der Datei steht (eigener servername, eigene Abfrage), sieht
+       man ihr nicht an. Fürs Formular deshalb der Rohbestand. */
+    state.rawHosts = inv.hosts || [];
     /* Die Startseite wird als Ganzes geschrieben; dafür braucht die
        Verwaltung den Rohbestand, nicht die aufbereitete Ansicht. Ein
        angefangener, noch nicht gespeicherter Stand darf dabei nicht
@@ -4637,6 +4651,8 @@ function openForm(kind, mode, id) {
     if (kind === "hosts") {
       const h = byId(state.hosts, id);
       const eigen = h.schwellenEigen || {};
+      const roh = (state.rawHosts || []).find(x => String(x.id) === String(id)) || {};
+      const pruef = pruefAusChecks(roh.checks);
       data = { id: h.id, type: h.type, site: h.site, ip: h.ip || "", url: h.url || "", role: h.role || "", monitor: h.monitored !== false,
         tls_ignore: !!h.tlsIgnore,
         /* Nur die selbst gesetzten kommen ins Formular. Stünden die
@@ -4644,7 +4660,11 @@ function openForm(kind, mode, id) {
            eigene fest — und eine spätere Änderung an den Einstellungen
            erreichte dieses System nie mehr. */
         s_disk_warn: eigen.disk_warn ?? "", s_disk_crit: eigen.disk_crit ?? "",
-        s_ram_warn: eigen.ram_warn ?? "", s_ram_crit: eigen.ram_crit ?? "" };
+        s_ram_warn: eigen.ram_warn ?? "", s_ram_crit: eigen.ram_crit ?? "",
+        /* Angehakt wird, was gerade wirklich geprüft wird — abgeleitet wie
+           eigen. Der Schalter daneben sagt, welches von beidem es ist. */
+        checksEigen: !!roh.checksEigen,
+        pruef: pruef.ids, pruefExtra: pruef.extra, pruefPorts: "", pruefRest: pruef.rest };
     } else if (kind === "sites") {
       const s = SITES.find(x => x.id === id);
       if (!s) return;
@@ -4678,7 +4698,7 @@ function openForm(kind, mode, id) {
     }
   } else {
     const erster = (SITES[0] || {}).id;
-    if (kind === "hosts") data = { type: "pve", site: erster, monitor: true };
+    if (kind === "hosts") data = { type: "pve", site: erster, monitor: true, pruef: ["icmp:"], pruefExtra: [], pruefRest: [] };
     if (kind === "sites") data = { primary: !SITES.length };   /* der erste Standort ist der Hauptstandort */
     /* Kein vorgetragenes „wg0" mehr: das Interface kommt entweder vom
        verknüpften Peer oder aus dem, was die Firewalls melden. Ein
@@ -4752,6 +4772,12 @@ function formPayload() {
       if (Number.isFinite(n)) s[k] = Math.round(n);
     }
     d.schwellen = Object.keys(s).length ? s : null;
+
+    /* Die Prüfliste geht **immer** mit — leer heißt „wieder ableiten".
+       Ein Weglassen ließe eine früher eigene Liste stehen, und der
+       Schalter im Formular hätte dann etwas anderes behauptet. */
+    d.checks = d.checksEigen ? pruefZuChecks(d, portListe(d.pruefPorts)) : [];
+    delete d.pruef; delete d.pruefExtra; delete d.pruefPorts; delete d.pruefRest; delete d.checksEigen;
   }
   for (const k of Object.keys(d)) if (d[k] === "") delete d[k];
   if (f.kind === "hosts") d.monitor = f.data.monitor !== false;
@@ -4778,6 +4804,12 @@ async function formSave() {
   collectForm();
   const f = state.form;
   if (!f.data.id) { f.error = "Kennung fehlt."; render(); return; }
+  if (f.kind === "hosts" && f.data.checksEigen
+      && !(f.data.pruef || []).length && !portListe(f.data.pruefPorts).length && !(f.data.pruefRest || []).length) {
+    f.error = "Es ist keine Prüfung angehakt. Ein System ohne Prüfung wäre keine Überwachung, sondern ein Eintrag "
+      + "in einer Liste — mindestens eine anhaken, oder den Schalter „Prüfungen selbst festlegen“ ausschalten.";
+    render(); return;
+  }
   if (f.kind === "tunnels" && !String(f.data.probeIp || "").trim() && !f.data.peerRef && !f.data.peerBRef) {
     f.error = "Ohne Gegenstelle im Tunnel und ohne verknüpften Peer gäbe es nichts zu messen — eines von beidem muss sein.";
     render(); return;
@@ -5111,6 +5143,145 @@ function zugangsFelder(type, cred, getippt) {
       ${inpc("secret", "Geheimnis", cred, cred.secret ? "hinterlegt — leer lassen, um es zu behalten" : "aus der Anlage-Maske kopieren", getippt)}
     </div>
     <p class="admin-hint" style="margin:8px 0 0">${hinweis}</p>`;
+}
+
+/* ============================================================
+   Was an einem System geprüft wird
+   ============================================================ */
+/* Ohne eigene Angabe leitet der Dienst die Prüfungen aus IP und Adresse
+   ab: ICMP, der Port der Oberfläche, bei https das Zertifikat. Für
+   Proxmox oder eine Firewall ist das genau richtig — für ein „sonstiges"
+   System ist es geraten. Ein Switch, der nur SSH und ICMP kann, steht
+   sonst dauerhaft auf Gelb, weil jemand einmal 443 angenommen hat.
+
+   Deshalb hier eine Liste zum Anhaken. **Eine Zeile ist genau eine
+   Prüfung** — auch das Zertifikat, das sonst als unsichtbarer Anhang von
+   „HTTPS" mitliefe. Nur so kommt beim Speichern wieder heraus, was
+   vorher dastand: eine Liste, die beim Anzeigen etwas hinzuerfindet,
+   schreibt es beim nächsten Speichern in die Datei.
+
+   Der Port ist Teil der Kennung (`tcp:443`), damit Anzeige und Datei
+   dasselbe meinen und keine Übersetzungstabelle dazwischenliegt. */
+const PRUEFDIENSTE = [
+  { id: "icmp:",     label: "ICMP · Ping",        hint: "antwortet das Gerät überhaupt" },
+  { id: "tcp:80",    label: "HTTP · 80" },
+  { id: "tcp:443",   label: "HTTPS · 443" },
+  { id: "tls:443",   label: "Zertifikat · 443",   hint: "Restlaufzeit aus dem Handshake" },
+  { id: "tcp:22",    label: "SSH · 22" },
+  { id: "dns:53",    label: "DNS · 53",           hint: "echte Auflösung über UDP, kein Portklopfen" },
+  { id: "tcp:25",    label: "SMTP · 25" },
+  { id: "tcp:587",   label: "Submission · 587" },
+  { id: "tcp:465",   label: "SMTPS · 465" },
+  { id: "tcp:143",   label: "IMAP · 143" },
+  { id: "tcp:993",   label: "IMAPS · 993" },
+  { id: "tcp:995",   label: "POP3S · 995" },
+  { id: "tcp:3389",  label: "RDP · 3389" },
+  { id: "tcp:445",   label: "SMB · 445" },
+  { id: "tcp:139",   label: "NetBIOS · 139" },
+  { id: "tcp:21",    label: "FTP · 21" },
+  { id: "tcp:631",   label: "IPP · 631",          hint: "Drucker" },
+  { id: "tcp:8006",  label: "Proxmox · 8006" },
+  { id: "tcp:9090",  label: "Cockpit · 9090" },
+  { id: "tcp:3306",  label: "MySQL · 3306" },
+  { id: "tcp:5432",  label: "PostgreSQL · 5432" },
+  { id: "tcp:1883",  label: "MQTT · 1883" }
+];
+const PRUEF_IDS = new Set(PRUEFDIENSTE.map(d => d.id));
+
+/* Eine Prüfung, die nichts weiter trägt als Art und Port, lässt sich
+   ankreuzen — steht sie nicht in der Liste oben, bekommt sie ihre eigene
+   Zeile dazu. Alles andere — ein Zertifikat mit eigenem `servername`,
+   eine DNS-Prüfung mit eigener Abfrage, eine als *wesentlich*
+   gekennzeichnete — sagt mehr, als ein Kästchen tragen kann. Die wird
+   unangetastet weitergereicht und daneben angezeigt, statt beim
+   Speichern zu verschwinden. */
+function schlicht(c) {
+  return Object.keys(c || {}).every(k => k === "kind" || k === "port");
+}
+function checkId(c) { return `${c.kind}:${c.port ?? ""}`; }
+
+const ART_LABEL = { tcp: "TCP", tls: "Zertifikat", dns: "DNS", icmp: "ICMP", http: "HTTP" };
+function pruefLabel(id) {
+  const d = PRUEFDIENSTE.find(x => x.id === id);
+  if (d) return d.label;
+  const [kind, port] = id.split(":");
+  return `${ART_LABEL[kind] || kind}${port ? " · " + port : ""}`;
+}
+
+function pruefAusChecks(checks) {
+  const ids = [], extra = [], rest = [];
+  for (const c of checks || []) {
+    if (!schlicht(c) || !c.kind) { rest.push(c); continue; }
+    const id = checkId(c);
+    if (ids.includes(id)) continue;
+    ids.push(id);
+    if (!PRUEF_IDS.has(id)) extra.push(id);
+  }
+  return { ids, extra, rest };
+}
+
+/* Die Zeilen, die das Formular zeigt: die feste Liste und dazu, was
+   dieses System sonst noch prüft. */
+function pruefZeilen(d) {
+  return [...PRUEFDIENSTE, ...(d.pruefExtra || []).filter(id => !PRUEF_IDS.has(id))
+    .map(id => ({ id, label: pruefLabel(id), eigen: true }))];
+}
+
+/* Zurück in eine Prüfliste — in der Reihenfolge der Zeilen, damit
+   dieselbe Auswahl immer dieselbe Datei ergibt. */
+function pruefZuChecks(d, ports) {
+  const gewaehlt = new Set(d.pruef || []);
+  const out = [];
+  for (const z of pruefZeilen(d)) {
+    if (!gewaehlt.has(z.id)) continue;
+    const [kind, port] = z.id.split(":");
+    out.push(port ? { kind, port: Number(port) } : { kind });
+  }
+  const schon = new Set(out.filter(c => c.kind === "tcp").map(c => c.port));
+  for (const p of ports || []) if (!schon.has(p)) { out.push({ kind: "tcp", port: p }); schon.add(p); }
+  return [...out, ...(d.pruefRest || [])];
+}
+
+/* „8006, 9090" → [8006, 9090]. Was keine Portnummer ist, fällt weg —
+   gemeldet wird das beim Speichern, nicht hier beim Tippen. */
+function portListe(text) {
+  return String(text ?? "").split(/[,;\s]+/).map(x => Number(x.trim()))
+    .filter(n => Number.isInteger(n) && n > 0 && n < 65536);
+}
+
+function pruefFelder(d) {
+  const eigen = !!d.checksEigen;
+  const ids = new Set(d.pruef || []);
+  const rest = d.pruefRest || [];
+  return `<div>
+    <label class="row" style="gap:9px;cursor:pointer">
+      <span class="switch" role="switch" aria-checked="${eigen}" data-action="form-toggle" data-field="checksEigen"></span>
+      <span>Prüfungen selbst festlegen
+        <span class="faint">— sonst abgeleitet aus IP und Oberfläche: ICMP, deren Port, bei https das Zertifikat</span></span>
+    </label>
+    ${eigen ? `
+    <div class="row row-wrap" style="gap:6px;margin:10px 0 0">
+      ${pruefZeilen(d).map(x => `<button class="btn btn--sm" type="button" data-action="form-check" data-id="${esc(x.id)}"
+        aria-current="${ids.has(x.id)}" ${x.hint ? `title="${esc(x.hint)}"` : ""}>${ids.has(x.id) ? "✓ " : ""}${esc(x.label)}</button>`).join("")}
+    </div>
+    <div class="admin-grid" style="margin-top:10px">
+      <label class="admin-field">
+        <span class="admin-label">Weitere Ports</span>
+        <input class="admin-input" data-field="pruefPorts" value="${esc(d.pruefPorts ?? "")}" placeholder="8123, 32400">
+        <span class="admin-hint">TCP, durch Komma getrennt — für alles, was oben nicht steht</span>
+      </label>
+    </div>
+    ${rest.length ? `<p class="admin-hint" style="margin:8px 0 0">Unverändert übernommen aus der Bestandsdatei:
+      ${rest.map(c => `<span class="chip chip--plain mono">${esc(checkId(c))}${
+        c.servername ? " · " + esc(c.servername) : ""}${c.query ? " · " + esc(c.query) : ""}${
+        c.wesentlich ? " · wesentlich" : ""}</span>`).join(" ")}
+      — diese Prüfungen tragen mehr als Art und Port und lassen sich hier nicht ankreuzen. Sie bleiben,
+      wie sie sind.</p>` : ""}
+    <p class="admin-hint" style="margin:8px 0 0">Angehakt wird, was <b>überwacht</b> werden soll: jede Prüfung ist
+      eine eigene Ampel, und antwortet eine von mehreren nicht, gilt das als Teilausfall. Ein Gerät, das nur SSH
+      kann, bekommt hier ICMP und SSH — und hört auf, wegen eines nie vorhandenen Ports gelb zu leuchten.</p>`
+    : ""}
+  </div>`;
 }
 
 function viewVerwaltung() {
@@ -5724,6 +5895,8 @@ function renderAdminForm() {
         <span class="switch" role="switch" aria-checked="${!!d.tls_ignore}" data-action="form-toggle" data-field="tls_ignore"></span>
         <span>Zertifikat nicht bewerten <span class="faint">— gemessen und angezeigt wird es weiter, nur ohne Ampel</span></span>
       </label>
+
+      ${pruefFelder(d)}
 
       ${schwellenFelder(inp, d)}
 

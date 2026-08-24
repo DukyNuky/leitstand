@@ -24,6 +24,10 @@
 #    ip:  10.10.1.11         ->  ICMP (sofern ping vorhanden)
 #
 #  Wer das nicht will, setzt `checks:` ausdrücklich — siehe adguard-01.
+#  In der Oberfläche geht dasselbe zum Anhaken: Verwaltung -> System
+#  bearbeiten -> "Prüfungen selbst festlegen". Steht dort die abgeleitete
+#  Liste, wird `checks:` nicht in diese Datei geschrieben — sonst fröre
+#  sie einen Standardwert ein, der sich am Typ noch ändern soll.
 #
 #  Port und TLS werden an der IP versucht und, wenn dort nichts antwortet,
 #  am Namen aus der url. Das ist der Fall „Oberfläche hinter einem Reverse

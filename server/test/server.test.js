@@ -429,3 +429,87 @@ test("Ein Messziel mit Leerzeichen wird beim Anlegen weggeräumt", async () => {
   assert.equal(r.body.item.probe.ip, "10.99.0.2");
   await call("DELETE", "/api/admin/tunnels/wg-rand");
 });
+
+/* ============================================================
+   Prüfungen selbst festlegen
+
+   Ein „sonstiges" System bekommt seine Prüfliste sonst aus IP und
+   Adresse geraten: ICMP, Port 443, Zertifikat. Ein Switch, der nur SSH
+   spricht, leuchtet damit für immer gelb — und eine Ampel, die immer
+   gelb ist, hat man nach zwei Wochen abtrainiert.
+   ============================================================ */
+
+test("Die Verwaltung sagt, welche Prüfliste eigen ist und welche abgeleitet", async () => {
+  await call("POST", "/api/admin/hosts", {
+    id: "eigen-01", type: "other", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: 9 }]
+  });
+  await call("POST", "/api/admin/hosts", { id: "abgeleitet-01", type: "other", site: "hq", ip: "127.0.0.1" });
+
+  const { body } = await call("GET", "/api/admin/inventory");
+  const eigen = body.hosts.find(h => h.id === "eigen-01");
+  const abgeleitet = body.hosts.find(h => h.id === "abgeleitet-01");
+  assert.equal(eigen.checksEigen, true, "im Bestand steht ausdrücklich tcp/9");
+  assert.deepEqual(eigen.checks, [{ kind: "tcp", port: 9 }]);
+  assert.equal(abgeleitet.checksEigen, false, "diese Liste kommt aus IP und Adresse");
+  assert.ok(abgeleitet.checks.length > 1);
+
+  /* Und in der Datei steht die abgeleitete Liste nicht — sonst fröre sie
+     einen Standardwert ein, der sich am Typ noch ändern soll. */
+  const datei = fs.readFileSync(path.join(dir, "inventory.yaml"), "utf8");
+  const zeile = datei.split("\n").find(z => z.includes("abgeleitet-01"));
+  assert.ok(!/checks/.test(zeile || ""), "abgeleitete Prüfungen gehören nicht in die Datei");
+});
+
+test("Eine angehakte Prüfliste wird übernommen und geprüft", async () => {
+  const angelegt = await call("POST", "/api/admin/hosts", {
+    id: "switch-01", type: "other", site: "hq", ip: "127.0.0.1",
+    checks: [{ kind: "icmp" }, { kind: "tcp", port: openPort }]
+  });
+  assert.equal(angelegt.status, 201);
+  assert.deepEqual(angelegt.body.item.checks, [{ kind: "icmp" }, { kind: "tcp", port: openPort }],
+    "kein abgeleitetes tcp/443 dazwischen");
+
+  const inv = await call("GET", "/api/admin/inventory");
+  assert.equal(inv.body.hosts.find(h => h.id === "switch-01").checksEigen, true);
+
+  await srv.engine.runOnce();
+  const zustand = await call("GET", "/api/state");
+  const h = zustand.body.hosts.find(x => x.id === "switch-01");
+  assert.deepEqual(h.checks.map(c => `${c.kind}${c.port ? "/" + c.port : ""}`), ["icmp", `tcp/${openPort}`],
+    "geprüft wird genau das Angehakte");
+});
+
+/* Der Weg zurück muss es auch geben — sonst wäre die eigene Liste eine
+   Einbahnstraße, und niemand traut sich, sie überhaupt anzufassen. */
+test("Eine leere Prüfliste heißt „wieder ableiten“, nicht „nichts prüfen“", async () => {
+  const r = await call("PUT", "/api/admin/hosts/switch-01", { checks: [] });
+  assert.equal(r.status, 200);
+  const inv = await call("GET", "/api/admin/inventory");
+  const h = inv.body.hosts.find(x => x.id === "switch-01");
+  assert.equal(h.checksEigen, false);
+  assert.ok(h.checks.some(c => c.kind === "icmp"), "abgeleitet aus der IP");
+  assert.ok(h.checks.length > 1, "und aus der Adresse");
+});
+
+/* Ein Test, der etwas anderes prüft als die Überwachung danach, ist
+   schlimmer als keiner: er sagt „erreichbar" zu einem Port, den niemand
+   mehr ansieht. */
+test("Der Verbindungstest prüft, was angehakt ist", async () => {
+  const eigen = await call("POST", "/api/admin/test", {
+    id: "probe", type: "other", site: "hq", ip: "127.0.0.1",
+    checks: [{ kind: "tcp", port: openPort }]
+  });
+  assert.deepEqual(eigen.body.steps.map(s => `${s.kind}/${s.port}`), [`tcp/${openPort}`]);
+  assert.equal(eigen.body.reachable, true);
+
+  const abgeleitet = await call("POST", "/api/admin/test", {
+    id: "probe", type: "other", site: "hq", ip: "127.0.0.1", checks: []
+  });
+  assert.ok(abgeleitet.body.steps.length > 1, "ohne eigene Liste wird abgeleitet");
+});
+
+test("Eine unbekannte Prüfart wird abgelehnt, statt still zu verschwinden", async () => {
+  const r = await call("PUT", "/api/admin/hosts/switch-01", { checks: [{ kind: "quux", port: 1 }] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /quux/);
+});

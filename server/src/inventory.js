@@ -420,12 +420,22 @@ export function save(file, inv) {
   return text;
 }
 
+/* Hat dieses System eine eigene Prüfliste, oder ist es die abgeleitete?
+
+   Zwei Stellen brauchen dieselbe Antwort: das Schreiben (abgeleitete
+   Prüfungen gehören nicht in die Datei) und die Verwaltung (der Schalter
+   „Prüfungen selbst festlegen" muss zeigen, wie es wirklich steht).
+   Zweimal dieselbe Rechnung wäre zweimal dieselbe Gelegenheit, sie
+   auseinanderlaufen zu lassen. */
+export function eigeneChecks(host) {
+  return JSON.stringify(host?.checks || null) !== JSON.stringify(defaultChecks({ ...host, checks: null }));
+}
+
 /* Abgeleitete Prüfungen nicht mitschreiben — sonst friert die Datei
    Standardwerte ein, die sich später am Typ ändern sollen. */
 function stripDerived(h) {
   const copy = { ...h };
-  const derived = JSON.stringify(defaultChecks({ ...h, checks: null }));
-  if (JSON.stringify(h.checks) === derived) delete copy.checks;
+  if (!eigeneChecks(h)) delete copy.checks;
   if (copy.monitor === true) delete copy.monitor;
   if (copy.name === copy.id) delete copy.name;
   return copy;

@@ -2028,3 +2028,149 @@ test("Ohne hinterlegten Schlüssel steht in der Mail-Ansicht, was fehlt", async 
   assert.match(html, /Read-Only/);
   assert.ok(!/undefined|NaN/.test(html));
 });
+
+/* ============================================================
+   Prüfungen anhaken
+
+   Der Fall, für den es gebaut ist: ein Gerät, das nur ICMP und SSH
+   kann. Ohne eigene Liste bekommt es tcp/443 und ein Zertifikat
+   angedichtet und leuchtet für immer gelb.
+   ============================================================ */
+
+async function zustandMitGeraeten() {
+  return echterZustand(`
+settings: { icmp: false, timeout: 1 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: switch-01, type: other, site: hq, ip: 10.255.255.9,
+      checks: [ { kind: icmp }, { kind: tcp, port: 22 } ] }
+  - { id: nas-01, type: other, site: hq, ip: 10.255.255.8,
+      checks: [ { kind: icmp }, { kind: tcp, port: 443 },
+                { kind: tls, port: 443, servername: "nas.example.org" } ] }
+tunnels: []
+links: []
+`);
+}
+
+/* Damit das Formular den Rohbestand sieht wie im Betrieb — die Ansicht
+   führt Prüfungen als Ergebnisse, nicht als Konfiguration. */
+async function mitRohbestand(ui, zustand) {
+  const { normalizeHost, eigeneChecks } = await import("../src/inventory.js");
+  ui.state.rawHosts = zustand.hosts.map(h => {
+    const roh = normalizeHost({
+      id: h.id, type: h.type, site: h.site, ip: h.ip, url: h.url,
+      checks: h.checks.map(c => (c.port ? { kind: c.kind, port: c.port } : { kind: c.kind }))
+    });
+    return { ...roh, checksEigen: eigeneChecks(roh) };
+  });
+}
+
+/* Aus der VM kommen Objekte mit fremdem Prototyp — `assert/strict`
+   vergleicht ihn mit. Über JSON bleibt der Inhalt und die Herkunft geht
+   verloren; denselben Kniff braucht schon der Typvergleich weiter oben. */
+function nutzlast(sandbox) {
+  return JSON.parse(JSON.stringify(vm.runInContext("formPayload()", sandbox)));
+}
+
+test("Ein Gerät, das nur ICMP und SSH kann, lässt sich genau so anhaken", async () => {
+  const zustand = await zustandMitGeraeten();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+
+  vm.runInContext(`openForm("hosts","edit","switch-01")`, sandbox);
+  const f = ui.state.form;
+  assert.equal(f.data.checksEigen, true, "die Liste steht so in der Datei");
+  assert.deepEqual([...f.data.pruef], ["icmp:", "tcp:22"]);
+
+  ui.render();
+  const html = ziele.get("#overlays").innerHTML;
+  assert.match(html, /Prüfungen selbst festlegen/);
+  assert.match(html, /SSH · 22/);
+  assert.match(html, /RDP · 3389/, "auch das Nichtangehakte steht zur Wahl");
+  assert.ok(!/undefined|NaN/.test(html));
+
+  /* Und was daraus wieder in den Bestand ginge, ist genau das, was
+     dastand — eine Liste, die beim Anzeigen etwas hinzuerfindet, schreibt
+     es beim nächsten Speichern fest. */
+  const payload = nutzlast(sandbox);
+  assert.deepEqual(payload.checks, [{ kind: "icmp" }, { kind: "tcp", port: 22 }]);
+});
+
+test("Anhaken und Abwählen ändert genau eine Prüfung", async () => {
+  const zustand = await zustandMitGeraeten();
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+  vm.runInContext(`openForm("hosts","edit","switch-01")`, sandbox);
+
+  const um = id => {
+    const liste = new Set(ui.state.form.data.pruef);
+    if (liste.has(id)) liste.delete(id); else liste.add(id);
+    ui.state.form.data.pruef = [...liste];
+  };
+  um("tcp:443");
+  assert.deepEqual(nutzlast(sandbox).checks,
+    [{ kind: "icmp" }, { kind: "tcp", port: 443 }, { kind: "tcp", port: 22 }],
+    "in der Reihenfolge der Liste, nicht in der des Klickens");
+  um("icmp:");
+  assert.deepEqual(nutzlast(sandbox).checks,
+    [{ kind: "tcp", port: 443 }, { kind: "tcp", port: 22 }]);
+});
+
+/* Eine Prüfung, die mehr trägt als Art und Port, passt in kein Kästchen.
+   Sie darf davon aber nicht verschwinden — beim nächsten Speichern wäre
+   sonst der eigene `servername` weg, und das Zertifikat würde gegen die
+   IP geprüft statt gegen den Namen. */
+test("Was in kein Kästchen passt, bleibt trotzdem stehen", async () => {
+  const zustand = await zustandMitGeraeten();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+
+  /* Der Rohbestand dieses Tests trägt den servername mit. */
+  const nas = ui.state.rawHosts.find(h => h.id === "nas-01");
+  nas.checks = [{ kind: "icmp" }, { kind: "tcp", port: 443 },
+    { kind: "tls", port: 443, servername: "nas.example.org" }];
+  nas.checksEigen = true;
+
+  vm.runInContext(`openForm("hosts","edit","nas-01")`, sandbox);
+  const f = ui.state.form;
+  assert.deepEqual(JSON.parse(JSON.stringify(f.data.pruefRest)), [{ kind: "tls", port: 443, servername: "nas.example.org" }]);
+  ui.render();
+  assert.match(ziele.get("#overlays").innerHTML, /nas\.example\.org/);
+  assert.deepEqual(nutzlast(sandbox).checks[2],
+    { kind: "tls", port: 443, servername: "nas.example.org" });
+});
+
+test("Freie Ports kommen als TCP-Prüfung dazu, doppelte nur einmal", async () => {
+  const zustand = await zustandMitGeraeten();
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+  vm.runInContext(`openForm("hosts","edit","switch-01")`, sandbox);
+  ui.state.form.data.pruefPorts = "32400, 8123, 22, Unfug";
+  const checks = nutzlast(sandbox).checks;
+  assert.deepEqual(checks, [
+    { kind: "icmp" }, { kind: "tcp", port: 22 },
+    { kind: "tcp", port: 32400 }, { kind: "tcp", port: 8123 }
+  ], "22 steht schon in der Liste, „Unfug“ ist kein Port");
+});
+
+/* Ohne eigene Liste darf das Formular nichts festschreiben: sonst fröre
+   das erste Speichern die abgeleiteten Prüfungen ein, und eine spätere
+   Änderung am Typ erreichte dieses System nie mehr. */
+test("Ohne eigene Liste geht eine leere hinaus — das heißt „wieder ableiten“", async () => {
+  const zustand = await zustandMitGeraeten();
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+  vm.runInContext(`openForm("hosts","edit","switch-01")`, sandbox);
+  ui.state.form.data.checksEigen = false;
+  assert.deepEqual(nutzlast(sandbox).checks, []);
+});

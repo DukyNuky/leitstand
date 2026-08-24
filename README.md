@@ -162,6 +162,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Standort-Bündelung** | Ist ein ganzer Standort still, gibt es **eine** Meldung statt zwölf |
 | **Startseite** | Kacheln tragen die Ampel des verknüpften Systems; ein Lesezeichen ohne System kann auf Wunsch selbst geprüft werden — ein GET je Minute, Ampel ohne Störung |
 | **Schwellwerte je System** | Belegungsgrenzen gelten global — und dürfen an einem einzelnen System abweichen. Für den Host, der bekanntermaßen bei 93 % läuft, weil es nicht anders geht |
+| **Prüfungen zum Anhaken** | Was an einem System geprüft wird, steht sonst aus IP und Adresse geraten fest — ICMP, der Port der Oberfläche, bei https das Zertifikat. Für Proxmox stimmt das, für ein **sonstiges** Gerät selten: ein Switch, der nur SSH spricht, leuchtet für immer gelb wegen eines nie vorhandenen Ports. Unter *Verwaltung → System bearbeiten* lässt sich die Liste deshalb selbst zusammenklicken — ICMP, HTTP, HTTPS, Zertifikat, SSH, DNS, SMTP, IMAP, RDP, SMB, Drucker, Datenbanken, dazu ein Feld für beliebige Ports. **Eine Zeile ist genau eine Prüfung**, auch das Zertifikat: eine Liste, die beim Anzeigen etwas hinzuerfindet, schreibt es beim nächsten Speichern in die Datei. Was mehr trägt als Art und Port (ein eigener `servername`, eine eigene DNS-Abfrage) bleibt unangetastet stehen |
 | **Verwaltung** | Standorte, Systeme, Tunnel, Startseite und Schwellwerte in der Oberfläche pflegen |
 
 Alles andere (TrueNAS, Home Assistant) wird bisher nur auf

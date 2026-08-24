@@ -227,7 +227,15 @@ export function createServer(opts = {}) {
 
     /* ---- Verwaltung ---- */
     if (p === "/api/admin/inventory" && m === "GET")
-      return json(res, 200, { ...inv, credentials: secrets.maskedAll(), types: Inv.TYPES, file: invFile });
+      return json(res, 200, {
+        ...inv,
+        /* Die Prüfliste steht hier immer gefüllt — abgeleitete wie eigene.
+           Ob sie *eigen* ist, sieht man ihr nicht an; die Verwaltung
+           braucht es aber, sonst zeigte ihr Schalter etwas anderes an, als
+           in der Datei steht. */
+        hosts: inv.hosts.map(h => ({ ...h, checksEigen: Inv.eigeneChecks(h) })),
+        credentials: secrets.maskedAll(), types: Inv.TYPES, file: invFile
+      });
 
     if (p === "/api/admin/settings" && m === "PUT") {
       const body = await readJson(req);
@@ -250,7 +258,7 @@ export function createServer(opts = {}) {
           const grund = Inv.pruefeProbeIp(body.probe?.ip);
           if (grund) return json(res, 400, { error: `Gegenstelle im Tunnel: ${grund}` });
         }
-        const item = key === "hosts" ? Inv.normalizeHost(body)
+        const item = key === "hosts" ? Inv.normalizeHost(stripEmptyChecks(body))
           : key === "tunnels" ? Inv.normalizeTunnel(body) : body;
         commit({ ...inv, [key]: [...inv[key], item] });
         return json(res, 201, { ok: true, item: inv[key].at(-1) });
@@ -384,9 +392,15 @@ export function createServer(opts = {}) {
   /* Verbindungstest: erst Erreichbarkeit, dann — wenn Zugangsdaten
      dabei sind — die echte API. Gespeichert wird dabei nichts. */
   async function testTarget(body) {
+    /* Geprüft wird, was im Formular angehakt ist — nicht, was der Typ
+       nahelegt. Sonst meldete der Test „Port 443 offen" für ein System,
+       das gleich mit SSH allein überwacht wird, und die erste echte Runde
+       widerspräche ihm. Eine leere Liste heißt „abgeleitet", darum
+       kümmert sich normalizeHost. */
     const host = Inv.normalizeHost({
       id: body.id || "test", type: body.type || "other",
-      site: body.site || (inv.sites[0]?.id), ip: body.ip, url: body.url
+      site: body.site || (inv.sites[0]?.id), ip: body.ip, url: body.url,
+      checks: Array.isArray(body.checks) ? body.checks : null
     });
     const steps = [];
     for (const c of host.checks) {
