@@ -107,7 +107,10 @@ hosts:
       role: "Proxmox Backup Server" }
 
   # ---- Mail ---------------------------------------------------------------
-  # Proxmox Mail Gateway: Ein-/Ausgang, Spam- und Virenzahlen.
+  # Proxmox Mail Gateway: Durchsatz, Warteschlange, Quarantäne, Signaturstand
+  # und die Dienste, die filtern. Angemeldet wird mit Benutzer und Passwort
+  # (Rolle Auditor) — PMG kennt keine API-Token, auch wenn seine
+  # API-Beschreibung sie ausweist.
   - { id: pmg-01, type: pmg, site: rz, ip: 10.30.2.40, url: "https://10.30.2.40:8006",
       role: "Proxmox Mail Gateway" }
 

@@ -5,7 +5,8 @@
    reinen Erreichbarkeit; das ist kein Fehler, sondern eine Lücke, und
    die Oberfläche sagt sie an. */
 
-import { collectPve, collectPbs, collectPmg, TESTERS as PROXMOX_TESTERS } from "./proxmox.js";
+import { collectPve, collectPbs, TESTERS as PROXMOX_TESTERS } from "./proxmox.js";
+import { collectPmg, testConnection as testPmg } from "./pmg.js";
 import { collectOpnsense, testConnection as testOpnsense } from "./opnsense.js";
 import { collectPfsense, testConnection as testPfsense } from "./pfsense.js";
 import { collectAdguard, testConnection as testAdguard } from "./adguard.js";
@@ -34,6 +35,7 @@ export function makeCollectors(secrets) {
 
 export const TESTERS = {
   ...PROXMOX_TESTERS,
+  pmg: (h, c) => testPmg(h, c),
   opnsense: (h, c) => testOpnsense(h, c),
   pfsense: (h, c) => testPfsense(h, c),
   adguard: (h, c) => testAdguard(h, c),

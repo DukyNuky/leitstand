@@ -7,12 +7,12 @@ import http from "node:http";
 export const GOOD = "PVEAPIToken=leitstand@pve!ro=1a2b3c4d-0000-1111-2222-333344445555";
 export const WEAK = "PVEAPIToken=leitstand@pve!schwach=aaaa";
 
-const TRENNER = { PVE: "=", PBS: ":", PMG: "=" };
+const TRENNER = { PVE: "=", PBS: ":" };
 
 /* Zerlegt die Kopfzeile so, wie das jeweilige Produkt sie erwartet — und
    gibt nichts zurück, wenn das Trennzeichen nicht dazu passt. */
 export function zerlegen(auth) {
-  const m = /^(PVE|PBS|PMG)APIToken=(.+)$/.exec(auth || "");
+  const m = /^(PVE|PBS)APIToken=(.+)$/.exec(auth || "");
   if (!m) return null;
   const i = m[2].lastIndexOf(TRENNER[m[1]]);
   if (i < 1) return null;
@@ -146,8 +146,6 @@ export function fakeProxmox() {
           { worker_type: "garbage_collection", worker_id: "main", status: "OK", endtime: Math.floor(Date.now() / 1000) - 86_400 },
           { worker_type: "backup", worker_id: "vm/101", status: "OK", endtime: Math.floor(Date.now() / 1000) - 7200 }
         ]);
-      case "/api2/json/statistics/mail":
-        return send(200, { count_in: 1840, count_out: 96, spamin: 1216, viruscount_in: 3 });
       default:
         return send(404, null);
     }

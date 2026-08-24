@@ -45,8 +45,8 @@ das ausdrücklich dasteht. Ein Test weist einen Aufruf ohne Nachweis mit 401 ab.
 
 ## 2. Mehr Details je System — die fehlenden Sammler
 
-**Warum.** Vier von elf Systemtypen werden bisher nur angepingt — AdGuard Home
-und Portainer sind seither dazugekommen. Sie stehen grün da, weil ein Port
+**Warum.** Drei von elf Systemtypen werden bisher nur angepingt — AdGuard Home,
+Portainer und zuletzt der Mail Gateway sind dazugekommen. Sie stehen grün da, weil ein Port
 offen ist; was auf ihnen los ist, weiß der Leitstand nicht. Genau das ist der
 Unterschied zwischen „das Gerät antwortet" und „der Dienst tut, was er soll":
 ein TrueNAS mit einem degradierten Pool antwortet tadellos.
@@ -101,6 +101,25 @@ gebaut.
       stünde da eine ruhige Null, wo Dutzende Container laufen. **Nicht gebaut:**
       der Neustartzähler; er stünde nur in einem `inspect` je Container, und
       der Zustand `restarting` samt Exit-Code sagt dasselbe billiger.
+- [x] **2.14 Proxmox Mail Gateway ausbauen** — gebaut, in einem **eigenen**
+      Sammler: [`server/src/collectors/pmg.js`](server/src/collectors/pmg.js).
+      Bis dahin standen dort vier Zahlen aus `/statistics/mail` — und die kamen
+      nie an: der Sammler meldete sich mit `PMGAPIToken=…` an, und **PMG kennt
+      keine API-Token**. Seine API-Beschreibung weist sie an jedem Endpunkt aus,
+      sein Dienst weist sie ab (`die "API tokens not implemented"`). Zwei
+      weitere Fehler steckten in denselben vier Zahlen: `timespan=86400` ist
+      kein Parameter dieses Endpunkts (er will `starttime`), und das Feld heißt
+      `spamcount_in`, nicht `spamin`.
+      Jetzt: Anmeldung per Ticket mit Wiederverwendung, Verkehr über 24 h,
+      Warteschlange je Queue **mit Altersverteilung**, Quarantäne, Stand der
+      ClamAV-Signaturen, alle Dienste, Verkehr je Domäne, Virenfunde mit Namen,
+      Auslastung und `insync`. Ampel: Kerndienst steht, **ausgehender**
+      Virenfund, volle Warteschlange oder volle Wurzel → rot; nicht
+      abgeglichener Verbund, alte Mail in der Warteschlange, alte Signaturen →
+      gelb. **Ausdrücklich keine Ampel** für eingehende Virenfunde: das ist der
+      Zweck des Geräts, und eine Ampel, die täglich leuchtet, ist nach zwei
+      Wochen abtrainiert. Eigener Takt (`pmg_takt`, `pmg_takt_lang`), weil
+      `qshape` je Abruf einen Prozess auf dem Gateway startet.
 - [ ] **2.4 Mailcow** — `/api/v1/get/mailq/all`, `/get/status/containers`,
       `/get/status/vmail`. Warteschlange, Domains, Postfächer, Containerzustand.
       Ampel: Queue > 25 gelb, > 100 rot.

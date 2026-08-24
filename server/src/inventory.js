@@ -31,6 +31,19 @@ export const DEFAULTS = {
   /* Wie oft eine Kachel der Startseite ihre Adresse abruft, wenn dort
      „prüfen" gesetzt ist. Fremde Seiten alle 15 s abzurufen wäre unhöflich. */
   link_takt: 60,
+  /* Wann eine Warteschlange auf dem Mail Gateway auffällt. Zurückgestellte
+     Mail ist nicht gleich Ausfall — Postfix stellt sie später zu, und ein
+     einzelner unerreichbarer Empfänger gehört zum Betrieb. Auffällig wird
+     erst die Menge, und richtig auffällig wird das Alter: was seit zehn
+     Stunden liegt, geht nicht von selbst weg. */
+  mail_queue_warn: 25, mail_queue_crit: 100,
+  /* Eigener Takt für den Mail Gateway. Der Durchlauf kommt alle 15 s; die
+     Tagesstatistik ändert sich darin nicht messbar, und `qshape` startet
+     je Abruf einen Prozess auf dem Gerät. Betriebswerte (Auslastung,
+     Warteschlange, Dienste) im ersten Takt, Statistik, Quarantäne,
+     Signaturen und Paketstand im zweiten. Die Erreichbarkeit misst
+     weiterhin der Prober in jedem Durchlauf. */
+  pmg_takt: 60, pmg_takt_lang: 300,
   /* Ein eigensigniertes Zertifikat bezeugt keine Herkunft — es trägt nur
      einen Schlüssel. Läuft es ab, ändert sich für den Betrieb nichts:
      wer es gestern angenommen hat, nimmt es heute an, und geprüft hat es
@@ -51,7 +64,7 @@ export const DEFAULTS = {
 export const TYPES = {
   pve:       { label: "Proxmox VE",           port: 8006, api: "proxmox",   zugang: "API-Token" },
   pbs:       { label: "Proxmox Backup Server",port: 8007, api: "proxmox",   zugang: "API-Token" },
-  pmg:       { label: "Proxmox Mail Gateway", port: 8006, api: "proxmox",   zugang: "API-Token" },
+  pmg:       { label: "Proxmox Mail Gateway", port: 8006, api: "pmg",       zugang: "Benutzer und Passwort (Rolle Auditor)" },
   opnsense:  { label: "OPNsense",             port: 443,  api: "opnsense",  zugang: "API-Schlüssel und Secret" },
   pfsense:   { label: "pfSense",              port: 443,  api: "pfsense",   zugang: "API-Schlüssel (Paket pfSense-pkg-API)" },
   truenas:   { label: "TrueNAS SCALE",        port: 443,  api: null },

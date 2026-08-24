@@ -35,6 +35,7 @@ import { Verlauf, verdichte, belegteReihen } from "./verlauf.js";
 import { runCheck } from "./probe.js";
 import { buildInfo } from "./version.js";
 import { diagnoseHost, alsText } from "./diagnose.js";
+import { ticketVergessen, speicherVergessen } from "./collectors/pmg.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const startedAt = new Date().toISOString();
@@ -140,6 +141,12 @@ export function createServer(opts = {}) {
     engine.announce();
     return next;
   };
+
+  /* Ein Sammler, der sich etwas merkt, muss es auch wieder vergessen
+     können. Der Mail Gateway hält ein Anmeldeticket und die zuletzt
+     gelesenen Kennzahlen — nach geänderten Zugangsdaten wäre beides eine
+     Auskunft über einen Zustand, den es nicht mehr gibt. */
+  const vergiss = id => { ticketVergessen(id); speicherVergessen(id); };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
@@ -291,7 +298,7 @@ export function createServer(opts = {}) {
             next.tunnels = inv.tunnels.filter(t => t.a !== id && t.b !== id);
           }
           commit(next);
-          if (key === "hosts") secrets.remove(id);   /* erst wenn der Bestand steht */
+          if (key === "hosts") { secrets.remove(id); vergiss(id); }   /* erst wenn der Bestand steht */
           return json(res, 200, { ok: true });
         }
       }
@@ -309,10 +316,11 @@ export function createServer(opts = {}) {
       if (m === "POST") {
         const body = await readJson(req);
         const masked = secrets.set(id, body);
+        vergiss(id);
         engine.reload(inv);
         return json(res, 200, { ok: true, credentials: masked });
       }
-      if (m === "DELETE") { secrets.remove(id); return json(res, 200, { ok: true }); }
+      if (m === "DELETE") { secrets.remove(id); vergiss(id); return json(res, 200, { ok: true }); }
     }
 
     if (p === "/api/admin/test" && m === "POST") {

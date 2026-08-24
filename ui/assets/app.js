@@ -159,6 +159,12 @@ const VIEWS = [
   { id:"netz",    label:"Netz & Proxy", icon:"netz",    group:"Infrastruktur" },
   { id:"vpn",     label:"VPN-Tunnel",   icon:"vpn",     group:"Infrastruktur" },
   { id:"dienste", label:"Dienste",      icon:"dienste", group:"Infrastruktur" },
+  /* Mail hat eine eigene Ansicht bekommen, weil ein Mail Gateway mehr
+     meldet als eine Kachel trägt: Durchsatz, Warteschlange, Quarantäne,
+     Signaturen und die Dienste, die im Hintergrund filtern. Vor allem
+     aber, weil die Fragen andere sind — „hängt Mail?" beantwortet keine
+     Ampel neben einem DNS-Filter. */
+  { id:"mail",    label:"Mail-Gateway", icon:"post",    group:"Infrastruktur" },
   { id:"post",    label:"Alarm-Postfach", icon:"post",  group:"Betrieb" },
   { id:"links",   label:"Startseite",   icon:"links",   group:"Betrieb" },
   { id:"cfg",     label:"Einstellungen",icon:"cfg",     group:"Betrieb" },
@@ -1855,7 +1861,6 @@ function viewDienste() {
   if (!state.hosts.length) return onboarding();
   const hs = visibleHosts();
   const ag = hs.filter(h => h.type === "adguard");
-  const mail = hs.filter(h => ["mailcow", "pmg"].includes(h.type));
   const ha = hs.filter(h => h.type === "hass");
   const rest = hs.filter(h => !["adguard", "mailcow", "pmg", "hass", "pve", "pbs", "truenas", "portainer", "opnsense", "pfsense"].includes(h.type));
 
@@ -1884,32 +1889,14 @@ function viewDienste() {
       ${ohneZugang.map(h => `<b>Verwaltung → ${esc(h.name)}</b>`).join(", ")}.</div>` : ""}
   </div>
 
-  <div class="grid g2">
-    <div class="panel">
-      <div class="panel-head"><h3>Mail</h3><span class="hint">Mailcow · Proxmox Mail Gateway</span></div>
-      <div class="panel-body"><div class="col">${mail.length ? mail.map(h => serviceCard(h, h.type === "pmg" ? `
-        <div class="stat-row">
-          ${stat("Eingang 24 h", nz(h.in24))}${stat("Spam", nz(h.spam))}
-          ${stat("Viren", nz(h.virus))}${stat("Antwort", nz(h.ms, " ms"))}
-          <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
-        </div>
-        ${h.in24 == null ? `<div class="card-meta">Zahlen erst mit hinterlegtem API-Token — Verwaltung → ${esc(h.name)}</div>` : ""}` : `
-        <div class="stat-row">
-          ${stat("Antwort", nz(h.ms, " ms"))}
-          ${stat("Zuletzt erreicht", fmtWhen(h.lastSeen) || "—")}
-          ${stat("Zertifikat", h.tls?.days != null ? h.tls.days + " T" : "—")}
-          <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
-        </div>
-        <div class="card-meta mono" style="font-size:10.5px">${checkList(h)}</div>`)).join("")
-        : '<div class="empty">Kein Mailsystem in dieser Auswahl.</div>'}</div></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><h3>Smart Home &amp; Übrige</h3><span class="hint">nur Erreichbarkeit</span></div>
-      <div class="panel-body"><div class="col">${(ha.length || rest.length)
-        ? einfach([...ha, ...rest], h => stat("Typ", TYPE_LABEL[h.type] || h.type))
-        : '<div class="empty">Nichts in dieser Auswahl.</div>'}</div></div>
-    </div>
+  <div class="panel">
+    <div class="panel-head"><h3>Smart Home &amp; Übrige</h3><span class="hint">nur Erreichbarkeit</span></div>
+    <div class="panel-body"><div class="col">${(ha.length || rest.length)
+      ? einfach([...ha, ...rest], h => stat("Typ", TYPE_LABEL[h.type] || h.type))
+      : '<div class="empty">Nichts in dieser Auswahl.</div>'}</div></div>
+    ${hs.some(h => h.type === "pmg" || h.type === "mailcow")
+      ? `<div class="panel-note">Die Mailsysteme stehen in einer eigenen Ansicht:
+         <b><a href="#/mail">Mail-Gateway</a></b> — mit Durchsatz, Warteschlange, Quarantäne und Signaturstand.</div>` : ""}
   </div>
 
   ${certPanel()}`;
@@ -1942,6 +1929,394 @@ function certPanel() {
         den Betrieb nichts: wer sie gestern angenommen hat, nimmt sie heute an. Umstellbar unter
         <b>Verwaltung → Schwellwerte</b> (<span class="mono">tls_selfsigned_ignore</span>), einzelne Systeme beim
         Bearbeiten.` : ""}</div>
+  </div>`;
+}
+
+/* ============================================================
+   Ansicht: Mail-Gateway
+   ============================================================ */
+/* Was ein Mail Gateway von außen zeigt, ist ein offener Port auf 25 — und
+   der sagt nichts. Ein Gateway, dessen Filterdienst steht, nimmt Mail
+   weiter an und stellt sie ungeprüft zu. Eines, dessen Warteschlange
+   volläuft, nimmt an und liefert nicht. Beides sieht von außen aus wie
+   Betrieb, und beides steht hier.
+
+   Die Zahlen kommen aus einem eigenen Takt (Einstellungen: pmg_takt,
+   pmg_takt_lang), nicht aus jedem Durchlauf: die Tagesstatistik ändert
+   sich in 15 Sekunden nicht, und die Warteschlange abzufragen startet je
+   Abruf einen Prozess auf dem Gerät. Wie alt der Stand ist, steht dabei. */
+function viewMail() {
+  if (!state.hosts.length) return onboarding();
+  const hs = visibleHosts();
+  const pmg = hs.filter(h => h.type === "pmg");
+  const cow = hs.filter(h => h.type === "mailcow");
+  const ohneZugang = pmg.filter(h => h.in24 == null && h.queueDeferred == null);
+
+  if (!pmg.length && !cow.length) return `<div class="panel">
+    <div class="panel-head"><h3>Mail</h3></div>
+    <div class="panel-body"><div class="empty">Kein Mailsystem in dieser Auswahl.</div></div>
+    <div class="panel-note">Angebunden ist der <b>Proxmox Mail Gateway</b> — Durchsatz, Spam- und Virenzahlen,
+      Warteschlange, Quarantäne, Signaturstand und die Dienste, die filtern. Anlegen unter
+      <b>Verwaltung → System hinzufügen</b>, Typ <span class="mono">pmg</span>.</div>
+  </div>`;
+
+  return `
+  <div class="panel">
+    <div class="panel-head"><h3>Mail Gateway</h3>
+      <span class="hint">${pmg.length} Gerät${pmg.length === 1 ? "" : "e"}</span>
+      <div class="spacer"></div>
+      <span class="hint">gelesen mit einem Konto in der Rolle Auditor — geschrieben wird nichts</span></div>
+    <div class="panel-body"><div class="grid g2">${pmg.length
+      ? pmg.map(gatewayKarte).join("")
+      : '<div class="empty">Kein Proxmox Mail Gateway in dieser Auswahl.</div>'}</div></div>
+    ${ohneZugang.length ? `<div class="panel-note">Ohne hinterlegten Zugang bleibt es bei Erreichbarkeit und
+      Antwortzeit. <b>Der Mail Gateway kennt keine API-Token</b> — auch wenn seine API-Dokumentation sie an jedem
+      Endpunkt ausweist, weist der Dienst sie ab. Angemeldet wird mit Benutzer und Passwort eines Kontos in der
+      Rolle <span class="mono">Auditor</span> (mit Realm: <span class="mono">leitstand@pmg</span>), einzutragen unter
+      ${ohneZugang.map(h => `<b>Verwaltung → ${esc(h.name)}</b>`).join(", ")}.</div>` : ""}
+  </div>
+
+  ${verkehrPanel(pmg)}
+  ${queuePanel(pmg)}
+
+  <div class="grid g2">
+    ${quarantaenePanel(pmg)}
+    ${signaturPanel(pmg)}
+  </div>
+
+  ${domainPanel(pmg)}
+  ${dienstePanel(pmg)}
+  ${mailcowPanel(cow)}`;
+}
+
+/* Ein Gerät: Ampel, worauf es läuft, was gerade durchgeht und was hängt. */
+function gatewayKarte(h) {
+  const s = h.schwellen || {};
+  const q = h.queueGrenzen || {};
+  const kennt = h.in24 != null || h.queueDeferred != null;
+  return `<div class="card" data-action="inspect" data-kind="host" data-id="${esc(h.id)}">
+    <div class="card-head">
+      <span style="padding-top:4px">${dot(h.status)}</span>
+      <div>
+        <div class="card-title mono">${esc(h.name)}</div>
+        <div class="card-meta">${esc(siteName(h.site))}${h.node ? ` · Knoten ${esc(h.node)}` : ""}</div>
+      </div>
+      <div class="spacer"></div>
+      <div class="right">
+        <div class="card-meta mono">${h.version ? "PMG " + esc(h.version) : "—"}</div>
+        <div class="card-meta">${nz(h.uptime)} Laufzeit</div>
+      </div>
+    </div>
+
+    ${h.cpu != null || h.ram != null || h.disk != null ? `<div class="col" style="gap:7px">
+      ${meter("CPU", h.cpu, { warn: 80, crit: 95 })}
+      ${meter("RAM", h.ram, { warn: s.ram_warn, crit: s.ram_crit })}
+      ${meter("Wurzeldateisystem", h.disk, { warn: s.disk_warn, crit: s.disk_crit,
+        text: h.disk != null ? `${h.disk} %${h.diskFreiGb != null ? ` · ${h.diskFreiGb} GB frei` : ""}` : "—" })}
+    </div>` : `<div class="row" style="gap:8px;font-size:12px;color:var(--faint)">
+      ${dot("idle")}<span>${h.collectorError ? esc(h.collectorError) : "Kennzahlen erst mit hinterlegtem Zugang"} — Verwaltung → ${esc(h.name)}</span></div>`}
+
+    <div class="stat-row">
+      ${stat("Eingang 24 h", nz(h.in24))}
+      ${stat("Ausgang 24 h", nz(h.out24))}
+      ${queueZelle(h, q)}
+      ${stat("Antwort", nz(h.ms, " ms"))}
+      <div class="spacer"></div>${histCell(h, { value: false })}
+    </div>
+
+    <div class="row row-wrap" style="gap:6px">
+      ${!kennt ? "" : h.diensteSteht?.length
+        ? `<span class="chip chip--crit">${esc(h.diensteSteht.join(", "))} steht</span>`
+        : h.dienste ? `<span class="chip chip--ok">Filter, Postfix und Scanner laufen</span>` : ""}
+      ${h.signaturAlter == null ? "" : h.signaturAlter >= 24
+        ? `<span class="chip chip--warn">Signaturen ${h.signaturAlter} h alt</span>`
+        : `<span class="chip chip--plain">Signaturen ${h.signaturAlter} h alt</span>`}
+      ${h.insync === false ? `<span class="chip chip--warn">nicht abgeglichen</span>` : ""}
+      ${h.updates == null ? "" : h.updates
+        ? `<span class="chip chip--info">${h.updates} Update(s) offen</span>`
+        : `<span class="chip chip--ok">Pakete aktuell</span>`}
+      ${h.kernel ? `<span class="chip chip--plain mono" title="Kernel">${esc(h.kernel)}</span>` : ""}
+    </div>
+    ${h.note ? `<div class="row" style="gap:7px;font-size:12px;color:var(--${h.status})">${dot(h.status)}<span>${esc(h.note)}</span></div>` : ""}
+  </div>`;
+}
+
+/* Zurückgestellte Mail ist die eine Zahl, die man auf der Karte sehen
+   will — mit ihrer Grenze daneben, damit man sie ohne Nachschlagen
+   einordnen kann. */
+function queueZelle(h, q) {
+  if (h.queueDeferred == null) return stat("Warteschlange", "—");
+  const ton = q.crit != null && h.queueDeferred >= q.crit ? "crit"
+    : (q.warn != null && h.queueDeferred >= q.warn) || h.queueAlt > 0 ? "warn" : "ok";
+  return `<div class="stat"><span class="stat-k">Zurückgestellt</span>
+    <span class="stat-v" style="color:var(--${ton})">${h.queueDeferred}${h.queueAlt ? ` · ${h.queueAlt} alt` : ""}</span></div>`;
+}
+
+/* ---------- Verkehr ----------
+   Zwei Reihen, weil es zwei verschiedene Dinge sind: was angenommen und
+   gefiltert wurde, und was es gar nicht erst über die Türschwelle
+   geschafft hat. Beides in einer Summe zu zeigen ergäbe eine Spamquote,
+   die niemand nachrechnen kann. */
+function verkehrPanel(pmg) {
+  const mit = pmg.filter(h => h.in24 != null);
+  if (!mit.length) return "";
+  return `<div class="panel">
+    <div class="panel-head"><h3>Verkehr</h3><span class="hint">letzte 24 Stunden</span>
+      <div class="spacer"></div>
+      <span class="hint">${mit[0].statStand ? "Stand " + esc(fmtWhen(mit[0].statStand)) : ""}</span></div>
+    <div class="panel-body col" style="gap:16px">${mit.map(h => `
+      <div class="col" style="gap:8px">
+        ${pmg.length > 1 ? `<div class="sec-title">${esc(h.name)}</div>` : ""}
+        <div class="stat-row">
+          ${stat("Eingehend", nz(h.in24))}
+          ${stat("Ausgehend", nz(h.out24))}
+          ${stat("Spam", h.spam == null ? "—" : `${h.spam}${h.spamAnteil != null ? ` · ${h.spamAnteil} %` : ""}`)}
+          ${stat("Viren eingehend", nz(h.virus))}
+          ${stat("Viren ausgehend", nz(h.virusAus))}
+          ${stat("Ø Bearbeitung", nz(h.avgMs, " ms"))}
+        </div>
+        <div class="stat-row">
+          ${stat("Abgewiesen", nz(h.abgewiesen))}
+          ${stat("davon RBL", nz(h.rbl))}
+          ${stat("Pregreet", nz(h.pregreet))}
+          ${stat("Greylist", nz(h.greylist))}
+          ${stat("SPF", nz(h.spf))}
+          ${stat("Menge ein / aus", h.bytesEin == null ? "—" : `${menge(h.bytesEin)} / ${menge(h.bytesAus)}`)}
+        </div>
+      </div>`).join("")}
+    </div>
+    <div class="panel-note"><b>Ein eingehender Virenfund ist keine Störung</b>, sondern der Zweck des Geräts — die
+      Zahl steht hier, aber sie färbt keine Ampel. Eine Ampel, die bei jedem abgewehrten Anhang leuchtet, hat man
+      nach zwei Wochen abtrainiert, und mit ihr die Ampel für alles andere. <b>Ausgehende Virenfunde sind rot</b>:
+      sie heißen, dass ein Gerät im eigenen Netz Schadsoftware verschickt.
+      <br>„Abgewiesen" zählt, was postscreen und die Regeln vor der Annahme abgelehnt haben (RBL, Pregreet, SPF,
+      Greylisting). Diese Mail ist nie eingegangen und steckt deshalb <em>nicht</em> in „Eingehend" — die Spamquote
+      bezieht sich auf das, was tatsächlich angenommen wurde.</div>
+  </div>`;
+}
+
+/* ---------- Warteschlange ----------
+   Die Frage, für die man nachts aufsteht: hängt Mail? Und seit wann. */
+function queuePanel(pmg) {
+  const mit = pmg.filter(h => h.warteschlange);
+  if (!mit.length) return "";
+  const zeilen = mit.flatMap(h => (h.warteschlange || []).map(q => ({ ...q, wirt: h.name, wirtId: h.id, grenzen: h.queueGrenzen || {} })));
+  const q0 = mit[0].queueGrenzen || {};
+  return `<div class="panel">
+    <div class="panel-head"><h3>Warteschlange</h3><span class="hint">aus qshape, mit Altersverteilung</span>
+      <div class="spacer"></div>
+      <span class="hint">zurückgestellt: gelb ab ${nz(q0.warn)}, rot ab ${nz(q0.crit)}</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th>${mit.length > 1 ? "<th>Gateway</th>" : ""}
+        <th>Warteschlange</th><th>Mail</th><th>davon über 10 h</th><th>Wohin</th>
+      </tr></thead><tbody>
+      ${zeilen.map(z => {
+        const ampel = z.queue !== "deferred" ? (z.anzahl ? "info" : "ok")
+          : z.anzahl == null ? "idle"
+          : z.anzahl >= (z.grenzen.crit ?? 1e9) ? "crit"
+          : z.anzahl >= (z.grenzen.warn ?? 1e9) || z.aelter > 0 ? "warn" : "ok";
+        return `<tr data-sev="${ampel}" data-action="inspect" data-kind="host" data-id="${esc(z.wirtId)}">
+          <td class="sev">${dot(ampel)}</td>
+          ${mit.length > 1 ? `<td class="mono faint">${esc(z.wirt)}</td>` : ""}
+          <td><div class="mono">${esc(z.queue)}</div><div class="t-sub">${esc(z.label)}</div></td>
+          <td class="mono">${z.anzahl == null ? `<span class="faint">${esc(z.note || "—")}</span>` : z.anzahl}</td>
+          <td class="mono">${z.aelter == null ? '<span class="faint">—</span>'
+            : z.aelter ? `<span style="color:var(--warn)">${z.aelter}</span>` : "0"}</td>
+          <td class="faint">${(z.domains || []).length
+            ? esc(z.domains.slice(0, 3).map(d => `${d.domain} (${d.anzahl})`).join(", "))
+            : "—"}</td>
+        </tr>`;
+      }).join("")}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Zwanzig Mail in der Zustellung sind Betrieb — zwanzig Mail, die seit gestern liegen,
+      sind ein Empfänger, der nicht mehr antwortet. Deshalb steht das Alter neben der Menge und schlägt auch dann
+      an, wenn die Menge unter der Grenze bleibt. <b>hold</b> ist keine Störung, sondern eine Entscheidung: dort
+      liegt, was eine Regel angehalten hat und worüber jemand entscheiden muss.
+      <br>Eine leere Warteschlange ist gemessen und nicht unbekannt: <span class="mono">qshape</span> gibt dann
+      keine Zeile aus, und das heißt null — im Unterschied zu einem Abruf, der nicht durchkam.</div>
+  </div>`;
+}
+
+/* ---------- Quarantäne ---------- */
+function quarantaenePanel(pmg) {
+  const mit = pmg.filter(h => h.quarSpam != null || h.quarVirus != null);
+  if (!mit.length) return "";
+  return `<div class="panel">
+    <div class="panel-head"><h3>Quarantäne</h3><span class="hint">was einbehalten wurde</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        ${mit.length > 1 ? "<th>Gateway</th>" : ""}<th>Art</th><th>Mail</th><th>Platz</th><th>Ø Spam-Wert</th>
+      </tr></thead><tbody>
+      ${mit.flatMap(h => [
+        `<tr data-sev="info">${mit.length > 1 ? `<td class="mono faint">${esc(h.name)}</td>` : ""}
+          <td>Spam</td><td class="mono">${nz(h.quarSpam)}</td>
+          <td class="mono faint">${nz(h.quarSpamMb, " MB")}</td>
+          <td class="mono faint">${nz(h.quarSpamSchnitt)}</td></tr>`,
+        `<tr data-sev="info">${mit.length > 1 ? `<td class="mono faint">${esc(h.name)}</td>` : ""}
+          <td>Viren</td><td class="mono">${nz(h.quarVirus)}</td>
+          <td class="mono faint">${nz(h.quarVirusMb, " MB")}</td>
+          <td class="faint">—</td></tr>`
+      ]).join("")}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Der Leitstand liest nur den Umfang, nicht die Nachrichten. Freigeben, löschen und
+      durchsuchen bleibt der Oberfläche des Gateways vorbehalten — jeder Zugang hier ist ein Konto ohne
+      Schreibrechte.</div>
+  </div>`;
+}
+
+/* ---------- Signaturen ----------
+   Der stillste aller Ausfälle. */
+function signaturPanel(pmg) {
+  const mit = pmg.filter(h => h.signaturen?.length);
+  if (!mit.length) return "";
+  return `<div class="panel">
+    <div class="panel-head"><h3>Virensignaturen</h3><span class="hint">ClamAV-Datenbanken</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        ${mit.length > 1 ? "<th>Gateway</th>" : ""}<th>Datenbank</th><th>Fassung</th><th>Signaturen</th><th>Stand</th>
+      </tr></thead><tbody>
+      ${mit.flatMap(h => h.signaturen.map(x => {
+        const alt = x.name === "daily" && x.alterStunden != null && x.alterStunden >= 24;
+        return `<tr data-sev="${alt ? "warn" : "ok"}">
+          ${mit.length > 1 ? `<td class="mono faint">${esc(h.name)}</td>` : ""}
+          <td class="mono">${esc(x.name)}</td>
+          <td class="mono faint">${nz(x.version)}</td>
+          <td class="mono">${x.anzahl == null ? "—" : x.anzahl.toLocaleString("de-DE")}</td>
+          <td>${x.stand ? `${esc(fmtWhen(x.stand))}${x.alterStunden != null
+            ? ` <span class="${alt ? "" : "faint"}" ${alt ? 'style="color:var(--warn)"' : ""}>(${esc(alterKurz(x.alterStunden))})</span>` : ""}`
+            : '<span class="faint">—</span>'}</td>
+        </tr>`;
+      })).join("")}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Bewertet wird <span class="mono">daily</span>: sie kommt mehrmals täglich neu, und wenn
+      sie stehen bleibt, kommt freshclam nicht mehr durch — der Scanner läuft dann weiter und prüft gegen den Stand
+      von vorgestern, ohne dass jemand etwas merkt. <span class="mono">main</span> ist von Haus aus Monate alt; das
+      ist kein Mangel und wird nicht bewertet.</div>
+  </div>`;
+}
+
+function alterKurz(std) {
+  if (std == null || !Number.isFinite(std)) return "—";
+  if (std < 72) return `${std} h`;
+  const t = Math.round(std / 24);
+  return t < 60 ? `${t} T` : `${Math.round(t / 30.4)} Monate`;
+}
+
+/* ---------- Domänen und Virenfunde ---------- */
+function domainPanel(pmg) {
+  const domains = pmg.flatMap(h => (h.domains || []).map(d => ({ ...d, wirt: h.name })));
+  const viren = pmg.flatMap(h => (h.viren || []).map(v => ({ ...v, wirt: h.name })));
+  if (!domains.length && !viren.length) return "";
+  const mehrere = pmg.filter(h => h.domains || h.viren).length > 1;
+  return `<div class="grid g2">
+    ${domains.length ? `<div class="panel">
+      <div class="panel-head"><h3>Domänen</h3><span class="hint">Verkehr der letzten 24 Stunden</span></div>
+      <div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr>
+          ${mehrere ? "<th>Gateway</th>" : ""}<th>Domäne</th><th>ein</th><th>aus</th><th>Spam</th><th>Viren</th><th class="right">Menge</th>
+        </tr></thead><tbody>
+        ${domains.map(d => `<tr data-sev="${d.virus ? "info" : "ok"}">
+          ${mehrere ? `<td class="mono faint">${esc(d.wirt)}</td>` : ""}
+          <td class="mono">${esc(d.domain)}</td>
+          <td class="mono">${nz(d.ein)}</td>
+          <td class="mono">${nz(d.aus)}</td>
+          <td class="mono faint">${nz(d.spam)}</td>
+          <td class="mono faint">${nz(d.virus)}</td>
+          <td class="right mono faint">${d.bytesEin == null ? "—" : menge(d.bytesEin + (d.bytesAus || 0))}</td>
+        </tr>`).join("")}
+        </tbody></table>
+      </div>
+    </div>` : ""}
+
+    ${viren.length ? `<div class="panel">
+      <div class="panel-head"><h3>Virenfunde</h3><span class="hint">letzte 24 Stunden</span></div>
+      <div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr>
+          ${mehrere ? "<th>Gateway</th>" : ""}<th>Name</th><th class="right">Funde</th>
+        </tr></thead><tbody>
+        ${viren.map(v => `<tr data-sev="info">
+          ${mehrere ? `<td class="mono faint">${esc(v.wirt)}</td>` : ""}
+          <td class="mono">${esc(v.name)}</td>
+          <td class="right mono">${v.anzahl}</td>
+        </tr>`).join("")}
+        </tbody></table>
+      </div>
+      <div class="panel-note">Abgewehrt, nicht zugestellt — diese Liste ist ein Nachweis, keine Meldung.</div>
+    </div>` : ""}
+  </div>`;
+}
+
+/* ---------- Dienste ----------
+   Der Unterschied zwischen „läuft nicht" und „ist fertig": ein Zeitgeber
+   steht die meiste Zeit auf „exited" und ist völlig in Ordnung. Wer
+   darauf eine Ampel setzt, meldet jede Nacht einen Ausfall. */
+function dienstePanel(pmg) {
+  const mit = pmg.filter(h => h.dienste?.length);
+  const ohne = pmg.filter(h => !h.dienste?.length && h.diensteNote);
+  if (!mit.length) {
+    /* Keine Liste ist etwas anderes als eine Liste ohne Auffälligkeiten.
+       Wer das verschweigt, zeigt ein Gateway, dessen Dienste angeblich
+       alle laufen — dabei hat niemand nachgesehen. */
+    return ohne.length ? `<div class="panel">
+      <div class="panel-head"><h3>Dienste</h3><span class="hint">nicht gelesen</span></div>
+      <div class="panel-body"><div class="empty">${ohne.map(h => `${esc(h.name)}: ${esc(h.diensteNote)}`).join(" · ")}</div></div>
+      <div class="panel-note">Ohne diese Liste ist unbekannt, ob Postfix, der Filter und der Scanner laufen —
+        das ist keine Entwarnung. Die Rolle <span class="mono">Auditor</span> darf sie lesen.</div>
+    </div>` : "";
+  }
+  return `<div class="panel">
+    <div class="panel-head"><h3>Dienste</h3><span class="hint">was auf dem Gateway filtert und zustellt</span>
+      <div class="spacer"></div>
+      ${mit.some(h => h.diensteSteht?.length)
+        ? `<span class="chip chip--crit">${mit.flatMap(h => h.diensteSteht || []).length} Kerndienst(e) stehen</span>`
+        : `<span class="chip chip--ok">alle Kerndienste laufen</span>`}</div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th>${mit.length > 1 ? "<th>Gateway</th>" : ""}
+        <th>Dienst</th><th>Aufgabe</th><th>Zustand</th>
+      </tr></thead><tbody>
+      ${mit.flatMap(h => h.dienste.map(d => {
+        const ampel = d.kern ? (d.zustand === "running" ? "ok" : "crit")
+          : d.aktiv === "failed" ? "warn" : "idle";
+        return `<tr data-sev="${ampel}">
+          <td class="sev">${dot(ampel)}</td>
+          ${mit.length > 1 ? `<td class="mono faint">${esc(h.name)}</td>` : ""}
+          <td class="mono">${esc(d.name)}${d.kern ? ' <span class="chip chip--plain">Kern</span>' : ""}</td>
+          <td class="faint">${esc(d.beschreibung || "—")}</td>
+          <td class="mono ${ampel === "ok" ? "" : "faint"}">${esc(d.zustand || "—")}${
+            d.aktiv && d.aktiv !== "active" ? ` <span class="faint">· ${esc(d.aktiv)}</span>` : ""}</td>
+        </tr>`;
+      })).join("")}
+      </tbody></table>
+    </div>
+    <div class="panel-note">Rot sind nur die <b>Kerndienste</b>: Postfix, der Filter, die Datenbank, der Scanner
+      und die beiden API-Dienste. Steht einer davon, wird Mail entweder nicht angenommen oder ungeprüft
+      zugestellt — von außen sieht beides aus wie Betrieb. Zeitgeber und Wartungsläufe stehen mit
+      <span class="mono">exited</span> da und sind dabei in Ordnung; sie fallen erst auf, wenn systemd sie als
+      <span class="mono">failed</span> führt.</div>
+  </div>`;
+}
+
+/* ---------- Mailcow ---------- */
+function mailcowPanel(cow) {
+  if (!cow.length) return "";
+  return `<div class="panel">
+    <div class="panel-head"><h3>Mailcow</h3><span class="hint">nur Erreichbarkeit</span></div>
+    <div class="panel-body"><div class="col">${cow.map(h => serviceCard(h, `
+      <div class="stat-row">
+        ${stat("Antwort", nz(h.ms, " ms"))}
+        ${stat("Zuletzt erreicht", fmtWhen(h.lastSeen) || "—")}
+        ${stat("Zertifikat", h.tls?.days != null ? h.tls.days + " T" : "—")}
+        <div class="spacer"></div>${histCell(h, { w: 80, value: false })}
+      </div>
+      <div class="card-meta mono" style="font-size:10.5px">${checkList(h)}</div>`)).join("")}</div></div>
+    <div class="panel-note">Für Mailcow gibt es noch keinen Sammler — gemessen werden Port, Antwortzeit und
+      Zertifikat. Was fehlt, sind Postfächer, Warteschlange und der Zustand der Container; das käme über die
+      Mailcow-API mit einem API-Key.</div>
   </div>`;
 }
 
@@ -2702,6 +3077,68 @@ function kennzahlenPanel(h) {
     </div>`;
   }
 
+  /* Der Mail Gateway auf der Detailseite: dieselben Zahlen wie in der
+     Ansicht „Mail-Gateway", aber alle an einem Ort und ohne Auswahl. */
+  if (h.type === "pmg" && (h.in24 != null || h.queueDeferred != null || h.dienste)) {
+    const w = h.warteschlange || [];
+    return `<div class="panel">
+      <div class="panel-head"><h3>Gateway im Einzelnen</h3>
+        <span class="hint">aus /statistics/mail, /postfix/qshape und dem Knotenzustand</span></div>
+      <div class="panel-body">${kv([
+        ["Knoten", h.node ? `<span class="mono">${esc(h.node)}</span>` : "—"],
+        ["Fassung", h.pmgVersion ? `<span class="mono">${esc(h.pmgVersion)}</span>`
+          : h.version ? `<span class="mono">${esc(h.version)}</span>` : "—"],
+        ["Kernel", h.kernel ? `<span class="mono">${esc(h.kernel)}</span>` : "—"],
+        ["Prozessor", h.cpuModel ? `${esc(h.cpuModel)}${h.cores ? ` · ${h.cores} Kerne` : ""}` : nz(h.cores, " Kerne")],
+        ["Last (1 min)", nz(h.load1)],
+        ["Wurzeldateisystem", h.disk != null ? `${h.disk} %${h.diskFreiGb != null ? ` · ${h.diskFreiGb} GB frei` : ""}` : "—"],
+        ["Auslagerung", h.swap != null ? `${h.swap} %` : "— (keine eingerichtet)"],
+        ["Laufzeit", nz(h.uptime)],
+        ["Abgleich im Verbund", h.insync == null ? "—"
+          : h.insync ? "abgeglichen" : '<span style="color:var(--warn)">seit über drei Minuten nicht abgeglichen</span>'],
+        ["Eingang / Ausgang 24 h", h.in24 == null ? "—" : `${h.in24} / ${nz(h.out24)}`],
+        ["Spam", h.spam == null ? "—" : `${h.spam}${h.spamAnteil != null ? ` (${h.spamAnteil} % des Eingangs)` : ""}`],
+        ["Viren", h.virus == null ? "—"
+          : `${h.virus} eingehend${h.virusAus ? ` · <span style="color:var(--crit)">${h.virusAus} ausgehend</span>` : ", 0 ausgehend"}`],
+        ["Vor der Annahme abgewiesen", h.abgewiesen == null ? "—"
+          : `${h.abgewiesen} — RBL ${nz(h.rbl)}, Pregreet ${nz(h.pregreet)}, SPF ${nz(h.spf)}, Greylist ${nz(h.greylist)}`],
+        ["Ø Bearbeitung", nz(h.avgMs, " ms")],
+        ["Warteschlange", h.queueDeferred == null ? "—"
+          : w.map(q => `${q.queue} ${q.anzahl == null ? "—" : q.anzahl}`).join(" · ")
+            + (h.queueAlt ? ` · <span style="color:var(--warn)">${h.queueAlt} seit über zehn Stunden</span>` : "")],
+        ["Quarantäne", h.quarSpam == null ? "—"
+          : `${h.quarSpam} Spam (${nz(h.quarSpamMb, " MB")}) · ${nz(h.quarVirus)} Viren`],
+        ["Virensignaturen", h.signaturStand
+          ? `${esc(fmtWhen(h.signaturStand))}${h.signaturAlter != null ? ` · ${h.signaturAlter} h alt` : ""}`
+          : `<span class="faint">${esc(h.signaturNote || "nicht gelesen")}</span>`],
+        ["Ausstehende Pakete", h.updates == null
+          ? `<span class="faint">${esc(h.updatesNote || "nicht gelesen")}</span>`
+          : h.updates ? `<span class="mono">${h.updates}</span>` : "keine bekannt"],
+        ["Stand der Statistik", h.statStand ? esc(fmtWhen(h.statStand)) : "—"],
+        ["Schwellwerte", schwellenZeile(h)]
+      ])}</div>
+
+      ${(h.dienste || []).length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th style="width:34px"></th><th>Dienst</th><th>Aufgabe</th><th>Zustand</th></tr></thead><tbody>
+        ${h.dienste.map(d => {
+          const ampel = d.kern ? (d.zustand === "running" ? "ok" : "crit") : d.aktiv === "failed" ? "warn" : "idle";
+          return `<tr data-sev="${ampel}">
+            <td class="sev">${dot(ampel)}</td>
+            <td class="mono">${esc(d.name)}${d.kern ? ' <span class="chip chip--plain">Kern</span>' : ""}</td>
+            <td class="faint">${esc(d.beschreibung || "—")}</td>
+            <td class="mono faint">${esc(d.zustand || "—")}</td></tr>`;
+        }).join("")}
+        </tbody></table></div>` : ""}
+
+      <div class="panel-note">Die Zahlen kommen in einem eigenen Takt statt in jedem Durchlauf: die Tagesstatistik
+        ändert sich in 15 Sekunden nicht messbar, und die Warteschlange abzufragen startet je Abruf einen Prozess
+        auf dem Gerät. Wie alt der Stand ist, steht oben. Die Erreichbarkeit misst der Prober weiterhin in jedem
+        Durchlauf.
+        <br>Ein <b>eingehender</b> Virenfund färbt keine Ampel — er ist der Zweck des Geräts. Ein
+        <b>ausgehender</b> ist rot: dann verschickt ein Gerät im eigenen Netz Schadsoftware.</div>
+    </div>`;
+  }
+
   if (h.type === "adguard" && (h.dnsQueries != null || h.protection != null)) {
     const c = dnsPruefung(h);
     return `<div class="panel">
@@ -2866,12 +3303,16 @@ function viewCfg() {
           ? `ein Punkt alle ${mono(s.verlauf_takt + " s")}, aufbewahrt ${mono(s.verlauf_tage + " Tage")}` : "—"],
         ["Kacheln der Startseite", s.link_takt != null
           ? `mit „abrufen": alle ${mono(s.link_takt + " s")} ein GET — Ampel, keine Störung` : "—"],
+        ["Mail-Warteschlange", s.mail_queue_warn != null
+          ? `ab ${mono(s.mail_queue_warn)} zurückgestellten Mail Warnung, ab ${mono(s.mail_queue_crit)} kritisch · `
+            + "was über zehn Stunden liegt, fällt auch darunter auf" : "—"],
         ["Teilausfall", "antwortet ein Port nicht, während andere tragen → Warnung"],
         ["Abruf scheitert", "erreichbar, aber API-Zugang abgelehnt → Warnung statt stiller Lücke"],
         ["Standort", "sind alle überwachten Systeme eines Standorts gleichzeitig still → <b>eine</b> Meldung statt zwölf"]
       ])}</div>
-      <div class="panel-note">Speicher-, Queue- und Handshake-Schwellen fehlen hier, weil es die dazugehörigen
-        Messwerte noch nicht gibt. Ein Schwellwert ohne Messung wäre eine Zusage, die niemand einhält.</div>
+      <div class="panel-note">Handshake-Schwellen fehlen hier, weil es die dazugehörigen Messwerte noch nicht gibt.
+        Ein Schwellwert ohne Messung wäre eine Zusage, die niemand einhält. Die Mail-Warteschlange steht dagegen
+        jetzt dabei: seit der Mail Gateway angebunden ist, wird sie auch gemessen.</div>
     </div>
 
     <div class="panel">
@@ -3250,7 +3691,7 @@ function checkNow() {
    Zeichnen & Verdrahten
    ============================================================ */
 const RENDERERS = { kurz:viewKurz, lage:viewLage, sites:viewSites, virt:viewVirt, compute:viewCompute, netz:viewNetz, vpn:viewVpn,
-  dienste:viewDienste, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung,
+  dienste:viewDienste, mail:viewMail, post:viewPost, links:viewLinks, cfg:viewCfg, verwaltung:viewVerwaltung,
   /* Keine Schaltfläche in der Leiste: diese Seite gehört immer zu einem
      bestimmten Gegenstand und wird über #/system/<kennung> erreicht. */
   system:viewSystem };
@@ -4287,6 +4728,25 @@ function zugangsFelder(type, cred, getippt) {
     und vor allem, <b>ob der Schutz überhaupt an ist</b>. Liegt die Oberfläche hinter einem Reverse Proxy unter einem
     Unterpfad, gehört dieser mit in die Adresse (<span class="mono">https://proxy/adguard</span>).</p>`;
 
+  /* Der Mail Gateway sieht aus wie Proxmox und meldet sich an wie eine
+     Weboberfläche: **er kennt keine API-Token.** Die API-Dokumentation
+     weist sie an jedem Endpunkt aus — der Dienst weist sie ab, noch vor
+     jeder Rechteprüfung. Wer hier drei Felder für Token-ID und Geheimnis
+     vorfände, würde sie ausfüllen und bekäme eine 401 ohne Hinweis
+     darauf, dass nicht das Geheimnis falsch ist, sondern das Verfahren. */
+  if (type === "pmg") return `
+    <div class="admin-grid">
+      ${inpc("user", "Benutzer@Realm", cred, "leitstand@pmg", getippt)}
+      ${inpc("password", "Passwort", cred, cred.password ? "hinterlegt — leer lassen, um es zu behalten" : "wie an der Oberfläche des Gateways", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0"><b>Der Mail Gateway kennt keine API-Token</b> — anders als Proxmox VE
+    und der Backup Server. Angemeldet wird mit Benutzer und Passwort gegen <span class="mono">/access/ticket</span>;
+    das Ticket gilt zwei Stunden und wird erneuert, ohne dass sich jemand darum kümmern muss.<br><br>
+    Anzulegen unter <span class="mono">Configuration → User Management</span>, Realm <span class="mono">pmg</span>,
+    Rolle <span class="mono">Auditor</span>. Sie deckt alles ab, was gelesen wird: Statistik, Warteschlange,
+    Dienste, Quarantänegröße und Signaturstand — <b>geschrieben wird nichts</b>. Der Benutzername gehört
+    <b>mit Realm</b> hierher: ohne ihn hängt PMG <span class="mono">@quarantine</span> an und lehnt ab.</p>`;
+
   if (type === "portainer") return `
     <div class="admin-grid">
       ${inpc("token", "API-Token", cred, cred.token ? "hinterlegt — leer lassen, um ihn zu behalten" : "aus „My account“ → „Access tokens“", getippt)}
@@ -4645,6 +5105,10 @@ function adminSettings() {
       ${f("verlauf_takt", "Zeitreihe: Takt", "Sekunden je Punkt auf der Platte")}
       ${f("verlauf_tage", "Zeitreihe: Aufbewahrung", "Tage, danach fällt der älteste heraus")}
       ${f("link_takt", "Startseite: Prüftakt", "Sekunden zwischen zwei Abrufen einer Kachel")}
+      ${f("mail_queue_warn", "Mail-Warteschlange: Warnung", "zurückgestellte Mail bis Gelb")}
+      ${f("mail_queue_crit", "Mail-Warteschlange: kritisch", "zurückgestellte Mail bis Rot")}
+      ${f("pmg_takt", "Mail Gateway: Betriebstakt", "Sekunden — Auslastung, Warteschlange, Dienste")}
+      ${f("pmg_takt_lang", "Mail Gateway: Statistiktakt", "Sekunden — Tagesstatistik, Quarantäne, Signaturen")}
     </div></div>
     <div class="panel-note">Die Belegungsgrenzen gelten für Proxmox-Speicher, PBS-Datastores und die Platte einer
       Firewall. Einzelne Systeme dürfen abweichen — beim Bearbeiten eines Systems unter <b>Schwellwerte</b>. Das ist
@@ -4659,7 +5123,13 @@ function adminSettings() {
       <span class="mono">false</span>, wird nur noch TCP geprüft — für Weboberflächen genügt das, für reine
       Ping-Ziele nicht.
       <br>Takt und Aufbewahrung der Zeitreihe bestimmen, wie viel Platz das Volume braucht: rund 100 Byte je Punkt,
-      Gegenstand und Takt. Eine Minute über 30 Tage sind etwa 4 MB je System.${verlaufNote()}</div>
+      Gegenstand und Takt. Eine Minute über 30 Tage sind etwa 4 MB je System.
+      <br>Die <b>Mail-Warteschlange</b> zählt zurückgestellte Nachrichten auf dem Proxmox Mail Gateway. Unabhängig
+      von diesen Grenzen fällt auf, was <b>seit über zehn Stunden</b> liegt: zwanzig Mail in der Zustellung sind
+      Betrieb, zwanzig Mail von gestern sind ein Empfänger, der nicht mehr antwortet.
+      <br>Die beiden <b>Takte des Mail Gateways</b> sind kein Sparzwang, sondern Rücksicht: die Tagesstatistik
+      ändert sich in 15 Sekunden nicht messbar, und die Warteschlange abzufragen startet je Abruf einen Prozess auf
+      dem Gerät. Die Erreichbarkeit misst der Prober weiterhin in jedem Durchlauf.${verlaufNote()}</div>
   </div>`;
 }
 

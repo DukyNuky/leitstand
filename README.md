@@ -150,7 +150,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **Proxmox VE** | CPU, RAM, Speicher je Storage, VMs/LXC, Cluster-Quorum, Version — dazu je Knoten Kernel, `pve-manager`-Fassung, Kerne und Modell, Last und **ausstehende Paketaktualisierungen mit Paketnamen**, und **jeder Gast einzeln** mit Zustand und Auslastung. Alles in einer eigenen Ansicht *Virtualisierung* |
 | **Sicherungsaufträge** | die in Proxmox VE eingerichteten `vzdump`-Aufträge je Knoten: Zeitplan, Ziel, Umfang, nächster Lauf — und **ob und wann sie gelaufen sind**: letzter Lauf mit Ausgang, letzter erfolgreicher, letzter fehlgeschlagener, jeder in eigener Spalte. Bewertet wird der *letzte* Lauf; ein überstandener Fehlschlag bleibt sichtbar, ohne zu alarmieren |
 | **Proxmox BS** | **jeder Datastore einzeln**: Belegung, freier Platz und Gesamtgröße, die Schätzung von PBS selbst, *wann er voll ist*, dazu die letzte Sicherung, das letzte Aufräumen (GC) und die letzte Prüfung (Verify) — samt Kommentar und Wartungsmodus. Fehlgeschlagene Aufträge der letzten 24 Stunden bleiben die rote Ampel |
-| **Proxmox MG** | Ein-/Ausgang, Spam- und Virenzahlen |
+| **Proxmox MG** | Durchsatz der letzten 24 h (ein/aus, Spam mit Anteil, Viren **getrennt nach Richtung**, vor der Annahme Abgewiesene nach RBL/Pregreet/SPF/Greylist, Ø Bearbeitungszeit, Menge) · **Warteschlange je Queue mit Altersverteilung** — ob Mail hängt, beantwortet erst das Alter, nicht die Menge · Umfang der Quarantäne · **Stand der Virensignaturen** (der stillste aller Ausfälle: freshclam kommt nicht mehr durch, ClamAV scannt weiter gegen vorgestern) · **die Dienste, die filtern und zustellen** · Verkehr je Domäne und die Virenfunde mit Namen · Auslastung, Laufzeit, Paketstand, Abgleich im Verbund. Eigene Ansicht *Mail-Gateway*. **Anmeldung mit Benutzer und Passwort, nicht mit einem Token** — siehe unten |
 | **OPNsense** | Fassung und offene Aktualisierungen, Laufzeit und Last, Arbeitsspeicher, Platte, WireGuard-Peers mit Handshake-Alter · **jede Schnittstelle einzeln**: Durchsatz ↓/↑, Pakete/s, übertragene Menge, Fehler und Verwürfe (Stand und Zuwachs), Verbindungszustand und MTU, mit Verlauf über Tage je Leitung · **Gateways** mit Zustand, Latenz und Verlust — die Meldung, die von außen niemand sieht, weil die Firewall dabei tadellos antwortet · **Zustandstabelle** und **CARP**-Rolle |
 | **pfSense** | dasselbe — **aber nur mit dem Fremdpaket `pfSense-pkg-API`**. Das steht nicht im Paketverzeichnis von pfSense und ist für neuere Fassungen nicht immer zu haben; ohne es bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat. Der Sammler ist gebaut und geprüft und wartet darauf, dass das Paket da ist |
 | **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** und **ob er über UDP/53 wirklich auflöst** |
@@ -330,6 +330,23 @@ Die häufigsten Befunde:
 | `Kennung kommt in der Knotenliste nicht vor` | die Kennung muss dem Knotennamen im Cluster entsprechen |
 | `404` | falscher Port: VE 8006, Backup Server 8007, Mail Gateway 8006 |
 
+**Proxmox Mail Gateway kennt keine API-Token.** Das ist der Fallstrick dieser
+Anbindung: seine API-Dokumentation weist Token an jedem Endpunkt als erlaubt aus
+— die Beschreibung wird aus derselben Vorlage erzeugt wie die von Proxmox VE —,
+sein HTTP-Dienst weist sie aber vor jeder Rechteprüfung ab
+(`die "API tokens not implemented"`, `src/PMG/HTTPServer.pm`). Wer eine
+Token-Kopfzeile schickt, bekommt eine wortlose 401 und sucht danach am falschen
+Ende. Angemeldet wird deshalb wie an der Oberfläche: Benutzer und Passwort gegen
+`/access/ticket`, danach das Ticket als Cookie `PMGAuthCookie`. Es gilt zwei
+Stunden, der Leitstand erneuert es nach 90 Minuten und bei einer 401 sofort —
+ein Anmeldevorgang je Durchlauf stünde alle 15 s im Syslog des Gateways.
+
+Anzulegen ist ein Konto unter *Configuration → User Management* im Realm
+`pmg`, Rolle **Auditor**. Sie deckt alles ab, was gelesen wird: Statistik,
+Warteschlange, Dienste, Quarantänegröße, Signaturstand. Der Benutzername gehört
+**mit Realm** in das Formular (`leitstand@pmg`) — ohne ihn hängt PMG
+`@quarantine` an und lehnt ab.
+
 **pfSense** braucht das Paket `pfSense-pkg-API` — und das ist der Haken: es steht
 **nicht** im Paketverzeichnis von pfSense, sondern ist ein Fremdprojekt, das von
 Hand aus dessen Veröffentlichungen installiert wird, und für neuere
@@ -381,7 +398,8 @@ server/
   src/inventory.js        Laden, Prüfen, Zurückschreiben (mit Sicherung)
   src/engine.js           Ampeln, Verlauf, Störungen, Standort-Bündelung
   src/verlauf.js          Zeitreihen auf der Platte: verdichten, schreiben, lesen
-  src/collectors/proxmox.js   VE, Backup Server, Mail Gateway
+  src/collectors/proxmox.js   VE und Backup Server
+  src/collectors/pmg.js       Mail Gateway: Ticket statt Token, eigener Takt
   src/collectors/opnsense.js  Fassung, Speicher, Platte, Durchsatz, WireGuard
   src/collectors/adguard.js   Anfragen, Blockanteil, Bearbeitungszeit, Filterlisten
   src/collectors/portainer.js Umgebungen, Stacks, Container — und wer klemmt
@@ -409,13 +427,17 @@ docs/DATA-SOURCES.md      je System: Zugang, Endpunkte, Kennzahlen, Mail-Alarme
 cd server && npm test
 ```
 
-Geprüft wird gegen echte offene und geschlossene Ports sowie gegen einen
-nachgebaute Endpunkte für Proxmox, AdGuard Home und Portainer
-(`test/fake-proxmox.js`, `test/fake-dienste.js`), die auch 401 und 403 richtig
-beantworten. Dadurch lässt sich jeder Sammler vollständig prüfen, ohne ein
-echtes Gerät anzufassen — samt der Eigenheiten, an denen es im Betrieb hängt:
-Portainer filtert Listen nach Rechten statt abzulehnen, AdGuard führt seine
-Statistik über ein einstellbares Fenster.
+Geprüft wird gegen echte offene und geschlossene Ports sowie gegen
+nachgebaute Endpunkte für Proxmox, den Mail Gateway, AdGuard Home und Portainer
+(`test/fake-proxmox.js`, `test/fake-pmg.js`, `test/fake-dienste.js`), die auch
+401 und 403 richtig beantworten. Dadurch lässt sich jeder Sammler vollständig
+prüfen, ohne ein echtes Gerät anzufassen — samt der Eigenheiten, an denen es im
+Betrieb hängt: Portainer filtert Listen nach Rechten statt abzulehnen, AdGuard
+führt seine Statistik über ein einstellbares Fenster, und der Mail Gateway
+**weist eine Token-Kopfzeile ab**, statt sie zu prüfen. Genau deshalb tut der
+nachgebaute Gateway das auch: ein Testserver, der Token freundlich annimmt,
+hätte die Anbindung grün gemeldet, während gegen das echte Gerät jeder Abruf
+mit 401 endet.
 
 `test/ui.test.js` zeichnet die Oberfläche ohne Browser: die Ansichten sind reine
 Funktionen von Zustand nach HTML, also lassen sie sich mit einer echten
@@ -445,16 +467,20 @@ ausgerichtet gelesen wird. Ein helles Thema ist vollständig mitgeführt.
    und die Speicherbelegung echt. Läuft ein Host bekanntermaßen voll, bekommt er
    unter *Verwaltung → System bearbeiten → Schwellwerte* seine eigene Grenze,
    statt jede Nacht rot zu leuchten
-4. Tunnel eintragen (Gegenstelle im Transfernetz) und die Startseite befüllen
-5. Bei der Firewall den API-Schlüssel hinterlegen, dann am Tunnel den
+4. Für den **Mail Gateway** ein Konto anlegen (Realm `pmg`, Rolle *Auditor*)
+   und Benutzer **mit Realm** samt Passwort hinterlegen — kein Token, PMG kennt
+   keine. Danach ist die Ansicht *Mail-Gateway* echt: Durchsatz, Warteschlange
+   mit Alter, Quarantäne, Signaturstand und die Dienste, die filtern
+5. Tunnel eintragen (Gegenstelle im Transfernetz) und die Startseite befüllen
+6. Bei der Firewall den API-Schlüssel hinterlegen, dann am Tunnel den
    **WireGuard-Peer** auswählen — danach steht in der Tunnelzeile der echte
    Handshake statt eines Strichs
 
 **Am Werkzeug:**
 
-6. OPNsense: die HAProxy-Backends — Schnittstellen, Gateways,
+7. OPNsense: die HAProxy-Backends — Schnittstellen, Gateways,
    Zustandstabelle und CARP stehen; ein Dienst, der von außen erreichbar
    aussieht, intern aber auf null Servern läuft, fällt sonst erst dem
    Benutzer auf
-7. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
-8. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen
+8. Alarm-Postfach anbinden (IMAP IDLE + Regelwerk)
+9. **Push-Kanäle und Totmannschalter** — solange die fehlen, muss jemand hinsehen

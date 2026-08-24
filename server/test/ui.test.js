@@ -71,7 +71,7 @@ function ladeUi({ live = true } = {}) {
 function zeichneAlles(sandbox, ziele) {
   const ui = sandbox.window.LeitstandUI;
   const seiten = {};
-  for (const v of ["kurz", "lage", "sites", "virt", "compute", "netz", "vpn", "dienste", "post", "links", "cfg", "verwaltung"]) {
+  for (const v of ["kurz", "lage", "sites", "virt", "compute", "netz", "vpn", "dienste", "mail", "post", "links", "cfg", "verwaltung"]) {
     ui.state.view = v;
     ui.render();
     seiten[v] = ziele.get("#wrap").innerHTML + ziele.get("#top").innerHTML + ziele.get("#rail-nav").innerHTML;
@@ -1806,4 +1806,116 @@ test("Ist keine Prüfung gelaufen, sagt der Inspektor, dass nichts gemessen wurd
   ui.state.inspector = { kind: "tunnel", id: "wg-hq-rz" };
   ui.render();
   assert.match(ziele.get("#overlays").innerHTML, /nichts gemessen/);
+});
+
+/* ============================================================
+   Mail Gateway in der Oberfläche
+
+   Wieder über die ganze Kette: ein nachgebautes Gerät, ein echter
+   Bestand mit hinterlegtem Konto, ein echter Durchlauf — und erst
+   daraus die Ansicht. Genau hier wäre aufgefallen, dass der Sammler
+   sich mit einem API-Token anmeldet, das es bei PMG gar nicht gibt.
+   ============================================================ */
+
+async function zustandMitGateway(fakeOpt = {}) {
+  const { fakePmg, listen: hoere, BENUTZER, PASSWORT } = await import("./fake-pmg.js");
+  const srv = fakePmg(fakeOpt);
+  const url = await hoere(srv);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-pmg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "inventory.yaml"), `
+settings: { interval: 3600, icmp: false, timeout: 2, pmg_takt: 0, pmg_takt_lang: 0 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: pmg-01, type: pmg, site: hq, url: "${url}", role: Mail Gateway }
+tunnels: []
+links: []
+`);
+    fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+      "pmg-01": { user: BENUTZER, password: PASSWORT }
+    }));
+    const server = createServer({
+      inventory: path.join(dir, "inventory.yaml"),
+      secrets: path.join(dir, "secrets.json"),
+      state: path.join(dir, "incidents.json")
+    });
+    await server.engine.runOnce();
+    const { buildState } = await import("../src/api.js");
+    const zustand = buildState(server.engine, server.secrets);
+    server.engine.stop();
+    return zustand;
+  } finally {
+    await new Promise(r => srv.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Der Mail Gateway zeigt Durchsatz, Warteschlange, Quarantäne und Signaturen", async () => {
+  const zustand = await zustandMitGateway();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "mail";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Mail-Ansicht");
+  assert.match(html, /1840/, "eingehende Mail in 24 h");
+  assert.match(html, /66 %/, "Spamanteil am angenommenen Eingang");
+  assert.match(html, /deferred/, "die Warteschlangen einzeln");
+  assert.match(html, /812/, "Umfang der Spam-Quarantäne");
+  assert.match(html, /daily/, "die Signaturdatenbank mit Stand");
+  assert.match(html, /pmg-smtp-filter/, "die Dienste, die filtern");
+  assert.match(html, /kunde\.de/, "Verkehr je Domäne");
+
+  /* Und dieselben Zahlen auf der Detailseite. */
+  ui.openSystem("pmg-01");
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = null;
+  ui.render();
+  const seite = ziele.get("#wrap").innerHTML;
+  assert.match(seite, /Gateway im Einzelnen/);
+  assert.match(seite, /Vor der Annahme abgewiesen/);
+  assert.ok(!/undefined|NaN/.test(seite));
+});
+
+/* Ein Gateway, das Viren abfängt, tut seinen Dienst — eine Ampel dafür
+   wäre nach zwei Wochen abtrainiert. Ein Virus, das hinausgeht, ist
+   etwas völlig anderes. */
+test("Eingehende Viren stehen da, ohne zu leuchten — ausgehende sind rot", async () => {
+  const ruhig = await zustandMitGateway();
+  const h = ruhig.hosts.find(x => x.id === "pmg-01");
+  assert.equal(h.virus, 3);
+  assert.notEqual(h.status, "crit");
+  assert.notEqual(h.status, "warn");
+
+  const befallen = await zustandMitGateway({ virusAus: 2 });
+  const b = befallen.hosts.find(x => x.id === "pmg-01");
+  assert.equal(b.status, "crit");
+  assert.match(b.note, /eigenen Netz/);
+
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(befallen);
+  ui.state.view = "mail";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML, /Viren ausgehend/);
+});
+
+test("Ohne hinterlegtes Konto steht in der Mail-Ansicht, was fehlt", async () => {
+  const zustand = await zustandMitGateway();
+  const h = zustand.hosts.find(x => x.id === "pmg-01");
+  for (const k of ["in24", "out24", "spam", "virus", "queueDeferred", "queueAktiv", "queueHold",
+                   "quarSpam", "quarVirus", "signaturAlter", "updates", "cpu", "ram", "disk"]) h[k] = null;
+  h.warteschlange = null; h.dienste = null; h.signaturen = null; h.domains = null; h.viren = null;
+  h.note = null;
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "mail";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /kennt keine API-Token/, "der häufigste Irrtum gehört genau hierhin");
+  assert.match(html, /Auditor/);
+  assert.ok(!/undefined|NaN/.test(html));
 });

@@ -113,7 +113,11 @@ ist eine stillgelegte Überwachung.
 ## Alarm-Postfach
 
 Adresse `alarm@…`, hinter dem bestehenden Proxmox Mail Gateway — Spam wird nie
-zugestellt. Der Ingest hält die Verbindung per IMAP IDLE offen, prüft jede
+zugestellt. Dass dieser Gateway inzwischen selbst überwacht wird, ist kein
+Zufall: er ist der Weg, über den alle Meldungen ohne Schnittstelle
+hereinkommen. Steht sein Filter oder läuft seine Warteschlange voll, fällt
+nicht nur Mail aus — es fällt der Kanal aus, über den der Leitstand von allem
+anderen erfährt. Der Ingest hält die Verbindung per IMAP IDLE offen, prüft jede
 eingehende Nachricht gegen eine geordnete Regelliste und erzeugt daraus ein
 Ereignis. Regeln bestehen aus Absender- und Betreffmuster, einer Zuordnung zum
 Host und einer Einstufung.
@@ -147,7 +151,7 @@ Punkt — steht in [TODO.md](TODO.md).
 | 1 | Bestand als YAML, ICMP/TCP/TLS-Prober, Startseite mit Ampeln | **gebaut** |
 | 1b | Verwaltung in der Oberfläche: Standorte, Systeme, Tunnel, Startseite, Schwellwerte, Zugangsdaten, Verbindungstest | **gebaut** |
 | 1c | Standort-Bündelung, Quittieren, Stummschalten, Fortschreibung über Neustarts | **gebaut** |
-| 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** — inklusive Knotendetails (Kernel, Fassung, Ausstattung, ausstehende Pakete) und jedem Gast mit seiner Auslastung, in einer eigenen Ansicht *Virtualisierung* |
+| 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** — VE inklusive Knotendetails (Kernel, Fassung, Ausstattung, ausstehende Pakete) und jedem Gast mit seiner Auslastung, in einer eigenen Ansicht *Virtualisierung*; PMG mit Durchsatz, Warteschlange samt Alter, Quarantäne, Signaturstand und den filternden Diensten in einer eigenen Ansicht *Mail-Gateway* — **und mit Ticket statt Token**, weil PMG keine kennt |
 | 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense vollständig** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), **Gateways**, **Zustandstabelle**, **CARP**, Peers und Handshake am Tunnel; offen sind nur die HAProxy-Backends. pfSense liefert dasselbe, **aber nur mit dem Fremdpaket `pfSense-pkg-API`** — das nicht im Paketverzeichnis steht und für neuere Fassungen fehlt; ohne es bleibt es bei der Erreichbarkeit |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
 | 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home und Portainer gebaut** — AdGuard zusätzlich mit einer echten Auflösung über UDP/53 als *wesentlicher* Prüfung; TrueNAS, Mailcow und Home Assistant offen — bislang nur Erreichbarkeit |

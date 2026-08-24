@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { fakeProxmox, listen, GOOD, WEAK } from "./fake-proxmox.js";
-import { collectPve, collectPbs, collectPmg, testConnection, authHeader, baseUrl,
+import { collectPve, collectPbs, testConnection, authHeader, baseUrl,
   laufStatus, umfang, zeitplan } from "../src/collectors/proxmox.js";
 
 let srv, url;
@@ -13,15 +13,13 @@ const host = id => ({ id, name: id, type: "pve", url });
 
 test("Token-Kopfzeile wird nach Proxmox-Schema gebaut", () => {
   assert.equal(authHeader("pve", cred).Authorization, GOOD);
-  assert.equal(authHeader("pmg", { tokenId: "leitstand@pmg!ro", secret: "x" }).Authorization,
-    "PMGAPIToken=leitstand@pmg!ro=x");
   assert.equal(authHeader("pve", null), null, "ohne Zugangsdaten keine Kopfzeile");
 });
 
-/* Der Backup Server trennt Token-ID und Geheimnis mit „:“, VE und Mail
-   Gateway mit „=“. Das stand lange gleich für alle drei da — mit dem
-   Ergebnis, dass gegen einen echten PBS jede Anmeldung scheiterte, während
-   der Testserver das Zeichen gar nicht ansah und Grün meldete. */
+/* Der Backup Server trennt Token-ID und Geheimnis mit „:“, VE mit „=“.
+   Das stand lange gleich für beide da — mit dem Ergebnis, dass gegen einen
+   echten PBS jede Anmeldung scheiterte, während der Testserver das Zeichen
+   gar nicht ansah und Grün meldete. */
 test("Backup Server bekommt den Doppelpunkt, nicht das Gleichheitszeichen", () => {
   assert.equal(authHeader("pbs", { tokenId: "leitstand@pbs!ro", secret: "x" }).Authorization,
     "PBSAPIToken=leitstand@pbs!ro:x");
@@ -144,13 +142,6 @@ test("Bald voll heißt gelb, und ohne Schätzung wird nichts geschätzt", async 
   assert.ok(main.vollAm);
   assert.equal(r.stores.find(s => s.name === "nas-archive").vollInTagen, null,
     "„estimated-full-date: 0“ heißt keine Schätzung, nicht „heute“");
-});
-
-test("PMG-Sammler liest die Tagesstatistik", async () => {
-  const r = await collectPmg({ id: "pmg", url }, { tokenId: "ro", secret: "1a2b3c4d-0000-1111-2222-333344445555", user: "leitstand@pve" });
-  assert.equal(r.in24, 1840);
-  assert.equal(r.spam, 1216);
-  assert.equal(r.status, "warn", "Virenfunde sind eine Warnung");
 });
 
 /* ---------- Was nicht gelesen werden kann, ist nicht null Stück ----------

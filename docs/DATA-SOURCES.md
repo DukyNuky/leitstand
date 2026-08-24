@@ -30,7 +30,7 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 
 | | |
 |---|---|
-| Zugang | API-Token, Rolle `Audit` auf `/` mit Propagate, Port 8007, `Authorization: PBSAPIToken=leitstand@pbs!ro:<uuid>` — **Doppelpunkt** vor dem Geheimnis, nicht `=` wie bei VE und PMG |
+| Zugang | API-Token, Rolle `Audit` auf `/` mit Propagate, Port 8007, `Authorization: PBSAPIToken=leitstand@pbs!ro:<uuid>` — **Doppelpunkt** vor dem Geheimnis, nicht `=` wie bei VE |
 | Rechte | `Audit` deckt beides ab: `Datastore.Audit` für die Belegung *und* `Sys.Audit` auf `/system/tasks` für die Aufgabenliste. `DatastoreAudit` allein reicht **nicht** — die Belegung käme an, die fehlgeschlagenen Aufträge blieben unsichtbar. Die Berechtigung gehört auf die **Token-ID**: PBS schneidet die Rechte des Tokens mit denen des Benutzers, eigene ACL-Einträge für das Token sind Pflicht |
 | Endpunkte | `/api2/json/status/datastore-usage`, `/api2/json/admin/datastore`, `/api2/json/nodes/localhost/tasks?limit=60&errors=1` **und** `?limit=200`. Zwei Aufgabenlisten, weil sie zwei Fragen beantworten: die gefilterte findet Fehler auch dann, wenn hundert geglückte Sicherungen davorstehen; die ungefilterte sagt, wann ein Datastore zuletzt gesichert, aufgeräumt und geprüft wurde |
 | Kennzahlen | je Datastore: Belegung, belegt/frei/gesamt in Bytes, `estimated-full-date` (PBS' eigene Schätzung, wann er voll ist), letzte Sicherung, letztes Aufräumen, letzte Prüfung — je mit Erfolg oder Fehlschlag —, Kommentar und Wartungsmodus. Dazu, wie bisher: der vollste Datastore als Kennzahl des Systems, fehlgeschlagene Aufträge, letzter Erfolg |
@@ -40,15 +40,32 @@ Ein Token reicht für den ganzen Cluster; die Standalone-Knoten brauchen je eine
 
 ## Proxmox Mail Gateway
 
-> **Gebaut** — Tagesstatistik über `/statistics/mail`.
+> **Gebaut** — `server/src/collectors/pmg.js`, eigener Sammler mit eigener
+> Ansicht *Mail-Gateway*.
+
+> [!IMPORTANT]
+> **PMG kennt keine API-Token.** Die API-Dokumentation weist sie an jedem
+> Endpunkt als erlaubt aus (`allowtoken: 1`) — die Beschreibung wird aus
+> derselben Vorlage erzeugt wie die von Proxmox VE. Der HTTP-Dienst weist sie
+> aber vor jeder Rechteprüfung ab:
+> `die "API tokens not implemented\n" if $api_token;` (`src/PMG/HTTPServer.pm`).
+> Wer eine Token-Kopfzeile schickt, bekommt eine wortlose 401 — und sucht
+> danach am falschen Ende. Deshalb steht dieser Sammler nicht in `proxmox.js`.
 
 | | |
 |---|---|
-| Zugang | API-Token `PMGAPIToken=…`, Port 8006 |
-| Endpunkte | `/api2/json/statistics/mail`, `/api2/json/nodes/{node}/status`, `/api2/json/quarantine/spam` |
-| Kennzahlen | Ein-/Ausgang 24 h, Spam- und Virenanteil, Quarantänegröße, Queue |
-| Ampel | Queue > 25 → gelb · Virenfund → gelb (Information, kein Notfall) |
-| Meldet per Mail | Tagesbericht |
+| Zugang | Benutzer und Passwort gegen `POST /api2/json/access/ticket`, danach das Ticket als Cookie `PMGAuthCookie`. Es gilt **zwei Stunden**; erneuert wird nach 90 Minuten und bei einer 401 sofort. Port 8006 |
+| Rechte | ein Konto unter *Configuration → User Management*, Realm `pmg`, Rolle **Auditor**. PMG kennt keine ACL-Pfade wie VE: der Benutzer trägt genau eine Rolle, und `audit` deckt alles ab, was hier gelesen wird. Der Benutzername gehört **mit Realm** eingetragen (`leitstand@pmg`) — sonst hängt PMG `@quarantine` an und findet das Konto nicht |
+| Endpunkte, jede Minute | `/nodes/{node}/status`, `/nodes/{node}/services`, `/nodes/{node}/postfix/qshape?queue=` für `deferred`, `active` und `hold` |
+| Endpunkte, alle 5 Minuten | `/statistics/mail?starttime=`, `/statistics/domains`, `/statistics/virus`, `/quarantine/spamstatus`, `/quarantine/virusstatus`, `/nodes/{node}/clamav/database`, `/nodes/{node}/apt/update`, `/version` |
+| Warum zwei Takte | der Durchlauf kommt alle 15 s. Die Tagesstatistik ändert sich darin nicht messbar, `qshape` startet je Abruf einen Prozess auf dem Gerät, und `apt/update` liest eine Liste, die einmal täglich erneuert wird. Einstellbar als `pmg_takt` und `pmg_takt_lang`. Die Erreichbarkeit misst der Prober weiterhin in jedem Durchlauf |
+| Kennzahlen Verkehr | `count_in`/`count_out`, `spamcount_in` mit Anteil am **angenommenen** Eingang, `viruscount_in` **und** `viruscount_out`, `bytes_in`/`bytes_out`, `glcount`, `rbl_rejects`, `pregreet_rejects`, `spfcount`, Bounces, `avptime` (Sekunden → ms) |
+| Kennzahlen Betrieb | Warteschlange je Queue mit Altersverteilung und Top-Domänen, Quarantäne (Anzahl, Platz, Ø Spam-Wert), ClamAV-Datenbanken mit Signaturzahl und Alter, alle Dienste mit `state`/`active-state`, CPU/RAM/Wurzel-Belegung, Last, Laufzeit, Kernel, `pmgversion`, `insync`, ausstehende Pakete |
+| Ampel rot | ein **Kerndienst** steht (postfix, pmg-smtp-filter, pmgproxy, pmgdaemon, pmgpolicy, postgres, clamav-daemon) · **ausgehender** Virenfund · Warteschlange ≥ `mail_queue_crit` (100) · Wurzeldateisystem über `disk_crit` · RAM über `ram_crit` |
+| Ampel gelb | Verbund nicht abgeglichen (`insync: 0`) · Warteschlange ≥ `mail_queue_warn` (25) **oder** Mail liegt seit über zehn Stunden · Belegung über den Warngrenzen · `daily`-Signaturen älter als 24 h · ein Nebendienst meldet `failed` |
+| Ampel bewusst **nicht** | ein **eingehender** Virenfund. Er ist der Zweck des Geräts; eine Ampel, die dabei jedes Mal leuchtet, ist nach zwei Wochen abtrainiert — und mit ihr die Ampel für alles andere. Die Zahl steht groß auf der Karte, sie leuchtet nur nicht. Ebenso `hold`: dort liegt, was eine Regel angehalten hat, das ist eine Entscheidung und keine Störung — sie steht als Notiz da |
+| Bewusst nicht abgefragt | `/nodes/{node}/spamassassin/rules` — der Endpunkt ruft je Kanal `sa-update --checkonly` auf und geht dafür ins Netz. Ein Abruf im Minutentakt wäre eine Last, die in keinem Verhältnis zur Auskunft steht. `/nodes/{node}/postfix/queue` liefert nur die **Namen** der Warteschlangen, keine Zahlen; die Zahlen stehen in `qshape` |
+| Meldet per Mail | Tagesbericht, Quarantänebericht |
 
 ## OPNsense — 4 Geräte
 
@@ -205,7 +222,8 @@ Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
 ## Zugänge anlegen — Kurzfassung
 
 ```
-Proxmox VE/PMG       Benutzer leitstand@pve, Rolle PVEAuditor auf / mit Vererbung, Token ohne Ablauf
+Proxmox VE           Benutzer leitstand@pve, Rolle PVEAuditor auf / mit Vererbung, Token ohne Ablauf
+Proxmox Mail GW      KEIN Token — Benutzer leitstand@pmg, Rolle Auditor; angemeldet wird mit Passwort
 Proxmox Backup       Benutzer leitstand@pbs, Rolle Audit auf / mit Propagate — auch für die Token-ID selbst
 OPNsense             System → Access → Users → leitstand, Gruppe mit Lesezugriff, API-Key erzeugen
 pfSense              nur mit dem Fremdpaket pfSense-pkg-API (nicht im Paketverzeichnis) — sonst nur Erreichbarkeit

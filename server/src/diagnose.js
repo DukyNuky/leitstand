@@ -21,6 +21,7 @@ import * as Opn from "./collectors/opnsense.js";
 import * as Adg from "./collectors/adguard.js";
 import * as Ptn from "./collectors/portainer.js";
 import * as Pfs from "./collectors/pfsense.js";
+import * as Pmg from "./collectors/pmg.js";
 
 /* Sammler, die sich gleich verhalten: eine Kopfzeile zur Anmeldung, feste
    Pfade, JSON zurück. Für die gibt es einen gemeinsamen Weg (diagnoseEinfach)
@@ -69,10 +70,6 @@ const PFADE = {
     { pfad: "/admin/datastore", zweck: "Datastores mit Kommentar und Wartungsmodus", optional: true },
     { pfad: "/nodes/localhost/tasks?limit=60&errors=1", zweck: "fehlgeschlagene Aufträge", optional: true },
     { pfad: "/nodes/localhost/tasks?limit=200", zweck: "letzte Sicherung, Aufräumen und Prüfung je Datastore", optional: true }
-  ],
-  pmg: [
-    { pfad: "/version", zweck: "erreichbar und angemeldet" },
-    { pfad: "/statistics/mail?timespan=86400", zweck: "Tagesstatistik" }
   ]
 };
 
@@ -92,6 +89,7 @@ export async function diagnoseHost(host, cred, settings = {}) {
   }
 
   if (host.type === "opnsense") return await diagnoseOpnsense(host, cred, bericht);
+  if (host.type === "pmg") return await diagnosePmg(host, cred, bericht);
   if (EINFACH[host.type]) return await diagnoseEinfach(host, cred, bericht, EINFACH[host.type]);
 
   const kollektor = PFADE[host.type];
@@ -189,6 +187,97 @@ async function diagnoseOpnsense(host, cred, bericht) {
     + (wg?.ok ? " WireGuard ist lesbar — der echte Handshake ist damit in Reichweite."
       : " WireGuard antwortet nicht; das ist verschmerzbar, solange durch den Tunnel gemessen wird.")
     + " Die Feldnamen unten sind die Grundlage für den Sammler.";
+  return bericht;
+}
+
+/* ---------- Proxmox Mail Gateway ----------
+   Eigener Weg aus einem Grund, der es wert ist, hier zu stehen: **PMG
+   kennt keine API-Token.** Die API-Dokumentation weist sie an jedem
+   Endpunkt als erlaubt aus — sie wird aus derselben Vorlage erzeugt wie
+   die von Proxmox VE —, der Dienst selbst weist sie aber vor jeder
+   Rechteprüfung ab. Wer hier mit einer Token-Kopfzeile ankommt, bekommt
+   eine 401 und keinen Hinweis darauf, dass nicht das Geheimnis falsch
+   ist, sondern das ganze Verfahren.
+
+   Deshalb steht die Anmeldung als eigener, erster Schritt im Bericht:
+   sie ist der Schritt, an dem es hängt, wenn es hängt. */
+async function diagnosePmg(host, cred, bericht) {
+  bericht.ziel = Pmg.baseUrl(host);
+  const benutzer = cred?.user || cred?.username || null;
+  const passwort = cred?.password || cred?.secret || null;
+  bericht.zugang = !cred ? { vorhanden: false, hinweis: "kein Zugang hinterlegt" }
+    : !benutzer || !passwort ? { vorhanden: false, hinweis: "Zugang unvollständig — Benutzer oder Passwort fehlt" }
+    : {
+        vorhanden: true,
+        form: `Ticket für ${benutzer}, danach Cookie PMGAuthCookie=••••••`,
+        benutzer,
+        hinweis: /@/.test(benutzer) ? null
+          : "Benutzername ohne Realm — PMG hängt dann „@quarantine“ an und lehnt ab. Gemeint ist leitstand@pmg."
+      };
+  if (!bericht.zugang.vorhanden) {
+    bericht.fazit = "Es sind kein Benutzer und kein Passwort hinterlegt. Der Mail Gateway kennt keine API-Token: "
+      + "angemeldet wird wie an der Oberfläche, mit einem Konto in der Rolle Auditor. "
+      + "Einzutragen unter Verwaltung → System bearbeiten.";
+    return bericht;
+  }
+
+  /* Schritt 1: das Ticket. Ohne es hat jeder weitere Aufruf dieselbe
+     Antwort, und die sagt nichts Neues. */
+  Pmg.ticketVergessen(host.id);
+  const an = await Pmg.anmelden(host, cred, 8000);
+  bericht.api.push({
+    pfad: "/access/ticket", zweck: "Anmeldung — PMG kennt keine API-Token, nur Ticket und Cookie",
+    optional: false, ok: !!an.ok, status: an.status ?? null, ms: an.ms ?? null,
+    fehler: an.ok ? null : an.error || "unbekannter Fehler", antwort: null,
+    befund: an.ok ? `Ticket ausgestellt für ${an.benutzer}${an.rolle ? " · Rolle " + an.rolle : ""} (gilt zwei Stunden)` : null
+  });
+  if (!an.ok) {
+    bericht.fazit = an.status === 401
+      ? `Die Anmeldung wird abgelehnt (401). ${Pmg.RECHTEHINWEIS}`
+      : `Die Anmeldung kommt nicht durch: ${an.error}. ` + (Pmg.hintFor(an) || "");
+    return bericht;
+  }
+
+  /* Schritt 2 und folgende: die Aufrufe des Sammlers. Der Knotenname
+     steht in keiner Adresse fest — er kommt aus der Antwort davor. */
+  let knoten = null;
+  for (const { pfad, zweck, optional } of Pmg.PFADE) {
+    if (pfad.includes("{knoten}") && !knoten) {
+      bericht.api.push({
+        pfad, zweck, optional: true, ok: false, status: null, ms: null,
+        fehler: "übersprungen — der Knotenname ist nicht bekannt", antwort: null, befund: null
+      });
+      continue;
+    }
+    const weg = pfad.replace("{knoten}", encodeURIComponent(String(knoten)));
+    const r = await Pmg.api(host, cred, weg, 8000);
+    bericht.api.push({
+      pfad: weg, zweck, optional: !!optional,
+      ok: !!r.ok, status: r.status ?? null, ms: r.ms ?? null,
+      fehler: r.ok ? null : r.error || "unbekannter Fehler",
+      antwort: r.ok ? null : kurzfassung(r.body),
+      befund: r.ok ? Pmg.befund(pfad, r.data?.data) : null
+    });
+    if (r.ok && pfad === "/nodes") {
+      const liste = r.data?.data || [];
+      const gesucht = [host.name, host.id].filter(Boolean).map(x => String(x).toLowerCase());
+      knoten = (liste.find(n => gesucht.includes(String(n.node).toLowerCase())) || liste[0])?.node || null;
+    }
+    if (!r.ok && !optional) break;
+  }
+
+  const gescheitert = bericht.api.find(a => !a.ok && !a.optional);
+  if (gescheitert) {
+    bericht.fazit = `Der Abruf bricht bei ${gescheitert.pfad} ab (${gescheitert.fehler}). `
+      + (Pmg.hintFor(gescheitert) || "");
+    return bericht;
+  }
+  const uebergangen = bericht.api.filter(a => !a.ok && a.optional);
+  bericht.ok = true;
+  bericht.fazit = "Alle nötigen Aufrufe kommen durch — der Mail Gateway liefert, was der Sammler braucht."
+    + (uebergangen.length
+      ? ` Ohne Antwort blieben: ${uebergangen.map(a => a.pfad).join(", ")} — dort fehlt je eine Angabe, nicht die Anbindung.`
+      : "");
   return bericht;
 }
 

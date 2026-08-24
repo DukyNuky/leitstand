@@ -1,23 +1,27 @@
-/* Sammler für Proxmox VE, Backup Server und Mail Gateway.
+/* Sammler für Proxmox VE und Backup Server.
 
-   Alle drei sprechen dieselbe Token-Authentisierung:
+   Beide sprechen dieselbe Token-Authentisierung:
      Authorization: PVEAPIToken=BENUTZER@REALM!TOKENID=GEHEIMNIS
-   (bei PBS `PBSAPIToken=`, bei PMG `PMGAPIToken=`)
+   (bei PBS `PBSAPIToken=`)
 
    Der Zugang ist ausschließlich lesend gedacht — Rolle PVEAuditor
-   beziehungsweise DatastoreAudit. */
+   beziehungsweise Audit.
+
+   Der Mail Gateway steht trotz gleichen Namens in einem eigenen Sammler
+   (pmg.js): er kennt keine API-Token, sondern verlangt ein Ticket aus
+   Benutzer und Passwort. */
 
 import { requestJson } from "../http.js";
 import { schwellenFuer } from "../inventory.js";
 
-const PREFIX = { pve: "PVEAPIToken", pbs: "PBSAPIToken", pmg: "PMGAPIToken" };
-const DEFAULT_PORT = { pve: 8006, pbs: 8007, pmg: 8006 };
+const PREFIX = { pve: "PVEAPIToken", pbs: "PBSAPIToken" };
+const DEFAULT_PORT = { pve: 8006, pbs: 8007 };
 
-/* Und hier hört die Gemeinsamkeit auf: VE und Mail Gateway hängen das
-   Geheimnis mit „=“ an die Token-ID, der Backup Server mit „:“. Ein falsches
-   Zeichen sieht aus wie ein falsches Geheimnis — die Antwort ist 401, ohne
-   ein Wort darüber, dass nur der Doppelpunkt fehlt. */
-export const TRENNER = { pve: "=", pbs: ":", pmg: "=" };
+/* Und hier hört die Gemeinsamkeit auf: VE hängt das Geheimnis mit „=“ an
+   die Token-ID, der Backup Server mit „:“. Ein falsches Zeichen sieht aus
+   wie ein falsches Geheimnis — die Antwort ist 401, ohne ein Wort darüber,
+   dass nur der Doppelpunkt fehlt. */
+export const TRENNER = { pve: "=", pbs: ":" };
 
 /* Der häufigste Grund für „erreichbar, aber keine Kennzahlen": die Rolle
    wurde dem Benutzer gegeben, nicht dem Token. Bei aktivierter Privilege
@@ -56,7 +60,7 @@ async function api(host, type, cred, path, timeout = 8000) {
 }
 
 /* ---------- Verbindungstest für die Admin-Oberfläche ---------- */
-const TYPE_NAME = { pve: "Proxmox VE", pbs: "Backup Server", pmg: "Mail Gateway" };
+const TYPE_NAME = { pve: "Proxmox VE", pbs: "Backup Server" };
 
 export async function testConnection(host, cred, type = host.type) {
   const r = await api(host, type, cred, "/version", 6000);
@@ -98,7 +102,7 @@ function hintFor(r) {
   if (r.status === 401) return "Token-ID vollständig angeben, z. B. leitstand@pve!ro — und das Geheimnis aus der Anlage-Maske.";
   if (r.status === 403) return "Dem Token fehlen Rechte: Rolle PVEAuditor auf / mit Vererbung setzen.";
   if (r.status === 404) return "Erreicht, aber kein Proxmox-Endpunkt — Port prüfen (VE 8006, PBS 8007).";
-  if (/abgewiesen/.test(r.error || "")) return "Port stimmt vermutlich nicht: VE 8006, PBS 8007, PMG 8006.";
+  if (/abgewiesen/.test(r.error || "")) return "Port stimmt vermutlich nicht: VE 8006, PBS 8007.";
   return null;
 }
 
@@ -607,24 +611,6 @@ function wartungsText(m) {
   return null;
 }
 
-
-/* ---------- Proxmox Mail Gateway ---------- */
-export async function collectPmg(host, cred) {
-  const [statRes, verRes] = await Promise.all([
-    api(host, "pmg", cred, "/statistics/mail?timespan=86400"),
-    api(host, "pmg", cred, "/version")
-  ]);
-  if (!statRes.ok) return { error: statRes.error, note: statRes.error };
-  const d = statRes.data?.data || {};
-  const out = {
-    version: verRes.ok ? verRes.data?.data?.version : null,
-    in24: d.count_in ?? null, out24: d.count_out ?? null,
-    spam: d.spamin ?? null, virus: d.viruscount_in ?? null
-  };
-  if (out.virus > 0) { out.status = "warn"; out.note = `${out.virus} Virenfund(e) in 24 h`; }
-  return out;
-}
-
 const pct = f => (Number.isFinite(f) ? Math.round(f * 100) : null);
 const days = s => `${Math.floor(s / 86400)} T`;
 const zahl = v => {
@@ -640,11 +626,10 @@ export function makeCollectors(secrets) {
     if (!cred) return null;                       /* ohne Token bleibt es bei der reinen Erreichbarkeit */
     return fn(host, cred);
   };
-  return { pve: wrap(collectPve), pbs: wrap(collectPbs), pmg: wrap(collectPmg) };
+  return { pve: wrap(collectPve), pbs: wrap(collectPbs) };
 }
 
 export const TESTERS = {
   pve: (h, c) => testConnection(h, c, "pve"),
-  pbs: (h, c) => testConnection(h, c, "pbs"),
-  pmg: (h, c) => testConnection(h, c, "pmg")
+  pbs: (h, c) => testConnection(h, c, "pbs")
 };
