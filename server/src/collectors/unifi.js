@@ -28,12 +28,26 @@
    und in der Diagnose — sonst ließe sich eine fehlende Kanalbelegung
    nicht von einer stillen Fehlfunktion unterscheiden.
 
-   ## Zwei Präfixe
+   ## Zwei Präfixe, zwei Anschlüsse, zwei Anmeldepfade
 
-   UniFi OS (Dream Machine, Cloud Key Gen2, UNVR) hängt die Netzanwendung
-   unter `/proxy/network`; eine selbst betriebene Network Application
-   antwortet ohne Präfix auf 8443. Welches gilt, findet der erste
-   geglückte Abruf heraus und behält es.
+   UniFi OS (Dream Machine, Cloud Key Gen2, UNVR) hört auf 443, hängt die
+   Netzanwendung unter `/proxy/network` und meldet unter
+   `/api/auth/login` an; eine selbst betriebene Network Application hört
+   auf 8443, kennt kein Präfix und meldet unter `/api/login` an. Drei
+   Weichen, und keine davon ist von außen zu sehen.
+
+   Deshalb wird geprobt statt geraten: fehlt in der Adresse der Anschluss,
+   werden 443 und 8443 versucht, und auf jedem beide Anmeldepfade. Was
+   getragen hat, merkt sich die Sitzung und benutzt es von da an.
+
+   Entscheidend ist dabei, **wie eine Absage gelesen wird**. Die
+   eigenständige Anwendung schützt alles unter `/api/` mit demselben
+   Filter: einen Pfad, den sie nicht kennt — und `/api/auth/login` von
+   UniFi OS kennt sie nicht — weist sie mit 401 und
+   `api.err.LoginRequired` ab. Das ist derselbe Statuscode wie bei einem
+   falschen Passwort. Wer ihn für eine Auskunft über die Zugangsdaten
+   hält, versucht `/api/login` nie und meldet jemandem, sein Passwort sei
+   falsch, während es stimmt. Was zählt, steht im Rumpf, nicht im Code.
 
    ## Was hier bewusst nicht gelesen wird
 
@@ -44,10 +58,12 @@
 
 import { requestJson } from "../http.js";
 
-const DEFAULT_PORT = 443;
-
 /* UniFi OS zuerst — es ist der häufigere Fall und antwortet auf 443. */
 const PRAEFIXE = ["/proxy/network", ""];
+
+/* 443 ist UniFi OS, 8443 die eigenständige Network Application. Steht in
+   der Adresse kein Anschluss, gelten beide der Reihe nach. */
+const PORTS = [443, 8443];
 
 /* Eine Sitzung gilt beim Controller deutlich länger; wir erneuern nach
    einer halben Stunde. Ein Anmeldevorgang je Durchlauf stünde alle 15 s
@@ -56,19 +72,34 @@ const PRAEFIXE = ["/proxy/network", ""];
 const SITZUNG_GILT = 30 * 60 * 1000;
 
 export const RECHTEHINWEIS =
-  "Im Controller unter Settings → Admins & Users einen Admin mit der Rolle „Viewer“ anlegen (nur lesen). "
-  + "Ab Network 9 lässt sich für dieses Konto unter Settings → Control Plane → Integrations ein API-Schlüssel "
-  + "erzeugen — der ist der bessere Weg, weil er ohne Zwei-Faktor-Anmeldung auskommt. Der Schlüssel erbt die "
-  + "Rolle des Kontos: er ist genau dann nur lesend, wenn das Konto es ist.";
+  "Im Controller unter Settings → Admins & Users einen Admin mit der Rolle „Viewer“ anlegen (nur lesen) und "
+  + "hier Benutzer und Passwort hinterlegen — das ist der Weg, der auf jeder Fassung funktioniert. Wichtig: das "
+  + "Konto muss ein lokales sein („Local Access Only“). Ein Ubiquiti-Konto aus der Cloud meldet sich nicht ohne "
+  + "zweiten Faktor an, und dann kommt kein Dienst hinein. "
+  + "Bietet der Controller unter Settings → Control Plane → Integrations einen API-Schlüssel an (Network 9 und "
+  + "neuer, längst nicht auf jeder Installation), ist der die ruhigere Wahl: er kommt ohne Zwei-Faktor-Anmeldung "
+  + "aus und erbt die Rolle des Kontos — er ist genau dann nur lesend, wenn das Konto es ist.";
 
+/* Die Adresse, unter der der Controller erreicht wurde — und solange das
+   offen ist, die erste, die in Frage kommt. */
 export function baseUrl(host) {
-  if (host.url) {
+  return SITZUNGEN.get(host?.id)?.basis || basen(host)[0];
+}
+
+/* Alle Adressen, die in Frage kommen. Steht in der Adresse ein Anschluss,
+   gilt genau der: wer 8443 hinschreibt, meint 8443. Fehlt er, werden 443
+   und 8443 nacheinander versucht — sonst ist ein „Verbindung abgewiesen"
+   auf 443 das Ende, obwohl der Controller nebenan antwortet. */
+export function basen(host) {
+  if (host?.url) {
     try {
       const u = new URL(host.url);
-      return `${u.protocol}//${u.hostname}${u.port ? ":" + u.port : ""}`;
+      if (u.port) return [`${u.protocol}//${u.hostname}:${u.port}`];
+      if (u.protocol !== "https:") return [`${u.protocol}//${u.hostname}`];
+      return PORTS.map(p => `https://${u.hostname}:${p}`);
     } catch {}
   }
-  return `https://${host.ip}:${DEFAULT_PORT}`;
+  return PORTS.map(p => `https://${host?.ip}:${p}`);
 }
 
 export function authHeader(cred) {
@@ -91,18 +122,17 @@ export function sitzungVergessen(hostId = null) {
 
 function sitzung(host) {
   let s = SITZUNGEN.get(host.id);
-  if (!s) { s = { praefix: null, keks: null, bis: 0, integration: false, site: null }; SITZUNGEN.set(host.id, s); }
+  if (!s) { s = { basis: null, praefix: null, keks: null, bis: 0, integration: false, site: null }; SITZUNGEN.set(host.id, s); }
   return s;
 }
 
 /* ---------- Anmeldung mit Benutzer und Passwort ----------
 
-   UniFi OS meldet unter `/api/auth/login` an, die eigenständige
-   Anwendung unter `/api/login`. Beide werden versucht — aber nur, solange
-   die Antwort „diesen Weg gibt es hier nicht" heißt. Eine abgelehnte
-   Anmeldung (401 bei UniFi OS, 400 bei der klassischen Anwendung) ist
-   eine Auskunft über die Zugangsdaten und kein Grund, es nebenan noch
-   einmal zu versuchen. */
+   Versucht wird jede Adresse mit beiden Anmeldepfaden — und aufgehört
+   wird erst, wenn eine Absage tatsächlich etwas über die Zugangsdaten
+   sagt. Eine Ablehnung wird gemerkt, aber nicht sofort gemeldet: der
+   andere Pfad kann derselben Anlage noch gehören. Erst wenn keiner
+   trägt, ist die Ablehnung die Antwort. */
 export async function anmelden(host, cred, timeout = 8000) {
   const benutzer = benutzerVon(cred), passwort = passwortVon(cred);
   if (!benutzer || !passwort) return { ok: false, error: "Kein Benutzer und Passwort hinterlegt" };
@@ -112,34 +142,71 @@ export async function anmelden(host, cred, timeout = 8000) {
     { pfad: "/api/login", praefix: "" }                        /* eigenständige Anwendung */
   ];
 
-  let letzte = null;
-  for (const w of wege) {
-    const r = await requestJson(`${baseUrl(host)}${w.pfad}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: { username: benutzer, password: passwort, rememberMe: false, remember: false },
-      timeout
-    });
-    letzte = r;
+  let abgelehnt = null, letzte = null;
+  for (const basis of basen(host)) {
+    for (const w of wege) {
+      const r = await requestJson(`${basis}${w.pfad}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: { username: benutzer, password: passwort, rememberMe: false, remember: false },
+        timeout
+      });
+      letzte = r;
 
-    if (r.ok) {
-      const keks = keksAus(r.headers);
-      if (!keks) return { ok: false, error: "Anmeldung angenommen, aber keine Sitzung ausgestellt", ms: r.ms };
-      const s = sitzung(host);
-      s.keks = keks; s.bis = Date.now() + SITZUNG_GILT; s.praefix = w.praefix; s.integration = false;
-      return { ok: true, praefix: w.praefix, benutzer, ms: r.ms };
+      if (r.ok) {
+        const keks = keksAus(r.headers);
+        if (!keks) return { ok: false, error: "Anmeldung angenommen, aber keine Sitzung ausgestellt", ms: r.ms };
+        const sit = sitzung(host);
+        sit.keks = keks; sit.bis = Date.now() + SITZUNG_GILT;
+        sit.basis = basis; sit.praefix = w.praefix; sit.integration = false;
+        return { ok: true, basis, praefix: w.praefix, benutzer, ms: r.ms };
+      }
+
+      const art = einordnen(r);
+      /* Ein zweiter Faktor lässt keinen Dienst herein — daran ändert
+         weder ein anderer Pfad noch ein anderer Anschluss etwas. */
+      if (art === "2fa")
+        return { ok: false, status: r.status, ms: r.ms,
+          error: "Das Konto verlangt eine Zwei-Faktor-Anmeldung — so kommt kein Dienst hinein." };
+      /* Kein Name, keine Antwort, Zeit abgelaufen: das ist eine Auskunft
+         über das Netz, nicht über den Pfad. Weitersuchen kostet nur die
+         Zeit, die schon verstrichen ist. */
+      if (art === "netz") return { ok: false, ms: r.ms, error: r.error };
+      /* Hier hört niemand — der nächste Anschluss ist dran. */
+      if (art === "port") break;
+      if (art === "daten") abgelehnt = r;
+      /* „weg": diesen Pfad gibt es hier nicht, der nächste ist dran. */
     }
-
-    /* Zwei Faktoren: der Controller sagt das im Rumpf, nicht im Code. */
-    if (/2fa|Ubic2fa/i.test(r.body || ""))
-      return { ok: false, status: r.status, ms: r.ms,
-        error: "Das Konto verlangt eine Zwei-Faktor-Anmeldung — so kommt kein Dienst hinein." };
-
-    if (r.status === 401 || r.status === 400 || r.status === 403)
-      return { ok: false, status: r.status, ms: r.ms, error: "Zugangsdaten abgelehnt" };
-    /* 404, HTML statt JSON, kein Anschluss: der nächste Weg ist dran. */
   }
+
+  if (abgelehnt)
+    return { ok: false, status: abgelehnt.status, ms: abgelehnt.ms, error: "Zugangsdaten abgelehnt" };
   return { ok: false, status: letzte?.status, ms: letzte?.ms, error: letzte?.error || "Anmeldung nicht möglich" };
+}
+
+/* ---------- Was eine Absage bedeutet ----------
+
+   Der Statuscode allein genügt hier nicht. Dieselbe 401 heißt bei UniFi
+   OS „Passwort falsch" und bei der eigenständigen Anwendung „diesen Pfad
+   kenne ich nicht, melde dich erst an" — und im zweiten Fall wäre es
+   grob falsch, jemandem sein Passwort vorzuwerfen. Unterscheidbar sind
+   die beiden nur am Rumpf:
+
+   - `api.err.LoginRequired` / `api.err.NoSiteContext` — der Wachposten
+     der klassischen Anwendung vor einem Pfad, den sie nicht kennt.
+   - `api.err.Invalid`, `AUTHENTICATION_FAILED` — die Zugangsdaten.
+   - eine HTML-Seite: die Weboberfläche, also erst recht kein Endpunkt. */
+const KEIN_WEG = /LoginRequired|NoSiteContext|api\.err\.Unknown|not found|<html/i;
+const FALSCHE_DATEN = /api\.err\.Invalid|api\.err\.LoginError|AUTHENTICATION_FAILED|invalid.{0,2}credential/i;
+
+export function einordnen(r) {
+  const rumpf = String(r?.body || "");
+  if (/2fa|Ubic2fa/i.test(rumpf)) return "2fa";
+  if (FALSCHE_DATEN.test(rumpf)) return "daten";
+  if (KEIN_WEG.test(rumpf) || r?.status === 404) return "weg";
+  if (r?.status === 401 || r?.status === 400 || r?.status === 403) return "daten";
+  if (!r?.status) return /abgewiesen/.test(r?.error || "") ? "port" : "netz";
+  return "weg";
 }
 
 /* Aus `set-cookie` wird das, was wieder hinausgeht. UniFi OS stellt
@@ -164,28 +231,46 @@ export async function ruf(host, cred, pfad, timeout = 8000) {
   const kopf = await kopfzeilen(host, cred, timeout);
   if (!kopf.ok) return kopf;
 
-  const praefixe = s.praefix != null ? [s.praefix] : PRAEFIXE;
+  /* Steht beides fest, ist es genau ein Versuch. Steht es noch nicht
+     fest, sind es die Kombinationen aus Anschluss und Präfix — einmal,
+     danach nie wieder. */
+  const ziele = [];
+  for (const b of (s.basis != null ? [s.basis] : basen(host)))
+    for (const p of (s.praefix != null ? [s.praefix] : PRAEFIXE)) ziele.push([b, p]);
+
   let letzte = null;
 
-  for (const p of praefixe) {
-    let r = await requestJson(`${baseUrl(host)}${p}${pfad}`, { headers: kopf.headers, timeout });
+  for (const [b, p] of ziele) {
+    let r = await requestJson(`${b}${p}${pfad}`, { headers: kopf.headers, timeout });
 
     /* Eine abgelaufene Sitzung ist kein Fehler, sondern der Anlass, sich
-       neu anzumelden — einmal, nicht in einer Schleife. */
+       neu anzumelden — einmal, nicht in einer Schleife. Die neue
+       Anmeldung weiß danach selbst, welcher Anschluss und welches Präfix
+       tragen; die Wiederholung folgt ihr. */
     if (r.status === 401 && kopf.art === "login") {
       s.keks = null;
       const neu = await anmelden(host, cred, timeout);
-      if (neu.ok) r = await requestJson(`${baseUrl(host)}${p}${pfad}`, { headers: { Cookie: s.keks }, timeout });
+      if (neu.ok) {
+        r = await requestJson(`${s.basis}${s.praefix}${pfad}`, { headers: { Cookie: s.keks }, timeout });
+        if (r.ok) return { ...r, pfad: `${s.praefix}${pfad}` };
+      }
     }
 
-    if (r.ok) { s.praefix = p; return { ...r, pfad: `${p}${pfad}` }; }
+    if (r.ok) { s.basis = b; s.praefix = p; return { ...r, pfad: `${p}${pfad}` }; }
     letzte = { ...r, pfad: `${p}${pfad}` };
-    /* Nur ein fehlender Endpunkt rechtfertigt den nächsten Versuch. Bei
-       einer abgelehnten Anmeldung stünde nebenan dieselbe Antwort. */
-    if (r.status !== 404 && r.status !== 502 && !/kein JSON/.test(r.error || "")) break;
+    /* Weiter geht es nur, solange die Antwort „hier nicht" heißt: ein
+       fehlender Endpunkt, eine Weboberfläche statt JSON, ein Anschluss,
+       an dem niemand horcht. Eine abgelehnte Anmeldung stünde nebenan
+       genauso — die ist das Ende. */
+    if (!naechstesZiel(r)) break;
   }
   return letzte || { ok: false, error: "kein Weg zum Controller" };
 }
+
+const naechstesZiel = r =>
+  r.status === 404 || r.status === 502
+  || /kein JSON/.test(r.error || "")
+  || (!r.status && /abgewiesen/.test(r.error || ""));
 
 async function kopfzeilen(host, cred, timeout) {
   const k = schluessel(cred);
@@ -276,16 +361,21 @@ export function befund(pfad, data) {
 }
 
 export function hintFor(r) {
+  if (/Zwei-Faktor/.test(r?.error || ""))
+    return "Für die Überwachung ein eigenes lokales Konto ohne zweiten Faktor anlegen. " + RECHTEHINWEIS;
   if (r?.status === 401 || r?.status === 400)
-    return "Die Anmeldung wird abgelehnt. " + RECHTEHINWEIS;
+    return "Die Zugangsdaten werden abgelehnt — beide Anmeldepfade wurden versucht, der von UniFi OS und der "
+      + "der eigenständigen Network Application. Es liegt also am Konto, nicht am Weg. " + RECHTEHINWEIS;
   if (r?.status === 403)
     return "Angemeldet, aber ohne Recht auf diese Site — dem Konto unter Settings → Admins & Users Zugriff auf "
       + "die Site geben (Rolle „Viewer“ genügt).";
   if (r?.status === 404)
-    return "Erreicht, aber kein UniFi-Endpunkt. Auf UniFi OS (Dream Machine, Cloud Key Gen2) ist es Port 443, "
-      + "bei einer selbst betriebenen Network Application Port 8443 — der gehört mit in die Adresse.";
+    return "Erreicht, aber kein UniFi-Endpunkt. Läuft dort wirklich der Controller — und nicht ein anderer "
+      + "Dienst auf demselben Anschluss?";
   if (/abgewiesen/.test(r?.error || ""))
-    return "Port prüfen: UniFi OS hört auf 443, die eigenständige Network Application auf 8443.";
+    return "Auf 443 und 8443 horcht niemand. UniFi OS (Dream Machine, Cloud Key Gen2) hört auf 443, die selbst "
+      + "betriebene Network Application auf 8443 — beide wurden versucht. Steht in der Adresse ein anderer "
+      + "Anschluss, gilt nur der.";
   return null;
 }
 

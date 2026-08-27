@@ -176,11 +176,13 @@ hosts:
       role: "Portainer CE" }
 
   # UniFi Network Controller: Zustand jedes Access Points, Kanalbelegung je
-  # Funkband, Clientzahlen. Der Port gehört in die Adresse — UniFi OS (Dream
-  # Machine, Cloud Key Gen2) antwortet auf 443, eine selbst betriebene
-  # Network Application auf 8443. Hinterlegt wird ein Konto mit der Rolle
-  # Viewer oder ein API-Schlüssel (Network 9+); mit beidem wird die
-  # klassische API bevorzugt, denn nur sie kennt die Funkzahlen.
+  # Funkband, Clientzahlen. Steht in der Adresse kein Port, werden 443
+  # (UniFi OS: Dream Machine, Cloud Key Gen2) und 8443 (selbst betriebene
+  # Network Application) versucht — wer einen Port hinschreibt, bekommt
+  # genau den. Hinterlegt wird ein lokales Konto mit der Rolle Viewer;
+  # bietet der Controller einen API-Schlüssel an (Network 9+, nicht überall),
+  # geht auch der. Mit beidem wird die klassische API bevorzugt, denn nur
+  # sie kennt die Funkzahlen.
   - { id: unifi-01, type: unifi, site: hq, ip: 10.10.6.10, url: "https://10.10.6.10",
       role: "UniFi Network Controller · WLAN" }
   - { id: ha-01, type: hass, site: hq, ip: 10.10.4.10, url: "https://10.10.4.10:8123",

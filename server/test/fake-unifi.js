@@ -7,8 +7,15 @@
    - **Zwei Bauarten.** UniFi OS (Dream Machine, Cloud Key Gen2) meldet
      unter `/api/auth/login` an und hängt alles Weitere unter
      `/proxy/network`; die eigenständige Network Application meldet unter
-     `/api/login` an und kennt kein Präfix. Wer das falsche wählt, bekommt
-     eine 404 — und die sieht aus wie ein defektes Gerät.
+     `/api/login` an und kennt kein Präfix.
+   - **Und zwei Arten, das abzulehnen.** UniFi OS antwortet auf einen
+     unbekannten Pfad mit 404. Die eigenständige Anwendung nicht: sie
+     schützt alles unter `/api/` mit demselben Wachposten und weist einen
+     Pfad, den sie nicht kennt — `/api/auth/login` etwa — mit **401 und
+     `api.err.LoginRequired`** ab. Das ist derselbe Statuscode wie bei
+     einem falschen Passwort, und genau darauf fiel der Sammler herein:
+     er hielt die 401 für eine Auskunft über die Zugangsdaten, brach ab
+     und versuchte `/api/login` nie.
    - **Zwei Anmeldungen.** Keks aus der Anmeldung oder API-Schlüssel im
      Kopf `X-API-KEY`.
    - **Zwei APIs.** Die klassische mit allen Zahlen und die
@@ -120,7 +127,12 @@ export function fakeUnifi(opt = {}) {
       });
       return;
     }
-    if (req.method === "POST") return json(res, 404, { message: "not found" });
+    /* Siehe oben: 404 nur bei UniFi OS. Die eigenständige Anwendung
+       schickt ihren Wachposten vor, nicht ihr Wegverzeichnis. */
+    if (req.method === "POST")
+      return unifios
+        ? json(res, 404, { message: "not found" })
+        : json(res, 401, { meta: { rc: "error", msg: "api.err.LoginRequired" } });
 
     /* ---- Präfix ---- */
     let pfad = u.pathname;

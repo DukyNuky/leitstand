@@ -91,7 +91,7 @@ export const TYPES = {
   mailcow:   { label: "Mailcow",              port: 443,  api: "mailcow",   zugang: "API-Schlüssel (Read-Only)" },
   adguard:   { label: "AdGuard Home",         port: 443,  api: "adguard",   zugang: "Benutzer und Passwort" },
   portainer: { label: "Portainer",            port: 9443, api: "portainer", zugang: "API-Token" },
-  unifi:     { label: "UniFi Controller",     port: 443,  api: "unifi",     zugang: "API-Schlüssel oder Benutzer und Passwort (Rolle Viewer)" },
+  unifi:     { label: "UniFi Controller",     port: 443,  api: "unifi",     zugang: "Benutzer und Passwort eines lokalen Kontos (Rolle Viewer) oder ein API-Schlüssel" },
   hass:      { label: "Home Assistant",       port: 8123, api: null },
   other:     { label: "Sonstiges",            port: 443,  api: null }
 };

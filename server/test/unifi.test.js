@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  collectUnifi, testConnection, sitzungVergessen, baseUrl, keksAus, funkmodule, geraet
+  collectUnifi, testConnection, sitzungVergessen, baseUrl, basen, einordnen, keksAus, funkmodule, geraet
 } from "../src/collectors/unifi.js";
 import { diagnoseHost } from "../src/diagnose.js";
 import { listen, close } from "./fake-dienste.js";
@@ -134,12 +134,45 @@ test("Eine neue Fassung ist eine Notiz, keine Farbe", async () => {
   assert.match(out.note, /1 Gerät\(e\) mit neuer Fassung/);
 });
 
-/* Beide Bauarten. Wer das Präfix falsch rät, bekommt eine 404 — und die
-   sieht aus wie ein defektes Gerät. */
+/* Beide Bauarten — und der Fall, an dem die Anmeldung am selbst
+   betriebenen Controller lange scheiterte: dort ist `/api/auth/login`
+   kein unbekannter Pfad mit einer 404, sondern eine 401 vom Wachposten
+   vor `/api/`. Wird die für ein falsches Passwort gehalten, wird
+   `/api/login` nie versucht — und der Leitstand meldet abgelehnte
+   Zugangsdaten, obwohl sie stimmen. */
 test("Die eigenständige Network Application wird ohne Präfix gefunden", async () => {
-  const out = await mitFake({ unifios: false }, h => collectUnifi(h, CRED));
-  assert.equal(out.aps, 3);
-  assert.equal(out.status, undefined);
+  await mitFake({ unifios: false }, async (h, server) => {
+    const out = await collectUnifi(h, CRED);
+    assert.equal(out.aps, 3);
+    assert.equal(out.status, undefined);
+    assert.ok(server.gesehen.includes("/api/auth/login"),
+      "der Weg über UniFi OS wird zuerst versucht");
+    assert.ok(server.gesehen.includes("/api/login"),
+      "und nach dessen 401 der Weg der eigenständigen Anwendung — sonst kommt hier niemand hinein");
+  });
+});
+
+/* Die Ablehnung muss trotzdem eine Ablehnung bleiben: wer beide Pfade
+   versucht, darf nicht jedes falsche Passwort als „Pfad nicht gefunden"
+   durchgehen lassen. */
+test("Am eigenständigen Controller bleibt ein falsches Passwort eine Ablehnung", async () => {
+  const out = await mitFake({ unifios: false }, h => collectUnifi(h, { user: "x", password: "y" }));
+  assert.equal(out.status, "warn");
+  assert.match(out.note, /abgelehnt/);
+});
+
+/* Der Kern der Unterscheidung, an den echten Antworten beider Bauarten.
+   Ein Statuscode allein trägt sie nicht: 401 steht auf beiden Seiten. */
+test("Eine Absage wird am Rumpf gelesen, nicht am Statuscode", () => {
+  const wachposten = { status: 401, body: JSON.stringify({ meta: { rc: "error", msg: "api.err.LoginRequired" } }) };
+  assert.equal(einordnen(wachposten), "weg", "der Wachposten vor einem unbekannten Pfad");
+  assert.equal(einordnen({ status: 400, body: JSON.stringify({ meta: { rc: "error", msg: "api.err.Invalid" } }) }), "daten");
+  assert.equal(einordnen({ status: 401, body: JSON.stringify({ code: "AUTHENTICATION_FAILED" }) }), "daten");
+  assert.equal(einordnen({ status: 401, body: "" }), "daten", "ohne Rumpf bleibt es bei der Auskunft des Codes");
+  assert.equal(einordnen({ status: 499, body: JSON.stringify({ code: "Ubic2faTokenRequired" }) }), "2fa");
+  assert.equal(einordnen({ status: 200, body: "<html><body>UniFi</body></html>" }), "weg", "die Weboberfläche ist kein Endpunkt");
+  assert.equal(einordnen({ error: "Verbindung abgewiesen — läuft die Oberfläche auf diesem Port?" }), "port");
+  assert.equal(einordnen({ error: "Zeitüberschreitung nach 8000 ms" }), "netz");
 });
 
 test("Mit einem API-Schlüssel wird zuerst die klassische API versucht", async () => {
@@ -250,6 +283,17 @@ test("Über die Integration-API sagt das Fazit, was dabei fehlt", async () => {
 test("Die Adresse kommt aus der url, sonst aus ip und Standardport", () => {
   assert.equal(baseUrl({ url: "https://10.0.0.1:8443/" }), "https://10.0.0.1:8443");
   assert.equal(baseUrl({ ip: "10.0.0.1" }), "https://10.0.0.1:443");
+});
+
+/* Welcher Anschluss gilt, ist von außen nicht zu sehen: UniFi OS hört auf
+   443, die selbst betriebene Anwendung auf 8443. Wer nur eine Adresse
+   einträgt, soll deshalb nicht an einem „Verbindung abgewiesen" hängen
+   bleiben — es sei denn, er hat den Anschluss selbst hingeschrieben. */
+test("Ohne Anschluss in der Adresse gelten 443 und 8443", () => {
+  assert.deepEqual(basen({ ip: "10.0.0.1" }), ["https://10.0.0.1:443", "https://10.0.0.1:8443"]);
+  assert.deepEqual(basen({ url: "https://unifi.lan" }), ["https://unifi.lan:443", "https://unifi.lan:8443"]);
+  assert.deepEqual(basen({ url: "https://unifi.lan:8443/" }), ["https://unifi.lan:8443"],
+    "wer 8443 hinschreibt, meint 8443 — dann wird nichts anderes probiert");
 });
 
 test("Aus set-cookie wird zurückgeschickt, was ausgestellt wurde", () => {

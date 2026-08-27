@@ -339,6 +339,9 @@ async function diagnoseUnifi(host, cred, bericht) {
 
   if (!key) {
     const an = await Uni.anmelden(host, cred, 8000);
+    /* Welcher Anschluss getragen hat, ist die halbe Auskunft: 443 und
+       8443 werden geprobt, und was geprobt wurde, gehört in den Bericht. */
+    if (an.ok && an.basis) bericht.ziel = an.basis;
     bericht.api.push({
       pfad: "/api/auth/login bzw. /api/login", zweck: "Anmeldung — UniFi OS und die eigenständige Anwendung melden unter verschiedenen Pfaden an",
       optional: false, ok: !!an.ok, status: an.status ?? null, ms: an.ms ?? null,
@@ -353,6 +356,7 @@ async function diagnoseUnifi(host, cred, bericht) {
 
   /* Welche Site — und über welche der beiden APIs. */
   const s = await Uni.siteWaehlen(host, cred, 8000);
+  bericht.ziel = Uni.baseUrl(host);
   bericht.api.push({
     pfad: s.api === "integration" ? "/integration/v1/sites" : "/api/self/sites",
     zweck: "welche Sites der Zugang sehen darf", optional: false,
