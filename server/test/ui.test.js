@@ -332,6 +332,78 @@ test("Ein Schalter im Formular überlebt das Einsammeln der Eingaben", async () 
   assert.equal(vm.runInContext("state.form.data.primary", sandbox), false);
 });
 
+/* Wer ein Gerät anlegt, sitzt Minuten in diesem Formular — und alle 15
+   Sekunden kam ein Zustand aus dem Netz und zeichnete die ganze Seite neu.
+   Das Formular überlebte das zwar (Eingaben werden gesichert), aber es
+   flackerte, der Bildlauf sprang nach oben und ein offenes Auswahlmenü war
+   weg. Solange ein Formular steht, bleibt die Seite darunter deshalb
+   unberührt; die Daten kommen trotzdem an und stehen beim nächsten
+   vollständigen Strich da. */
+test("Ein offenes Formular hält den Zustandsstrom von der Seite fern", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "verwaltung";
+  ui.render();
+
+  vm.runInContext(`openForm("hosts","new")`, sandbox);
+  assert.match(ziele.get("#overlays").innerHTML, /System anlegen/);
+
+  ziele.get("#wrap").innerHTML = "UNBERÜHRT";
+  ziele.get("#overlays").innerHTML = "RAHMEN";
+  ui.applyLive(zustand);                       /* der nächste Zustand aus dem Netz */
+
+  assert.equal(ziele.get("#wrap").innerHTML, "UNBERÜHRT",
+    "die Seite unter dem Formular darf nicht neu gezeichnet werden");
+  assert.equal(ziele.get("#overlays").innerHTML, "RAHMEN",
+    "die Schublade selbst schon gar nicht — mit ihr ginge das Auswahlmenü verloren");
+
+  /* Und der Zustand ist trotzdem angekommen: er stand nur nicht da. */
+  assert.equal(ui.state.hosts.length, zustand.hosts.length);
+
+  /* Erst das Schließen holt nach. */
+  vm.runInContext("state.form = null; render();", sandbox);
+  assert.notEqual(ziele.get("#wrap").innerHTML, "UNBERÜHRT",
+    "nach dem Schließen muss die Seite den neuesten Stand zeigen");
+});
+
+/* Ein Klick im Formular ändert das Formular, nicht die Seite darunter.
+   Nachgezogen werden deshalb nur Rumpf und Fuß der Schublade — ihr Rahmen
+   bleibt stehen, und damit auch die Einblendbewegung, die sonst bei jeder
+   Auswahl von vorn anfinge. */
+test("Eine Auswahl im Formular zeichnet nur die Schublade nach", async () => {
+  const zustand = await echterZustand();
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "verwaltung";
+  ui.render();
+
+  const knoten = sel => sandbox.document.querySelector(sel);
+  vm.runInContext(`openForm("hosts","new")`, sandbox);
+  knoten("#wrap").innerHTML = "UNBERÜHRT";
+  knoten("#overlays").innerHTML = "RAHMEN";
+  knoten(".inspector-body").innerHTML = "";
+  knoten(".inspector-foot").innerHTML = "";
+
+  /* Wie ein gewählter Typ: der Wert steht im Zustand, gezeichnet wird nach. */
+  vm.runInContext(`state.form.data.type = "adguard"; zeichneFormular();`, sandbox);
+
+  assert.equal(knoten("#wrap").innerHTML, "UNBERÜHRT",
+    "die Seite darunter geht die Auswahl nichts an");
+  assert.equal(knoten("#overlays").innerHTML, "RAHMEN",
+    "der Rahmen der Schublade bleibt stehen — sonst liefe die Einblendbewegung erneut");
+  assert.match(knoten(".inspector-body").innerHTML, /Zugangsdaten — AdGuard Home/,
+    "der Rumpf muss die Felder zum gewählten Typ zeigen");
+  assert.match(knoten(".inspector-foot").innerHTML, /data-action="form-save"/);
+
+  /* Ist das Formular zu — gerade gespeichert —, zeichnet dieselbe Funktion
+     die ganze Seite: dann ist sie wieder das Thema. */
+  vm.runInContext("state.form = null; zeichneFormular();", sandbox);
+  assert.notEqual(knoten("#wrap").innerHTML, "UNBERÜHRT");
+});
+
 /* Bei automatischem Redeploy läuft im Browser weiter das alte JavaScript,
    während der Dienst schon der neue ist. Genau das muss auffallen. */
 test("Ein neu ausgerollter Stand wird erkannt und gemeldet", async () => {

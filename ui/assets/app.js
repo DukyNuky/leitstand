@@ -4063,6 +4063,10 @@ const RENDERERS = { kurz:viewKurz, lage:viewLage, sites:viewSites, virt:viewVirt
 
 function render() {
   const scroll = $("#scroll") ? $("#scroll").scrollTop : 0;
+  /* Die Schublade hat einen eigenen Bildlauf — ein langes Systemformular
+     passt nicht auf einen Schirm. Ohne das hier stünde man nach jedem
+     Strich wieder oben. */
+  const lauf = $(".inspector-body") ? $(".inspector-body").scrollTop : 0;
 
   /* Ein offenes Formular darf eine Aktualisierung aus dem Netz überleben:
      Eingaben in den Zustand sichern, danach Fokus und Schreibmarke zurück. */
@@ -4092,6 +4096,7 @@ function render() {
       : (RENDERERS[state.view] || viewLage)();
   $("#overlays").innerHTML = renderInspector() + renderAdminForm() + renderPalette();
   if ($("#scroll")) $("#scroll").scrollTop = scroll;
+  if ($(".inspector-body")) $(".inspector-body").scrollTop = lauf;
   if (focus) {
     const el = $(focus.sel);
     if (el) { el.focus(); try { el.setSelectionRange(focus.pos, focus.pos); } catch {} }
@@ -4099,6 +4104,43 @@ function render() {
   sortierungAnwenden();
   const pq = $("#pq");
   if (pq) { pq.focus(); pq.setSelectionRange(pq.value.length, pq.value.length); }
+  /* Ein vollständiger Strich holt nach, was aufgeschoben war. */
+  aufschubSeit = 0;
+  aufgeschoben = false;
+}
+
+/* Nur die Schublade nachziehen.
+
+   Ein Klick im Formular ändert das Formular — nicht die Seite darunter.
+   Trotzdem hat bisher jeder Klick alles neu gezeichnet: Leiste, Kopf,
+   Inhalt und die Schublade selbst. Das war das Flackern beim Wählen eines
+   Typs, und nebenbei sprang der Bildlauf im Formular nach oben.
+
+   Nachgezogen werden deshalb nur Rumpf und Fuß. Der Rahmen der Schublade
+   bleibt stehen, mit ihm die Einblendbewegung. Ist gar kein Formular mehr
+   offen — gerade gespeichert —, zeichnet diese Funktion die ganze Seite:
+   dann ist die Seite darunter wieder das Thema, und sie ist inzwischen
+   mehrere Zustände alt. */
+function zeichneFormular() {
+  const f = state.form;
+  const rumpf = $(".inspector-body"), fuss = $(".inspector-foot");
+  if (!f || !f.open || !rumpf || !fuss) { render(); return; }
+
+  collectForm();
+  const a = document.activeElement;
+  const sel = a && a.dataset.field ? `[data-field="${a.dataset.field}"]`
+    : a && a.dataset.cred ? `[data-cred="${a.dataset.cred}"]` : null;
+  const pos = a ? a.selectionStart : null;
+  const lauf = rumpf.scrollTop;
+
+  rumpf.innerHTML = formRumpf(f);
+  fuss.innerHTML = formFuss(f);
+  rumpf.scrollTop = lauf;
+
+  if (sel) {
+    const el = rumpf.querySelector(sel);
+    if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch {} }
+  }
 }
 
 /* ---------- Spalten sortieren ----------
@@ -4241,7 +4283,7 @@ function sortierungAnwenden() {
   }
 }
 
-/* ---------- Neuzeichnen aus dem Netz: nicht mitten in eine Auswahl ----------
+/* ---------- Neuzeichnen aus dem Netz: nicht mitten in eine Eingabe ----------
 
    Alle 15 Sekunden kommt ein neuer Zustand und die Seite wird neu
    gezeichnet. Getippte Eingaben überleben das — `render` sichert sie und
@@ -4254,13 +4296,25 @@ function sortierungAnwenden() {
    Zurücksetzen lässt sich ein offenes Menü nicht; ein Browser öffnet es
    nur auf eine echte Geste hin. Aufgeschoben wird deshalb das Bild, nicht
    die Daten: die stehen bereits im Zustand, und der nächste Strich holt
-   sie ein. Sobald die Auswahl vorbei ist — Wert gewählt oder Fokus
-   weiter —, wird nachgezeichnet.
+   sie ein.
 
-   Die Obergrenze ist gegen den Fall, dass jemand ein Menü aufklappt und
-   weggeht: eine Überwachung, die stehenbleibt und dabei aktuell aussieht,
-   wäre das schlechtere Übel. Nur der Zustandsstrom wird aufgeschoben —
-   was der Benutzer selbst auslöst, zeichnet sofort. */
+   Das allein reichte nicht. Ein Menü zu schonen, hilft wenig, wenn der
+   nächste Zustand direkt danach zuschlägt: kaum war ein Typ gewählt,
+   zeichnete alles neu — die Schublade sprang in ihre Einblendbewegung
+   zurück, der Bildlauf nach oben. Wer ein Gerät anlegt, ist aber mehrere
+   Minuten in diesem Formular. Deshalb zwei Regeln statt einer:
+
+     · Solange ein Formular offen ist, zeichnet der Zustandsstrom die
+       Seite darunter **gar nicht** (`formularOffen`). Sie liegt hinter
+       einem Schleier; dort liest niemand Ampeln ab.
+     · Was der Benutzer im Formular selbst auslöst, zieht nur die
+       Schublade nach (`zeichneFormular`) — nicht Leiste, Kopf und
+       Inhalt.
+
+   Die Obergrenze gilt damit noch für den Fall ohne Formular: jemand
+   klappt ein Menü in einer Tabelle auf und geht weg. Eine Überwachung,
+   die stehenbleibt und dabei aktuell aussieht, wäre das schlechtere
+   Übel. */
 const AUFSCHUB_MAX = 120000;
 let aufschubSeit = 0, aufgeschoben = false;
 
@@ -4269,13 +4323,24 @@ function waehltGerade() {
   return !!a && String(a.tagName || "").toLowerCase() === "select";
 }
 
+/* Ein offenes Formular ist eine Arbeit, keine Anzeige. Solange es steht,
+   zeichnet der Zustandsstrom die Seite darunter gar nicht mehr — auch
+   nicht nach zwei Minuten, denn hier gilt der Einwand von oben nicht: die
+   Seite liegt hinter einem abgedunkelten Schleier, niemand liest dort
+   Ampeln ab. Was weiterläuft, ist die Fußzeile der Leiste (`markSource`,
+   außerhalb des Neuzeichnens): sie sagt weiter „Live · alle 15 s · 14:03",
+   und bleibt der Dienst weg, steht sie sofort auf Rot. Die Daten kommen
+   ohnehin an — nur ihr Bild wartet, bis das Formular zu ist. */
+function formularOffen() {
+  return !!(state.form && state.form.open);
+}
+
 function renderLive(jetzt = false) {
+  if (!jetzt && formularOffen()) { aufgeschoben = true; return; }
   if (!jetzt && waehltGerade()) {
     if (!aufschubSeit) aufschubSeit = Date.now();
     if (Date.now() - aufschubSeit < AUFSCHUB_MAX) { aufgeschoben = true; return; }
   }
-  aufschubSeit = 0;
-  aufgeschoben = false;
   render();
 }
 
@@ -4287,13 +4352,13 @@ function renderLive(jetzt = false) {
    die Adressen aus dem gewählten Peer. Ohne das stünde dort bis zum
    nächsten Zustand aus dem Netz die Antwort auf die vorige Frage. */
 document.addEventListener("change", ev => {
-  if (state.form?.open && ev.target?.dataset?.field) { renderLive(true); return; }
+  if (formularOffen()) { if (ev.target?.dataset?.field) zeichneFormular(); return; }
   if (aufgeschoben) renderLive(true);
 });
 /* `focusout` statt `blur`: nur das steigt auf und ist von hier zu hören.
    Der Umweg über die Ereigniswarteschlange, damit erst der Fokus steht
    und dann gezeichnet wird. */
-document.addEventListener("focusout", () => { if (aufgeschoben) setTimeout(() => renderLive(true), 0); });
+document.addEventListener("focusout", () => { if (aufgeschoben && !formularOffen()) setTimeout(() => renderLive(true), 0); });
 
 /* Die Adresszeile trägt die Ansicht — und bei der Detailseite auch den
    Gegenstand. Damit ist ein einzelnes System verlinkbar und der Zurück-
@@ -4477,7 +4542,7 @@ document.addEventListener("click", ev => {
       const f = state.form; if (!f) break;
       collectForm();
       f.data[el.dataset.field] = !f.data[el.dataset.field];
-      render(); break;
+      zeichneFormular(); break;
     }
     /* Auf, ab, gar nicht. Die dritte Runde stellt die Ordnung der Ansicht
        wieder her — und die ist meist die nach Dringlichkeit, also die
@@ -4491,13 +4556,13 @@ document.addEventListener("click", ev => {
       const liste = new Set(f.data.pruef || []);
       if (liste.has(el.dataset.id)) liste.delete(el.dataset.id); else liste.add(el.dataset.id);
       f.data.pruef = [...liste];
-      render(); break;
+      zeichneFormular(); break;
     }
     case "form-set": {
       const f = state.form; if (!f) break;
       collectForm();
       f.data[el.dataset.field] = el.dataset.value;
-      render(); break;
+      zeichneFormular(); break;
     }
     case "form-test": formTest(); break;
     case "form-save": formSave(); break;
@@ -4720,7 +4785,9 @@ async function loadAdmin() {
        verlorengehen — nur ein ausdrückliches „Verwerfen" holt neu. */
     if (!state.rawLinks) state.rawLinks = inv.links || [];
     state.adminLoaded = true;
-    render();
+    /* Steht ein Formular offen, gilt dasselbe wie für den Zustandsstrom:
+       nur die Schublade, die Seite darunter wartet. */
+    if (formularOffen()) zeichneFormular(); else render();
   } catch (e) { console.warn("Verwaltung nicht ladbar:", e.message); }
 }
 
@@ -4870,28 +4937,28 @@ function formPayload() {
 async function formTest() {
   collectForm();
   const f = state.form;
-  f.busy = true; f.error = null; render();
+  f.busy = true; f.error = null; zeichneFormular();
   try {
     const cred = {};
     for (const [k, v] of Object.entries(f.cred || {})) if (v) cred[k] = v;
     f.test = await window.LEITSTAND.call("POST", "/api/admin/test", { ...formPayload(), credentials: Object.keys(cred).length ? cred : undefined });
   } catch (e) { f.error = e.message; }
-  f.busy = false; render();
+  f.busy = false; zeichneFormular();
 }
 
 async function formSave() {
   collectForm();
   const f = state.form;
-  if (!f.data.id) { f.error = "Kennung fehlt."; render(); return; }
+  if (!f.data.id) { f.error = "Kennung fehlt."; zeichneFormular(); return; }
   if (f.kind === "hosts" && f.data.checksEigen
       && !(f.data.pruef || []).length && !portListe(f.data.pruefPorts).length && !(f.data.pruefRest || []).length) {
     f.error = "Es ist keine Prüfung angehakt. Ein System ohne Prüfung wäre keine Überwachung, sondern ein Eintrag "
       + "in einer Liste — mindestens eine anhaken, oder den Schalter „Prüfungen selbst festlegen“ ausschalten.";
-    render(); return;
+    zeichneFormular(); return;
   }
   if (f.kind === "tunnels" && !String(f.data.probeIp || "").trim() && !f.data.peerRef && !f.data.peerBRef) {
     f.error = "Ohne Gegenstelle im Tunnel und ohne verknüpften Peer gäbe es nichts zu messen — eines von beidem muss sein.";
-    render(); return;
+    zeichneFormular(); return;
   }
   if (f.kind === "sites") {
     /* Vier Stellen, Land + Stadt. Gleich hier prüfen: eine Fehlermeldung
@@ -4899,12 +4966,12 @@ async function formSave() {
     const k = String(f.data.short || "").trim().toUpperCase();
     if (!KUERZEL.test(k)) {
       f.error = "Das Kürzel muss vier Stellen haben: Land + Stadt, z. B. DEKO für Deutschland/Köln.";
-      render(); return;
+      zeichneFormular(); return;
     }
     f.data.short = k;
   }
-  if (!LIVE()) { f.error = "Kein Dienst erreichbar — nichts gespeichert."; render(); return; }
-  f.busy = true; f.error = null; render();
+  if (!LIVE()) { f.error = "Kein Dienst erreichbar — nichts gespeichert."; zeichneFormular(); return; }
+  f.busy = true; f.error = null; zeichneFormular();
   try {
     const id = String(f.data.id);
     const path = `/api/admin/${f.kind}` + (f.mode === "edit" ? `/${encodeURIComponent(id)}` : "");
@@ -4932,7 +4999,7 @@ async function formSave() {
     toast("Gespeichert", `${id} — die Prüfung läuft im Hintergrund.`, "ok");
     state.form = null;
   } catch (e) { f.error = e.message; f.busy = false; }
-  render();
+  zeichneFormular();
 }
 
 /* ---------- Startseite: Bearbeiten ----------
@@ -5931,14 +5998,44 @@ function schwellenFelder(inp, d) {
   </div>`;
 }
 
+/* Kopf, Rumpf und Fuß getrennt — damit ein Klick im Formular nicht die
+   ganze Schublade neu aufbauen muss. Sie hat eine Einblendbewegung, einen
+   eigenen Bildlauf und den Fokus in einem Feld; wird ihr Knoten ersetzt,
+   fängt die Bewegung von vorn an, der Bildlauf springt nach oben und ein
+   aufgeklapptes Menü ist weg. Nachgezogen wird deshalb nur, was sich
+   überhaupt ändern kann: Rumpf und Fuß (siehe `zeichneFormular`). */
+function formTitel(f) {
+  return f.mode === "new"
+    ? (f.kind === "hosts" ? "System anlegen" : f.kind === "sites" ? "Standort anlegen" : "Tunnel anlegen")
+    : `${esc(f.data.id)} bearbeiten`;
+}
+
 function renderAdminForm() {
   const f = state.form;
   if (!f || !f.open) return "";
+  const title = formTitel(f);
+  return `<div class="scrim" data-action="form-close"></div>
+  <aside class="inspector" role="dialog" aria-label="${esc(title)}">
+    <div class="inspector-head">
+      <div style="min-width:0"><div class="view-kicker">Verwaltung</div><h2 style="font-size:17px">${title}</h2></div>
+      <div class="spacer"></div>
+      <button class="btn btn--ghost" data-action="form-close" aria-label="Schließen">✕</button>
+    </div>
+    <div class="inspector-body">${formRumpf(f)}</div>
+    <div class="inspector-foot">${formFuss(f)}</div>
+  </aside>`;
+}
+
+/* Der Fuß ändert sich nur, während etwas läuft. */
+function formFuss(f) {
+  return `<button class="btn btn--primary" data-action="form-save" ${f.busy ? "disabled" : ""}>${f.busy ? "…" : "Speichern"}</button>
+      ${f.kind === "hosts" ? `<button class="btn" data-action="form-test" ${f.busy ? "disabled" : ""}>Verbindung testen</button>` : ""}
+      <button class="btn" data-action="form-close">Abbrechen</button>`;
+}
+
+function formRumpf(f) {
   const d = f.data;
   const isHost = f.kind === "hosts", isSite = f.kind === "sites", isTun = f.kind === "tunnels";
-  const title = f.mode === "new"
-    ? (isHost ? "System anlegen" : isSite ? "Standort anlegen" : "Tunnel anlegen")
-    : `${esc(d.id)} bearbeiten`;
 
   const inp = (key, label, hint, opts = {}) => `<label class="admin-field">
     <span class="admin-label">${esc(label)}${opts.req ? ' <span style="color:var(--crit)">*</span>' : ""}</span>
@@ -6018,15 +6115,7 @@ function renderAdminForm() {
   }
 
   const t = f.test;
-  return `<div class="scrim" data-action="form-close"></div>
-  <aside class="inspector" role="dialog" aria-label="${esc(title)}">
-    <div class="inspector-head">
-      <div style="min-width:0"><div class="view-kicker">Verwaltung</div><h2 style="font-size:17px">${title}</h2></div>
-      <div class="spacer"></div>
-      <button class="btn btn--ghost" data-action="form-close" aria-label="Schließen">✕</button>
-    </div>
-    <div class="inspector-body">
-      ${f.error ? `<div class="row" style="gap:8px;align-items:flex-start;color:var(--crit)">${dot("crit")}<span style="font-size:13px;white-space:pre-line">${esc(f.error)}</span></div>` : ""}
+  return `${f.error ? `<div class="row" style="gap:8px;align-items:flex-start;color:var(--crit)">${dot("crit")}<span style="font-size:13px;white-space:pre-line">${esc(f.error)}</span></div>` : ""}
       ${body}
       ${t ? `<div>
         <div class="sec-title">Ergebnis der Prüfung</div>
@@ -6044,12 +6133,5 @@ function renderAdminForm() {
               <span>${esc(t.api.detail)}${t.api.hint ? `<br><span class="faint">${esc(t.api.hint)}</span>` : ""}</span>
             </div>` : ""}
         </div></div>
-      </div>` : ""}
-    </div>
-    <div class="inspector-foot">
-      <button class="btn btn--primary" data-action="form-save" ${f.busy ? "disabled" : ""}>${f.busy ? "…" : "Speichern"}</button>
-      ${isHost ? `<button class="btn" data-action="form-test" ${f.busy ? "disabled" : ""}>Verbindung testen</button>` : ""}
-      <button class="btn" data-action="form-close">Abbrechen</button>
-    </div>
-  </aside>`;
+      </div>` : ""}`;
 }
