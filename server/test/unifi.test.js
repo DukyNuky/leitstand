@@ -12,7 +12,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  collectUnifi, testConnection, sitzungVergessen, baseUrl, basen, einordnen, keksAus, funkmodule, geraet
+  collectUnifi, testConnection, sitzungVergessen, baseUrl, basen, einordnen, keksAus, funkmodule, geraet,
+  anmelden, keksVerbinden, istSitzung
 } from "../src/collectors/unifi.js";
 import { diagnoseHost } from "../src/diagnose.js";
 import { listen, close } from "./fake-dienste.js";
@@ -159,6 +160,85 @@ test("Am eigenständigen Controller bleibt ein falsches Passwort eine Ablehnung"
   const out = await mitFake({ unifios: false }, h => collectUnifi(h, { user: "x", password: "y" }));
   assert.equal(out.status, "warn");
   assert.match(out.note, /abgelehnt/);
+});
+
+/* Der Fall, der eine Fehlersuche gekostet hat: die Zugangsdaten
+   stimmen — dieselben, mit denen man sich in der Weboberfläche anmeldet
+   — und der Controller weist sie trotzdem ab. Neuere Fassungen nehmen
+   einen POST nur an, wenn er aussieht, als käme er von ihrer eigenen
+   Seite: mit `Origin` und dem `csrf_token`, das die Anmeldeseite
+   ausstellt. Ein Browser schickt beides von selbst mit, ein Dienst muss
+   es sagen. Fehlt es, kommt dieselbe Absage wie bei einem falschen
+   Passwort — und der Leitstand warf jemandem sein Passwort vor, während
+   es stimmte. */
+test("Verlangt der Controller Herkunft und CSRF-Token, kommt die Anmeldung trotzdem durch", async () => {
+  await mitFake({ unifios: false, csrfPflicht: true }, async (h, server) => {
+    const out = await collectUnifi(h, CRED);
+    assert.equal(out.aps, 3, "die Anmeldung muss durchkommen, nicht scheitern");
+    assert.equal(out.status, undefined);
+    assert.ok(server.gesehen.includes("/"),
+      "die Anmeldeseite wird geholt — dort liegt das csrf_token, ohne das der POST abgewiesen wird");
+  });
+});
+
+/* Ein falsches Passwort bleibt auch dann falsch, wenn die Herkunft
+   stimmt — sonst hätte der Griff nach der Anmeldeseite nur die Absage
+   verschoben. */
+test("Mit Herkunft und Token bleibt ein falsches Passwort abgelehnt", async () => {
+  const out = await mitFake({ unifios: false, csrfPflicht: true },
+    h => collectUnifi(h, { user: UNIFI_USER, password: "falsch" }));
+  assert.equal(out.status, "warn");
+  assert.match(out.note, /abgelehnt/);
+});
+
+/* Manche Fassungen beantworten die geglückte Anmeldung mit einer
+   Umleitung auf die Oberfläche und legen die Sitzung trotzdem bei. Wer
+   nur auf 200 wartet, wirft einen gültigen Keks weg und meldet einen
+   Fehler, den es nicht gibt. */
+test("Eine Anmeldung, die mit einer Umleitung endet, ist trotzdem eine Anmeldung", async () => {
+  const out = await mitFake({ unifios: false, umleitung: true }, h => collectUnifi(h, CRED));
+  assert.equal(out.aps, 3);
+  assert.equal(out.status, undefined);
+});
+
+/* Eine Absage ohne Grund ist eine halbe Auskunft. Was der Controller
+   selbst dazu sagt, gehört in die Meldung — daran hängt, ob man beim
+   Konto sucht oder beim Weg. */
+test("Eine abgelehnte Anmeldung nennt den Grund, den der Controller angibt", async () => {
+  await mitFake({ unifios: false }, async h => {
+    const an = await anmelden(h, { user: "x", password: "y" });
+    assert.equal(an.ok, false);
+    assert.match(an.error, /api\.err\.Invalid/, "der Satz aus dem Rumpf, nicht nur „abgelehnt“");
+    assert.ok(an.versuche.length >= 2, "jeder Versuch steht mit Adresse, Pfad und Code darin");
+    assert.ok(an.versuche.some(v => v.pfad === "/api/auth/login" && v.art === "weg"));
+    assert.ok(an.versuche.some(v => v.pfad === "/api/login" && v.art === "daten"));
+  });
+});
+
+/* Und in der Diagnose steht dasselbe sichtbar: ohne die Rohantwort ließe
+   sich „das Konto wird abgelehnt“ nicht von „so nimmt der Controller
+   keine Anfrage an“ unterscheiden. */
+test("Die Diagnose zeigt, was der Controller auf jeden Anmeldeversuch geantwortet hat", async () => {
+  await mitFake({ unifios: false }, async h => {
+    const b = await diagnoseHost(h, { user: "x", password: "y" });
+    const an = b.api.find(a => /login/.test(a.pfad));
+    assert.equal(an.ok, false);
+    assert.match(an.antwort, /api\.err\.Invalid/);
+    assert.match(an.antwort, /api\/login/, "welcher Pfad die Absage gab, steht dabei");
+  });
+});
+
+/* Was zusammengehört, ergibt die Sitzung: das Token von der
+   Anmeldeseite und der Keks aus der Anmeldung. Fällt eines davon unter
+   den Tisch, scheitert der erste Abruf statt der Anmeldung — und der
+   Fehler stünde an der falschen Stelle. */
+test("Vorab-Keks und Anmelde-Keks ergeben zusammen die Sitzung", () => {
+  assert.equal(keksVerbinden("csrf_token=vorab", "unifises=abc; csrf_token=neu"),
+    "csrf_token=neu; unifises=abc", "bei gleichem Namen gilt das Neuere");
+  assert.equal(keksVerbinden(null, "TOKEN=x"), "TOKEN=x");
+  assert.equal(keksVerbinden(null, null), null);
+  assert.equal(istSitzung("csrf_token=vorab"), false, "ein CSRF-Token allein ist keine Sitzung");
+  assert.equal(istSitzung("csrf_token=v; unifises=abc"), true);
 });
 
 /* Der Kern der Unterscheidung, an den echten Antworten beider Bauarten.

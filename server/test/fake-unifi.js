@@ -22,7 +22,15 @@
      Integration-API mit einem Ausschnitt. `nurIntegration` stellt den
      Fall nach, dass der Schlüssel nur diese trägt.
    - **Zwei Faktoren.** Ein Konto mit 2FA lehnt die Anmeldung mit einer
-     Meldung ab, die nur im Rumpf steht, nicht im Statuscode. */
+     Meldung ab, die nur im Rumpf steht, nicht im Statuscode.
+   - **Und zwei Eigenheiten neuerer Fassungen.** `csrfPflicht` nimmt einen
+     POST nur an, wenn er aussieht, als käme er von der eigenen Seite:
+     mit `Origin` und dem `csrf_token`, das die Anmeldeseite ausstellt.
+     Fehlt eines von beiden, kommt **dieselbe Absage wie bei einem
+     falschen Passwort** — der Fall, in dem der Leitstand jemandem sein
+     Passwort vorwarf, während es stimmte. `umleitung` beantwortet die
+     geglückte Anmeldung mit einer 302 auf die Oberfläche und legt die
+     Sitzung trotzdem bei; wer nur auf 200 wartet, wirft sie weg. */
 
 import http from "node:http";
 
@@ -30,6 +38,7 @@ export const UNIFI_USER = "leitstand";
 export const UNIFI_PASS = "geheim";
 export const UNIFI_KEY = "uni_9f8e7d6c5b4a";
 export const SITE_ID = "f1e2d3c4b5a6";       /* Kennung der Integration-API */
+const CSRF_VORAB = "vorab-token";            /* was die Anmeldeseite ausstellt */
 
 function json(res, code, data, kopf = {}) {
   const b = JSON.stringify(data);
@@ -91,6 +100,8 @@ export function fakeUnifi(opt = {}) {
     unifios = true,               /* UniFi OS mit Präfix /proxy/network */
     nurIntegration = false,       /* der Schlüssel trägt nur die Integration-API */
     zweiFaktoren = false,
+    csrfPflicht = false,          /* POST nur mit Origin und csrf_token */
+    umleitung = false,            /* geglückte Anmeldung antwortet mit 302 */
     version = "9.0.114",
     sites = [{ name: "default", desc: "Zuhause" }],
     geraeteliste = null,
@@ -119,11 +130,20 @@ export function fakeUnifi(opt = {}) {
         try { b = JSON.parse(roh || "{}"); } catch {}
         if (zweiFaktoren)
           return json(res, 499, { code: "Ubic2faTokenRequired", message: "2fa required" });
+        /* Die Herkunftsprüfung kommt vor der Prüfung des Passworts —
+           und sie antwortet genauso. Von außen ist beides dieselbe
+           Absage. */
+        if (csrfPflicht && (req.headers["x-csrf-token"] !== CSRF_VORAB || !req.headers.origin))
+          return json(res, unifios ? 401 : 400, { meta: { rc: "error", msg: "api.err.Invalid" } });
         if (b.username !== UNIFI_USER || b.password !== UNIFI_PASS)
           return json(res, unifios ? 401 : 400, { meta: { rc: "error", msg: "api.err.Invalid" } });
         const name = unifios ? "TOKEN" : "unifises";
-        return json(res, 200, { meta: { rc: "ok" }, data: [] },
-          { "set-cookie": [`${name}=abc123; Path=/; HttpOnly`, "csrf_token=xyz; Path=/"] });
+        const kekse = [`${name}=abc123; Path=/; HttpOnly`, "csrf_token=xyz; Path=/"];
+        if (umleitung) {
+          res.writeHead(302, { location: "/manage", "set-cookie": kekse, "content-type": "text/html" });
+          return res.end("<html><body>Found</body></html>");
+        }
+        return json(res, 200, { meta: { rc: "ok" }, data: [] }, { "set-cookie": kekse });
       });
       return;
     }
@@ -133,6 +153,14 @@ export function fakeUnifi(opt = {}) {
       return unifios
         ? json(res, 404, { message: "not found" })
         : json(res, 401, { meta: { rc: "error", msg: "api.err.LoginRequired" } });
+
+    /* ---- Die Anmeldeseite ----
+       Ein Browser holt sie, bevor er sich anmeldet, und bekommt dabei
+       das csrf_token. Ein Dienst, der sie nie holt, hat es nicht. */
+    if (u.pathname === "/" && csrfPflicht) {
+      res.writeHead(200, { "content-type": "text/html", "set-cookie": [`csrf_token=${CSRF_VORAB}; Path=/`] });
+      return res.end("<html><body>UniFi</body></html>");
+    }
 
     /* ---- Präfix ---- */
     let pfad = u.pathname;

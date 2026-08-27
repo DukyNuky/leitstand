@@ -14,6 +14,10 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY server/src ./src
 COPY ui ./ui
+# Werkzeuge für die Fehlersuche am laufenden Behälter. Sie werden nie
+# selbst ausgeführt, sondern von Hand aufgerufen — und dort gebraucht,
+# wo das Problem ist: im Netz des Behälters, nicht auf dem Entwicklungsrechner.
+COPY server/tools ./tools
 # Dient beim ersten Start als Vorlage für /data/inventory.yaml
 COPY server/inventory.yaml ./inventory.yaml
 

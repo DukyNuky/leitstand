@@ -49,6 +49,22 @@
    hält, versucht `/api/login` nie und meldet jemandem, sein Passwort sei
    falsch, während es stimmt. Was zählt, steht im Rumpf, nicht im Code.
 
+   ## Und wie die Anmeldung abgeschickt wird
+
+   Neuere Fassungen nehmen einen POST nur an, wenn er aussieht, als käme
+   er von ihrer eigenen Seite: mit `Referer`, `Origin` und dem
+   `csrf_token`, das die Anmeldeseite als Keks ausstellt. Ein Browser
+   schickt das von selbst mit, ein Dienst muss es sagen. Fehlt es, kommt
+   dieselbe Absage wie bei einem falschen Passwort — und dann steht hier
+   „Zugangsdaten abgelehnt", während dieselben Daten in der
+   Weboberfläche anstandslos hineinkommen. Deshalb wird erst die
+   Anmeldeseite geholt und dann mit dem angemeldet, was sie mitgibt.
+
+   Umgekehrt gilt: eine geglückte Anmeldung antwortet nicht immer mit
+   200. Manche Fassungen leiten auf die Oberfläche um und legen die
+   Sitzung trotzdem bei. Was zählt, ist der ausgestellte Sitzungskeks,
+   nicht der Statuscode.
+
    ## Was hier bewusst nicht gelesen wird
 
    Die **Clientliste**. `/stat/sta` nennt jedes Gerät im WLAN mit MAC,
@@ -142,36 +158,63 @@ export async function anmelden(host, cred, timeout = 8000) {
     { pfad: "/api/login", praefix: "" }                        /* eigenständige Anwendung */
   ];
 
+  /* Jeder Versuch wird mitgeschrieben: Adresse, Pfad, Statuscode und der
+     Anfang der Antwort. Ohne das steht am Ende nur „abgelehnt" da, und
+     die Frage, ob der Controller das Konto oder die Form der Anfrage
+     meint, bliebe unbeantwortet — genau die, auf die es ankommt. */
+  const versuche = [];
   let abgelehnt = null, letzte = null;
+
   for (const basis of basen(host)) {
+    /* Was ein Browser vor dem Anmeldeformular tut: die Seite holen. Was
+       dabei an Keksen anfällt — bei den meisten Fassungen ein
+       `csrf_token` — gehört zur Anmeldung dazu. */
+    const vor = await vorlauf(basis, Math.min(timeout, 4000));
+
     for (const w of wege) {
       const r = await requestJson(`${basis}${w.pfad}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: anmeldeKopf(basis, vor),
         body: { username: benutzer, password: passwort, rememberMe: false, remember: false },
         timeout
       });
       letzte = r;
 
-      if (r.ok) {
-        const keks = keksAus(r.headers);
-        if (!keks) return { ok: false, error: "Anmeldung angenommen, aber keine Sitzung ausgestellt", ms: r.ms };
+      /* Erst die Kekse, dann der Statuscode. Eine geglückte Anmeldung
+         beantworten manche Fassungen mit einer Umleitung auf die
+         Oberfläche (302) und legen die Sitzung trotzdem bei; wer nur auf
+         200 wartet, wirft sie weg und meldet einen Fehler, den es nicht
+         gibt. Was zählt, ist der ausgestellte Sitzungskeks. */
+      const keks = keksVerbinden(vor.keks, keksAus(r.headers));
+      const geglueckt = istSitzung(keks) && (r.status == null || r.status < 400);
+      versuche.push({
+        basis, pfad: w.pfad, status: r.status ?? null, ms: r.ms ?? null,
+        art: geglueckt ? "ok" : einordnen(r),
+        antwort: kurzerRumpf(r.body) || r.error || null
+      });
+
+      if (geglueckt) {
         const sit = sitzung(host);
         sit.keks = keks; sit.bis = Date.now() + SITZUNG_GILT;
         sit.basis = basis; sit.praefix = w.praefix; sit.integration = false;
-        return { ok: true, basis, praefix: w.praefix, benutzer, ms: r.ms };
+        return { ok: true, basis, praefix: w.praefix, benutzer, ms: r.ms, versuche };
       }
+      /* Angenommen, aber ohne Sitzung — daran ändert kein anderer Pfad
+         etwas. Eine Umleitung zählt hier nicht als Annahme: die führt
+         zur Anmeldeseite, nicht hinein. */
+      if (r.ok && (r.status ?? 200) < 300)
+        return { ok: false, error: "Anmeldung angenommen, aber keine Sitzung ausgestellt", ms: r.ms, versuche };
 
       const art = einordnen(r);
       /* Ein zweiter Faktor lässt keinen Dienst herein — daran ändert
          weder ein anderer Pfad noch ein anderer Anschluss etwas. */
       if (art === "2fa")
-        return { ok: false, status: r.status, ms: r.ms,
+        return { ok: false, status: r.status, ms: r.ms, versuche,
           error: "Das Konto verlangt eine Zwei-Faktor-Anmeldung — so kommt kein Dienst hinein." };
       /* Kein Name, keine Antwort, Zeit abgelaufen: das ist eine Auskunft
          über das Netz, nicht über den Pfad. Weitersuchen kostet nur die
          Zeit, die schon verstrichen ist. */
-      if (art === "netz") return { ok: false, ms: r.ms, error: r.error };
+      if (art === "netz") return { ok: false, ms: r.ms, error: r.error, versuche };
       /* Hier hört niemand — der nächste Anschluss ist dran. */
       if (art === "port") break;
       if (art === "daten") abgelehnt = r;
@@ -179,9 +222,88 @@ export async function anmelden(host, cred, timeout = 8000) {
     }
   }
 
-  if (abgelehnt)
-    return { ok: false, status: abgelehnt.status, ms: abgelehnt.ms, error: "Zugangsdaten abgelehnt" };
-  return { ok: false, status: letzte?.status, ms: letzte?.ms, error: letzte?.error || "Anmeldung nicht möglich" };
+  /* Der Grund aus dem Rumpf steht mit in der Meldung. „api.err.Invalid"
+     heißt Konto; alles andere heißt, dass die Absage nicht von den
+     Zugangsdaten handelt — und das darf nicht als Passwortfehler
+     erscheinen. */
+  if (abgelehnt) {
+    const grund = grundVon(abgelehnt);
+    return { ok: false, status: abgelehnt.status, ms: abgelehnt.ms, versuche,
+      error: `Zugangsdaten abgelehnt (${abgelehnt.status}${grund ? ", " + grund : ""})` };
+  }
+  return { ok: false, status: letzte?.status, ms: letzte?.ms, versuche, error: letzte?.error || "Anmeldung nicht möglich" };
+}
+
+/* Die Anmeldung so absenden, wie die eigene Oberfläche es täte.
+
+   Neuere Fassungen der Network Application prüfen bei jedem POST, ob die
+   Anfrage von ihrer eigenen Seite kommt: `Referer`, `Origin` und das
+   `csrf_token` aus dem Keks. Ein Browser schickt das von selbst mit, ein
+   Dienst muss es sagen. Fehlt es, wird eine richtige Anmeldung mit
+   derselben 401 abgewiesen wie eine falsche — und dann steht im
+   Leitstand „Zugangsdaten abgelehnt", während dieselben Daten in der
+   Weboberfläche anstandslos hineinkommen. Ältere Fassungen stören sich
+   an keinem der drei Köpfe. */
+function anmeldeKopf(basis, vor) {
+  return {
+    "content-type": "application/json",
+    referer: `${basis}/login`,
+    origin: basis,
+    ...(vor?.keks ? { Cookie: vor.keks } : {}),
+    ...(vor?.csrf ? { "x-csrf-token": vor.csrf } : {})
+  };
+}
+
+/* Der Griff nach der Anmeldeseite, bevor angemeldet wird. Schlägt er
+   fehl, ist das kein Grund aufzuhören: die Anmeldung selbst sagt gleich
+   genauer, woran es liegt. */
+async function vorlauf(basis, timeout) {
+  const r = await requestJson(`${basis}/`, { timeout });
+  const keks = keksAus(r?.headers);
+  return { keks, csrf: csrfAus(keks) };
+}
+
+/* UniFi OS legt das CSRF-Token in den JWT des `TOKEN`-Kekses, die
+   eigenständige Anwendung in einen eigenen Keks gleichen Namens. */
+export function csrfAus(keks) {
+  const eigen = /(?:^|;\s*)csrf_token=([^;]+)/.exec(keks || "");
+  if (eigen) return eigen[1];
+  const t = /(?:^|;\s*)TOKEN=([^;]+)/.exec(keks || "");
+  if (!t) return null;
+  try {
+    const rumpf = JSON.parse(Buffer.from(String(t[1]).split(".")[1] || "", "base64").toString("utf8"));
+    return rumpf.csrfToken || rumpf.csrf_token || null;
+  } catch { return null; }
+}
+
+/* Ein `csrf_token` allein ist keine Sitzung — die heißt `TOKEN` (UniFi
+   OS) oder `unifises` (eigenständige Anwendung). */
+export const istSitzung = keks => /(?:^|;\s*)(?:TOKEN|unifises)=/.test(keks || "");
+
+/* Was vor der Anmeldung galt und was sie ausgestellt hat, ergeben
+   zusammen die Sitzung; bei gleichem Namen gilt das Neuere. */
+export function keksVerbinden(alt, neu) {
+  const paare = new Map();
+  for (const teil of [alt, neu])
+    for (const z of String(teil || "").split(";")) {
+      const s = z.trim();
+      const i = s.indexOf("=");
+      if (i > 0) paare.set(s.slice(0, i), s.slice(i + 1));
+    }
+  return paare.size ? [...paare].map(([k, v]) => `${k}=${v}`).join("; ") : null;
+}
+
+const kurzerRumpf = t => (t ? String(t).replace(/\s+/g, " ").slice(0, 120) : null);
+
+/* Der Satz, mit dem der Controller die Absage begründet — `api.err.…`
+   bei der klassischen API, ein benannter Code bei UniFi OS. */
+export function grundVon(r) {
+  try {
+    const j = JSON.parse(String(r?.body || ""));
+    return j?.meta?.msg || j?.code || j?.message || j?.error || null;
+  } catch {
+    return /<html/i.test(String(r?.body || "")) ? "eine HTML-Seite statt einer Antwort" : null;
+  }
 }
 
 /* ---------- Was eine Absage bedeutet ----------
@@ -364,8 +486,19 @@ export function hintFor(r) {
   if (/Zwei-Faktor/.test(r?.error || ""))
     return "Für die Überwachung ein eigenes lokales Konto ohne zweiten Faktor anlegen. " + RECHTEHINWEIS;
   if (r?.status === 401 || r?.status === 400)
-    return "Die Zugangsdaten werden abgelehnt — beide Anmeldepfade wurden versucht, der von UniFi OS und der "
-      + "der eigenständigen Network Application. Es liegt also am Konto, nicht am Weg. " + RECHTEHINWEIS;
+    /* Diese Absage hat zwei mögliche Urheber, und der Statuscode
+       unterscheidet sie nicht. Steht in der Antwort `api.err.Invalid`,
+       meint der Controller das Konto — meist ein Ubiquiti-Konto aus der
+       Cloud, das in der Weboberfläche funktioniert (die geht über die
+       Cloud) und hier nicht. Steht dort etwas anderes, handelt die
+       Absage nicht von den Zugangsdaten, und dann wäre es falsch,
+       jemandem sein Passwort vorzuwerfen. */
+    return "Der Controller weist die Anmeldung ab. Nennt seine Antwort „api.err.Invalid“, liegt es am Konto: "
+      + "ein Ubiquiti-Konto aus der Cloud meldet sich hier nicht an, auch wenn dasselbe Konto in der "
+      + "Weboberfläche hineinkommt — die geht über die Cloud, dieser Weg nicht. " + RECHTEHINWEIS
+      + " Nennt sie etwas anderes, handelt die Absage nicht von den Zugangsdaten: dann zeigt "
+      + "`docker exec -it leitstand node /app/tools/unifi-probe.mjs --url … --user …` im Behälter je Pfad und Anfrageform, was der "
+      + "Controller tatsächlich antwortet.";
   if (r?.status === 403)
     return "Angemeldet, aber ohne Recht auf diese Site — dem Konto unter Settings → Admins & Users Zugriff auf "
       + "die Site geben (Rolle „Viewer“ genügt).";

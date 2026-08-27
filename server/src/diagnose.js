@@ -345,7 +345,7 @@ async function diagnoseUnifi(host, cred, bericht) {
     bericht.api.push({
       pfad: "/api/auth/login bzw. /api/login", zweck: "Anmeldung — UniFi OS und die eigenständige Anwendung melden unter verschiedenen Pfaden an",
       optional: false, ok: !!an.ok, status: an.status ?? null, ms: an.ms ?? null,
-      fehler: an.ok ? null : an.error || "unbekannter Fehler", antwort: null,
+      fehler: an.ok ? null : an.error || "unbekannter Fehler", antwort: an.ok ? null : versuche(an.versuche),
       befund: an.ok ? `angemeldet als ${an.benutzer}${an.praefix ? " · UniFi OS (Präfix " + an.praefix + ")" : " · eigenständige Network Application (ohne Präfix)"}` : null
     });
     if (!an.ok) {
@@ -685,6 +685,19 @@ function fazit(host, b) {
 
 const zaehle = liste => liste.reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map());
 const alsListe = m => [...m.entries()].map(([k, n]) => `${k} ${n}`).join(", ");
+/* Scheitert die Anmeldung, ist die Liste der Versuche die eigentliche
+   Auskunft: welcher Anschluss, welcher Pfad, welcher Code, welcher Satz
+   aus dem Rumpf. Ohne sie stünde dort nur „abgelehnt" — und die Frage,
+   ob der Controller das Konto oder die Form der Anfrage meint, bliebe
+   offen. Genau daran hat sich schon einmal eine Fehlersuche verhakt. */
+const versuche = liste => Array.isArray(liste) && liste.length
+  ? liste
+      .map(v => `${v.basis.replace(/^https?:\/\//, "")}${v.pfad} → ${v.status ?? "—"}`
+        + (v.antwort ? ` ${String(v.antwort).slice(0, 80)}` : ""))
+      .join("  ·  ")
+      .slice(0, 500)
+  : null;
+
 const kurzfassung = t => (t ? String(t).replace(/\s+/g, " ").slice(0, 200) : null);
 
 /* ---------- Für die Ausgabe im Terminal ---------- */
