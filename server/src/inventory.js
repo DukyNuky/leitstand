@@ -55,6 +55,15 @@ export const DEFAULTS = {
      niemandem. Tiefer als die Plattengrenzen, weil hier nichts
      nachwächst: die Quote ist gesetzt, nicht gewachsen. */
   mailbox_voll_warn: 95,
+  /* Ab welcher Kanalbelegung ein Funkband auffällt. `cu_total` zählt
+     eigenen und fremden Verkehr zusammen — es ist die Zahl, die erklärt,
+     warum ein WLAN „langsam" ist, obwohl jeder AP grün dasteht.
+
+     Bewusst hoch angesetzt: 2,4 GHz liegt in jeder bewohnten Gegend
+     tagsüber bei 40 bis 60 %, und eine Ampel, die das täglich anzeigt,
+     ist nach zwei Wochen abtrainiert. Erst jenseits von 80 % geht
+     spürbar nichts mehr durch. */
+  wlan_kanal_warn: 80,
   /* Ein eigensigniertes Zertifikat bezeugt keine Herkunft — es trägt nur
      einen Schlüssel. Läuft es ab, ändert sich für den Betrieb nichts:
      wer es gestern angenommen hat, nimmt es heute an, und geprüft hat es
@@ -82,6 +91,7 @@ export const TYPES = {
   mailcow:   { label: "Mailcow",              port: 443,  api: "mailcow",   zugang: "API-Schlüssel (Read-Only)" },
   adguard:   { label: "AdGuard Home",         port: 443,  api: "adguard",   zugang: "Benutzer und Passwort" },
   portainer: { label: "Portainer",            port: 9443, api: "portainer", zugang: "API-Token" },
+  unifi:     { label: "UniFi Controller",     port: 443,  api: "unifi",     zugang: "API-Schlüssel oder Benutzer und Passwort (Rolle Viewer)" },
   hass:      { label: "Home Assistant",       port: 8123, api: null },
   other:     { label: "Sonstiges",            port: 443,  api: null }
 };

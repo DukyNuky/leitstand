@@ -274,6 +274,21 @@ function hostView(h, st = {}, settings = {}) {
     quarantaeneNeuste: x.quarantaeneNeuste || null,
     gesperrt: x.gesperrt ?? null, gesperrtDauerhaft: x.gesperrtDauerhaft ?? null,
     arch: x.arch || null,
+    /* UniFi Controller. Die Geräte stehen als Liste, weil die Frage
+       immer „welcher?" lautet — eine Zahl allein schickt einen zurück in
+       die Oberfläche des Controllers. */
+    wlanGeraete: x.geraete || null, wlanGesamt: x.geraeteGesamt ?? null,
+    aps: x.aps ?? null, apsOnline: x.apsOnline ?? null, apsOffline: x.apsOffline ?? null,
+    apsIsoliert: x.apsIsoliert ?? null, apsWartend: x.apsWartend ?? null,
+    switche: x.switche ?? null, wlanGateways: x.gateways ?? null,
+    wlanUpdates: x.updates ?? null, controllerUpdate: x.controllerUpdate ?? null,
+    clients: x.clients ?? null, clientsGast: x.clientsGast ?? null,
+    kanalLast: x.kanalLast ?? null, kanalLastBand: x.kanalLastBand || null,
+    wlanStatus: x.wlanStatus || null, apGemeldet: x.apGemeldet ?? null,
+    durchsatzRx: x.durchsatzRx ?? null, durchsatzTx: x.durchsatzTx ?? null,
+    /* Über welchen der beiden Wege gelesen wurde — ohne diese Angabe
+       sähe eine fehlende Kanalbelegung wie ein Fehler aus. */
+    wlanQuelle: x.quelle || null, wlanSite: x.site || null, wlanSites: x.sites ?? null,
     collectorError: x.error || null
   };
 }

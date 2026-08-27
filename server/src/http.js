@@ -44,9 +44,14 @@ export function requestJson(url, { method = "GET", headers = {}, body = null, ti
       res.on("end", () => {
         const text = Buffer.concat(chunks).toString("utf8");
         const ms = Date.now() - t0;
-        if (res.statusCode >= 400) return resolve({ ok: false, status: res.statusCode, ms, error: httpError(res.statusCode), body: text.slice(0, 400) });
-        try { resolve({ ok: true, status: res.statusCode, ms, data: text ? JSON.parse(text) : null }); }
-        catch { resolve({ ok: false, status: res.statusCode, ms, error: "Antwort ist kein JSON", body: text.slice(0, 200) }); }
+        /* Die Kopfzeilen der Antwort kommen mit. Wer sie nicht braucht,
+           merkt nichts davon; wer sich anmeldet, braucht sie: der UniFi
+           Controller stellt seine Sitzung als Keks aus, und der steht
+           nirgendwo sonst. */
+        const headers = res.headers || {};
+        if (res.statusCode >= 400) return resolve({ ok: false, status: res.statusCode, ms, headers, error: httpError(res.statusCode), body: text.slice(0, 400) });
+        try { resolve({ ok: true, status: res.statusCode, ms, headers, data: text ? JSON.parse(text) : null }); }
+        catch { resolve({ ok: false, status: res.statusCode, ms, headers, error: "Antwort ist kein JSON", body: text.slice(0, 200) }); }
       });
     });
     req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: `Zeitüberschreitung nach ${timeout} ms` }); });

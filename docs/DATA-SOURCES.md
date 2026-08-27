@@ -167,6 +167,25 @@ Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
 | Nicht abrufbar | **Neustartzähler** — die Containerliste führt ihn nicht, er stünde nur in einem `inspect` je Container. Gemeldet wird stattdessen der Zustand `restarting` und der Exit-Code |
 | Fallstrick | Fehlen die Rechte, liefert Portainer eine **leere** Liste statt einer Fehlermeldung. Der Sammler meldet das ausdrücklich als Rechteproblem — sonst stünde da eine ruhige Null, wo Dutzende Container laufen |
 
+## UniFi Network Controller
+
+> **Gebaut** — `server/src/collectors/unifi.js`. Die Schicht, über die ein
+> offener Port nichts sagt: ein Access Point antwortet auf Ping, solange er
+> Strom hat. Gelesen wird ausschließlich.
+
+| | |
+|---|---|
+| Zugang | API-Schlüssel im Kopf `X-API-KEY` (Network 9+, unter *Control Plane → Integrations*) **oder** Benutzer und Passwort eines Kontos mit der Rolle *Viewer*. Der Schlüssel erbt die Rolle seines Kontos: er ist genau dann nur lesend, wenn das Konto es ist |
+| Zwei Präfixe | UniFi OS (Dream Machine, Cloud Key Gen2, UNVR) hängt die Netzanwendung unter `/proxy/network` und hört auf 443; eine selbst betriebene Network Application antwortet ohne Präfix auf 8443. Welches gilt, findet der erste geglückte Abruf heraus |
+| Zwei APIs | Die **klassische** (`/api/s/<site>/stat/device`, `/stat/health`, `/stat/sysinfo`) ist nirgends verbindlich beschrieben, läuft aber seit Jahren und ist die **einzige mit Funkzahlen**. Die offizielle **Integration-API** (`/integration/v1/sites/<id>/devices`) ist beschrieben und stabil, kennt aber weder Kanalbelegung noch Clientzahlen. Mit einem Schlüssel wird zuerst die klassische versucht; weist sie ihn ab, geht es auf die Integration-API zurück — und **es steht dabei**, sonst sähe eine fehlende Kanalbelegung wie ein Fehler aus |
+| Kennzahlen | je Gerät: gemeldeter Zustand, Modell, Adresse, Fassung mit „Update steht an", Laufzeit, Clients (eigene und Gäste), Uplink samt der Angabe, ob er über Funk läuft, CPU/RAM, Temperatur, UniFis eigene Zufriedenheitsnote · je Funkmodul: Band, Kanal, Kanalbreite, Sendeleistung, Clients und **Kanalbelegung** (`cu_total`, eigener *und* fremder Verkehr) · je Site: Teilsystem WLAN, Clientzahlen, Controller-Fassung |
+| Ampel | **kein** Access Point mehr verbunden → rot (es gibt kein WLAN) · einzelner AP getrennt oder **isoliert** → gelb *mit Namen* · Switch getrennt → gelb mit Namen · Funkband über `wlan_kanal_warn` (Vorgabe 80 %) belegt → gelb mit Band, Kanal und Gerät |
+| Ausdrücklich keine Ampel | **anstehende Firmware.** Sie steht immer irgendwo an; eine Ampel dafür leuchtet nach zwei Wochen ständig und ist damit abtrainiert — sie steht als Notiz da. Ebenso die Zufriedenheitsnote: sie ist eine Auskunft des Herstellers, keine Messung |
+| Warum „isoliert" zählt | Der AP funkt weiter, hat aber keinen Uplink mehr. Seine Clients sind verbunden und kommen nirgendwohin — der Fall, den niemand sucht, weil das WLAN ja „da" ist |
+| Nicht gelesen | **die Clientliste.** `/stat/sta` nennt jedes Gerät mit MAC, Hostname und Signalstärke. Für „ist das WLAN gesund?" genügt die Anzahl, und die steht an jedem AP. Eine Überwachung ist kein Anwesenheitsprotokoll: gezählt wird, nicht aufgeschrieben |
+| Fallstrick | Ein Konto mit **Zwei-Faktor-Anmeldung** lässt keinen Dienst herein. UniFi sagt das nur im Rumpf der Antwort, nicht im Statuscode — der Sammler liest ihn und schreibt es in die Meldung. Der Schlüssel ist deshalb der ruhigere Weg |
+| Fallstrick | Die Sitzung wird gemerkt und erst nach einer halben Stunde erneuert. Ein Anmeldevorgang je Durchlauf stünde alle 15 s im Protokoll des Controllers und wäre dort von einem Angriff nicht zu unterscheiden |
+
 ## TrueNAS SCALE
 
 | | |
@@ -229,7 +248,7 @@ Wird nicht getrennt angebunden, sondern über die jeweilige Firewall gelesen
 | `smartd` auf allen Hosts | Sektorfehler, Temperatur | `from ~ /^smartd@/` → gelb |
 | ACME-Clients | anstehende Erneuerung, Fehlschlag | Betreff `certificate .*(renewal\|expir)` → gelb |
 | UPS (NUT/apcupsd) | Netzausfall, Akkustand | Betreff `On battery\|Power failure` → rot |
-| UniFi-Controller | Port down, AP offline | Absenderliste, Betreffmuster je Ereignis |
+| UniFi-Controller | *(entfällt — hat eine API, siehe oben)* | Ereignisse per Mail wären eine zweite, langsamere Quelle für dasselbe |
 | Drucker, NAS-Fremdgeräte | was auch immer sie schicken | landen als „ohne Regel“ im Postfach und werden dort eingeordnet |
 
 ## Eigene Prüfungen

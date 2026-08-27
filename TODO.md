@@ -45,11 +45,12 @@ das ausdrücklich dasteht. Ein Test weist einen Aufruf ohne Nachweis mit 401 ab.
 
 ## 2. Mehr Details je System — die fehlenden Sammler
 
-**Warum.** Zwei von elf Systemtypen werden bisher nur angepingt — AdGuard Home,
-Portainer, der Mail Gateway und zuletzt Mailcow sind dazugekommen. Sie stehen grün da, weil ein Port
-offen ist; was auf ihnen los ist, weiß der Leitstand nicht. Genau das ist der
-Unterschied zwischen „das Gerät antwortet" und „der Dienst tut, was er soll":
-ein TrueNAS mit einem degradierten Pool antwortet tadellos.
+**Warum.** Zwei von zwölf Systemtypen werden bisher nur angepingt — AdGuard
+Home, Portainer, der Mail Gateway, Mailcow und zuletzt der UniFi Controller
+sind dazugekommen. Sie stehen grün da, weil ein Port offen ist; was auf ihnen
+los ist, weiß der Leitstand nicht. Genau das ist der Unterschied zwischen „das
+Gerät antwortet" und „der Dienst tut, was er soll": ein TrueNAS mit einem
+degradierten Pool antwortet tadellos.
 
 **Wo.** Vorlage sind die fertigen Sammler — am nächsten liegen die beiden
 zuletzt gebauten, weil sie klein sind:
@@ -144,6 +145,37 @@ gebaut.
       Inhalt** — Betreff, Absender und Empfänger bleiben auf dem Mailserver.
       **Nicht gebaut:** die eigene RBL-Prüfung der ausgehenden Adresse; die
       käme von keiner API des Systems und gehört zum Prober.
+- [x] **2.15 UniFi Network Controller** — gebaut:
+      [`server/src/collectors/unifi.js`](server/src/collectors/unifi.js).
+      Der Anlass ist der Satz, mit dem dieser Abschnitt anfängt: ein Access
+      Point antwortet auf Ping, solange er Strom hat. Ob er beim Controller
+      noch angemeldet ist, ob er seinen Uplink verloren hat und nur noch für
+      sich sendet, ob der Kanal so belegt ist, dass nichts mehr durchgeht —
+      davon sieht ein ICMP nichts.
+      Zwei Wege hinein, und beide sind gebaut, weil beide vorkommen: die
+      **klassische API** (Benutzer und Passwort, Sitzung als Keks) mit allen
+      Zahlen, und die offizielle **Integration-API** (API-Schlüssel, ab
+      Network 9) mit Zustand, Modell und Fassung. Mit einem Schlüssel wird
+      zuerst die klassische versucht — nur sie kennt die Funkzahlen —, und
+      bei Ablehnung auf die andere zurückgefallen. **Was benutzt wurde, steht
+      an den Daten**: sonst sähe eine fehlende Kanalbelegung wie ein Fehler
+      aus. Dazu zwei Präfixe: UniFi OS hängt alles unter `/proxy/network`,
+      eine eigenständige Network Application nicht; das findet der erste
+      geglückte Abruf heraus.
+      Ampel: kein AP mehr verbunden → rot; einzelner AP getrennt oder
+      **isoliert** → gelb mit Namen; Funkband über `wlan_kanal_warn` (80 %)
+      → gelb mit Band, Kanal und Gerät. **Keine Ampel für anstehende
+      Firmware** — sie steht immer irgendwo an und wäre nach zwei Wochen
+      abtrainiert.
+      **Nicht gelesen: die Clientliste.** `/stat/sta` nennt jedes Gerät im
+      WLAN mit MAC, Hostname und Signalstärke; für die Frage „ist das WLAN
+      gesund?" genügt die Anzahl. Eine Überwachung ist kein
+      Anwesenheitsprotokoll.
+      **Offen geblieben:** eine Zeitreihe je Access Point (Clients und
+      Kanalbelegung über Tage). Die Ablage könnte es — die Schnittstellen
+      einer Firewall führen bereits eine eigene Reihe je Leitung —, und die
+      Frage „seit wann ist der Kanal voll?" wäre damit zu beantworten.
+
 - [ ] **2.5 Home Assistant** — `/api/states`, `/api/config`. Entitäten gesamt
       und `unavailable`, Automationen, Fassung. Nicht verfügbare Entitäten sind
       meist Information, keine Störung — gruppierte Ausfälle hinter einem

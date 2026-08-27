@@ -156,6 +156,7 @@ docker compose up -d          # aus der Wurzel des Repositorys
 | **AdGuard Home** | Anfragen und Blockanteil über das eingestellte Statistikfenster, Ø Bearbeitungszeit, Filterlisten und Regelzahl — und vor allem, **ob der Schutz überhaupt an ist** und **ob er über UDP/53 wirklich auflöst** |
 | **Mailcow** | Container einzeln mit Zustand und Abbild · **Warteschlange mit dem Grund, warum eine Mail liegt** (`Connection timed out`, `mailbox full`) — das gibt kein anderes der angebundenen Systeme her · Platz der Postfachablage, ohne den Dovecot nichts mehr annimmt · Domänen mit Postfächern, Nachrichten und Belegung · **die vollsten Postfächer mit Namen**: ein volles Postfach weist Mail ab, während der Dienst tadellos läuft · rspamd (geprüft, Spam, Ham, Aktionen) mit dem Zeitraum, für den die Zahlen gelten · Umfang der Quarantäne, gesperrte Adressen, Auslastung des Wirts |
 | **Portainer** | Umgebungen erreichbar/gesamt, Stacks, Container laufend/gestoppt, `unhealthy`, Neustartschleifen und Exit 137 (Speichergrenze) — mit dem **Namen** des Containers, der klemmt |
+| **UniFi Controller** | **jeder Access Point einzeln**: gemeldeter Zustand, Clients, Uplink (auch, wenn er über Funk läuft), Fassung, Laufzeit — dazu Switches und Gateways derselben Site · **Kanalbelegung je Funkband** (eigener *und* fremder Verkehr), die Zahl, die ein langsames WLAN erklärt, während jede Ampel grün steht · **„isoliert"**: der AP funkt weiter, hat aber keinen Uplink mehr — seine Clients sind verbunden und kommen nirgendwohin. Ein AP mit Strom antwortet auf Ping, auch wenn er sich beim Controller längst abgemeldet hat; genau deshalb steht hier sein gemeldeter Zustand und nicht seine Erreichbarkeit. **Die Clientliste wird nicht gelesen, nur gezählt** — eine Überwachung ist kein Anwesenheitsprotokoll |
 | **Kurzlage** | eine Seite für die Frage, mit der man das Werkzeug aufmacht: passt alles? Eine große Fläche mit einem Wort, darunter was ansteht, vier Zahlen — und **worüber das Grün schweigt**: Systeme ohne Zugangsdaten, ausgenommene Systeme, abgeschaltetes ICMP. Auf einem Telefon die Startseite, auf einem Schirm eine ruhige Karte. Ein hängender Zustandsstrom oder eine quittierte Störung machen sie **nicht** grün |
 | **Sortierbare Spalten** | jede Tabelle, jede Spalte — nach Menge, Zeit, Prozent oder Zeitpunkt, wie sie dasteht; ein Klick auf die Ampelspalte sortiert nach Dringlichkeit. Ein Strich bleibt in beiden Richtungen hinten: er ist keine Null. Der dritte Klick stellt die Ordnung der Ansicht wieder her |
 | **Störungen** | Bündelung gleicher Ursachen, Quittieren, Stummschalten |
@@ -448,13 +449,15 @@ cd server && npm test
 ```
 
 Geprüft wird gegen echte offene und geschlossene Ports sowie gegen
-nachgebaute Endpunkte für Proxmox, den Mail Gateway, Mailcow, AdGuard Home und
-Portainer (`test/fake-proxmox.js`, `test/fake-pmg.js`, `test/fake-mailcow.js`,
-`test/fake-dienste.js`), die auch
+nachgebaute Endpunkte für Proxmox, den Mail Gateway, Mailcow, AdGuard Home,
+Portainer und den UniFi Controller (`test/fake-proxmox.js`, `test/fake-pmg.js`,
+`test/fake-mailcow.js`, `test/fake-dienste.js`, `test/fake-unifi.js`), die auch
 401 und 403 richtig beantworten. Dadurch lässt sich jeder Sammler vollständig
 prüfen, ohne ein echtes Gerät anzufassen — samt der Eigenheiten, an denen es im
 Betrieb hängt: Portainer filtert Listen nach Rechten statt abzulehnen, AdGuard
-führt seine Statistik über ein einstellbares Fenster, und der Mail Gateway
+führt seine Statistik über ein einstellbares Fenster, der UniFi Controller
+antwortet je nach Bauart unter zwei verschiedenen Präfixen und mit zwei
+verschiedenen APIs, und der Mail Gateway
 **weist eine Token-Kopfzeile ab**, statt sie zu prüfen. Genau deshalb tut der
 nachgebaute Gateway das auch: ein Testserver, der Token freundlich annimmt,
 hätte die Anbindung grün gemeldet, während gegen das echte Gerät jeder Abruf

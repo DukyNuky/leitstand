@@ -23,6 +23,7 @@ import * as Ptn from "./collectors/portainer.js";
 import * as Pfs from "./collectors/pfsense.js";
 import * as Pmg from "./collectors/pmg.js";
 import * as Mcw from "./collectors/mailcow.js";
+import * as Uni from "./collectors/unifi.js";
 
 /* Sammler, die sich gleich verhalten: eine Kopfzeile zur Anmeldung, feste
    Pfade, JSON zurück. Für die gibt es einen gemeinsamen Weg (diagnoseEinfach)
@@ -104,6 +105,7 @@ export async function diagnoseHost(host, cred, settings = {}) {
 
   if (host.type === "opnsense") return await diagnoseOpnsense(host, cred, bericht);
   if (host.type === "pmg") return await diagnosePmg(host, cred, bericht);
+  if (host.type === "unifi") return await diagnoseUnifi(host, cred, bericht);
   if (EINFACH[host.type]) return await diagnoseEinfach(host, cred, bericht, EINFACH[host.type]);
 
   const kollektor = PFADE[host.type];
@@ -306,6 +308,93 @@ async function diagnosePmg(host, cred, bericht) {
    (Portainer). Eine fest eingetragene 1 wäre geraten — und bei einer
    Portainer-Installation, in der die erste Umgebung gelöscht wurde,
    schlicht falsch. */
+/* ---------- UniFi Network Controller ----------
+
+   Hier lohnt die Diagnose besonders, weil zwischen „erreichbar" und
+   „liefert Zahlen" drei Weichen liegen, die man von außen nicht sieht:
+   welches Präfix trägt (UniFi OS hängt alles unter /proxy/network),
+   welche der beiden APIs den Zugang annimmt, und welche Site der Zugang
+   überhaupt sehen darf. Jede dieser Weichen steht im Bericht mit dem,
+   was sie tatsächlich geantwortet hat. */
+async function diagnoseUnifi(host, cred, bericht) {
+  bericht.ziel = Uni.baseUrl(host);
+  const key = cred?.apiKey || cred?.key || cred?.token || null;
+  const benutzer = cred?.user || cred?.username || null;
+  const passwort = cred?.password || cred?.secret || null;
+
+  bericht.zugang = key
+    ? { vorhanden: true, form: "X-API-KEY: ••••••" + String(key).slice(-4) }
+    : benutzer && passwort
+      ? { vorhanden: true, form: `Anmeldung als ${benutzer}, danach Sitzung als Keks`, benutzer }
+      : { vorhanden: false, hinweis: !cred ? "kein Zugang hinterlegt" : "Zugang unvollständig — Schlüssel oder Benutzer und Passwort fehlen" };
+
+  if (!bericht.zugang.vorhanden) {
+    bericht.fazit = "Es ist kein Zugang hinterlegt. " + Uni.RECHTEHINWEIS;
+    return bericht;
+  }
+
+  /* Eine gemerkte Sitzung wäre eine Auskunft über vorhin, nicht über
+     jetzt — die Diagnose meldet sich neu an. */
+  Uni.sitzungVergessen(host.id);
+
+  if (!key) {
+    const an = await Uni.anmelden(host, cred, 8000);
+    bericht.api.push({
+      pfad: "/api/auth/login bzw. /api/login", zweck: "Anmeldung — UniFi OS und die eigenständige Anwendung melden unter verschiedenen Pfaden an",
+      optional: false, ok: !!an.ok, status: an.status ?? null, ms: an.ms ?? null,
+      fehler: an.ok ? null : an.error || "unbekannter Fehler", antwort: null,
+      befund: an.ok ? `angemeldet als ${an.benutzer}${an.praefix ? " · UniFi OS (Präfix " + an.praefix + ")" : " · eigenständige Network Application (ohne Präfix)"}` : null
+    });
+    if (!an.ok) {
+      bericht.fazit = `Die Anmeldung kommt nicht durch: ${an.error}. ` + (Uni.hintFor(an) || "");
+      return bericht;
+    }
+  }
+
+  /* Welche Site — und über welche der beiden APIs. */
+  const s = await Uni.siteWaehlen(host, cred, 8000);
+  bericht.api.push({
+    pfad: s.api === "integration" ? "/integration/v1/sites" : "/api/self/sites",
+    zweck: "welche Sites der Zugang sehen darf", optional: false,
+    ok: !!s.ok, status: s.status ?? null, ms: s.ms ?? null,
+    fehler: s.ok ? null : s.error || "unbekannter Fehler", antwort: null,
+    befund: s.ok ? `${s.sites} Site(s), gelesen wird „${s.name}" über die ${s.api === "integration" ? "Integration-API" : "klassische API"}` : null
+  });
+  if (!s.ok) {
+    bericht.fazit = `Der Zugang kommt nicht bis zu einer Site: ${s.error}. ` + (Uni.hintFor(s) || "");
+    return bericht;
+  }
+
+  const abfragen = (s.api === "integration" ? Uni.ABFRAGEN_INTEGRATION : Uni.ABFRAGEN).slice(1);
+  for (const { pfad, zweck, optional } of abfragen) {
+    const weg = pfad.replace("{site}", encodeURIComponent(s.site));
+    const r = await Uni.ruf(host, cred, weg, 8000);
+    bericht.api.push({
+      pfad: r.pfad || weg, zweck, optional: !!optional,
+      ok: !!r.ok, status: r.status ?? null, ms: r.ms ?? null,
+      fehler: r.ok ? null : r.error || "unbekannter Fehler",
+      antwort: r.ok ? null : kurzfassung(r.body),
+      befund: r.ok ? Uni.befund(weg, r.data) : null
+    });
+    if (!r.ok && !optional) break;
+  }
+
+  const gescheitert = bericht.api.find(a => !a.ok && !a.optional);
+  if (gescheitert) {
+    bericht.fazit = `Der Abruf bricht bei ${gescheitert.pfad} ab (${gescheitert.fehler}). ` + (Uni.hintFor(gescheitert) || "");
+    return bericht;
+  }
+  const uebergangen = bericht.api.filter(a => !a.ok && a.optional);
+  bericht.ok = true;
+  bericht.fazit = s.api === "integration"
+    ? "Alle nötigen Aufrufe kommen durch — allerdings über die Integration-API. Sie kennt Zustand, Modell und "
+      + "Fassung, aber weder Kanalbelegung noch Clientzahlen. Wer die will, hinterlegt zusätzlich Benutzer und "
+      + "Passwort eines Viewer-Kontos: dann liest der Sammler die klassische API."
+    : "Alle nötigen Aufrufe kommen durch — der Controller liefert, was der Sammler braucht."
+      + (uebergangen.length ? ` Ohne Antwort blieben: ${uebergangen.map(a => a.pfad).join(", ")} — dort fehlt je eine Angabe, nicht die Anbindung.` : "");
+  return bericht;
+}
+
 async function diagnoseEinfach(host, cred, bericht, { modul, name, fehlt, felder = false }) {
   bericht.ziel = modul.baseUrl(host);
   const kopf = modul.authHeader(cred);

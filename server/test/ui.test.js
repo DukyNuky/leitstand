@@ -2333,3 +2333,118 @@ test("Auf der Seite der Firewall steht jeder Anschluss mit seinen Adressen", asy
   assert.match(seite, /Nach außen/);
   assert.ok(!/undefined|NaN/.test(seite));
 });
+
+/* ---------- UniFi ----------
+   Der Weg vom Controller bis in die Tabelle, einmal ganz: echter
+   Sammler gegen nachgebauten Controller, echter Zustand aus dem Dienst,
+   und daraus gezeichnet. */
+async function zustandMitUnifi(fakeOpt = {}) {
+  const { fakeUnifi, UNIFI_USER, UNIFI_PASS } = await import("./fake-unifi.js");
+  const { listen: hoere, close: schliesse } = await import("./fake-dienste.js");
+  const { sitzungVergessen } = await import("../src/collectors/unifi.js");
+
+  const uf = fakeUnifi(fakeOpt);
+  const url = await hoere(uf);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leitstand-unifi-"));
+  try {
+    fs.writeFileSync(path.join(dir, "inventory.yaml"), `
+settings: { interval: 3600, icmp: false, timeout: 2, wlan_kanal_warn: 80 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: unifi-01, type: unifi, site: hq, url: "${url}", role: WLAN }
+tunnels: []
+links: []
+`);
+    fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+      "unifi-01": { user: UNIFI_USER, password: UNIFI_PASS }
+    }));
+    const server = createServer({
+      inventory: path.join(dir, "inventory.yaml"),
+      secrets: path.join(dir, "secrets.json"),
+      state: path.join(dir, "incidents.json")
+    });
+    await server.engine.runOnce();
+    const { buildState } = await import("../src/api.js");
+    const zustand = buildState(server.engine, server.secrets);
+    server.engine.stop();
+    return zustand;
+  } finally {
+    sitzungVergessen();
+    await schliesse(uf);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Die Netzansicht zeigt jeden Access Point mit Zustand, Funk und Uplink", async () => {
+  const zustand = await zustandMitUnifi();
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(html), "Platzhalterwert in der Netzansicht");
+  assert.match(html, /ap-wohnzimmer/);
+  assert.match(html, /ap-keller/);
+  assert.match(html, /U6LR/, "das Modell gehört unter den Namen");
+  assert.match(html, /2,4 GHz · K6/, "Band und Kanal je Funkmodul");
+  assert.match(html, /62 %/, "die Kanalbelegung");
+  assert.match(html, /sw-keller/, "der Switch, an dem die APs hängen");
+  assert.match(html, /23 Clients/);
+});
+
+test("Ein getrennter Access Point steht rot in der Zeile, während das System gelb ist", async () => {
+  const zustand = await zustandMitUnifi({ zustaende: [1, 0, 1] });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.match(html, /data-sev="crit"[^>]*>[\s\S]{0,400}ap-buero/, "die Zeile des Geräts trägt seine eigene Ampel");
+  assert.equal(zustand.hosts[0].status, "warn", "das System selbst bleibt gelb — es läuft ja");
+  assert.match(html, /meldet sich nicht mehr/);
+});
+
+/* Ein Controller ohne hinterlegten Zugang. Er steht in der Tafel, und
+   dort steht auch, warum sie leer ist — eine leere Tabelle allein sähe
+   aus wie „kein Access Point vorhanden". */
+test("Ohne Zugang sagt die WLAN-Tafel, was fehlt — statt einer leeren Tabelle", async () => {
+  const zustand = await echterZustand(`
+settings: { icmp: false, timeout: 1 }
+sites: [ { id: hq, name: Zuhause, short: DEKO, primary: true } ]
+hosts:
+  - { id: unifi-01, type: unifi, site: hq, url: "https://10.0.0.9", role: WLAN }
+tunnels: []
+links: []
+`);
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.state.view = "netz";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+  assert.match(html, /WLAN/);
+  assert.match(html, /fehlen die Zugangsdaten/);
+  assert.match(html, /Verwaltung → unifi-01/, "und wo man ihn hinterlegt");
+});
+
+test("Die Systemseite des Controllers zeigt Kanalbelegung und Isolation", async () => {
+  const zustand = await zustandMitUnifi({ zustaende: [1, 11, 1] });
+  const { sandbox, ziele } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  ui.openSystem("unifi-01");
+  ui.state.detail.busy = false;
+  ui.state.detail.daten = null;
+  ui.render();
+  const seite = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/undefined|NaN|\[object Object\]/.test(seite), "Platzhalterwert auf der Systemseite");
+  assert.match(seite, /Kanalbelegung/);
+  assert.match(seite, /Uplink verloren, funkt weiter/);
+  assert.match(seite, /2 von 3 verbunden/);
+  assert.match(seite, /Anwesenheitsprotokoll/, "warum die Clientliste fehlt, steht dabei");
+});

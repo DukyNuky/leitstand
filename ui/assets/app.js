@@ -40,7 +40,8 @@ const SEV_LABEL = { crit:"Kritisch", warn:"Warnung", info:"Info", ok:"OK", idle:
 
 const TYPE_LABEL = {
   pve:"Proxmox VE", pbs:"Proxmox Backup", pmg:"Mail Gateway", opnsense:"OPNsense", pfsense:"pfSense",
-  truenas:"TrueNAS", mailcow:"Mailcow", adguard:"AdGuard Home", hass:"Home Assistant", portainer:"Portainer"
+  truenas:"TrueNAS", mailcow:"Mailcow", adguard:"AdGuard Home", hass:"Home Assistant", portainer:"Portainer",
+  unifi:"UniFi Controller"
 };
 
 function dot(s) { return `<span class="dot dot--${esc(s)}" title="${esc(SEV_LABEL[s] || s)}"></span>`; }
@@ -1293,7 +1294,81 @@ function viewNetz() {
          Ohne bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat.`}</div>
   </div>`;
 
-  return firewalls + gatewayPanel(fws) + schnittstellenPanel(fws) + haproxyPanel();
+  return firewalls + gatewayPanel(fws) + wlanPanel(visibleHosts()) + schnittstellenPanel(fws) + haproxyPanel();
+}
+
+/* ---------- WLAN ----------
+
+   Die Zeile je Gerät, nicht je Controller: die Frage ist nie „läuft der
+   Controller?", sondern „welcher Access Point ist weg?". Switches und
+   Gateways stehen mit dabei, weil ein getrennter Switch der Grund für
+   zwei stille APs ist.
+
+   Die Ampel der Zeile ist die des Geräts, nicht die des Systems: ein
+   einzelner ausgefallener AP macht den Controller gelb (siehe Sammler) —
+   das Gerät selbst ist rot. Beides ist wahr, und beides steht da, wo es
+   hingehört. */
+const WLAN_SEV = { online:"ok", offline:"crit", isoliert:"warn", wartet:"idle", aktualisiert:"info", fehler:"warn", unbekannt:"idle" };
+const WLAN_ART = { ap:"Access Point", switch:"Switch", gateway:"Gateway", sonstiges:"sonstiges" };
+
+function wlanPanel(hs) {
+  const ctrl = hs.filter(h => h.type === "unifi");
+  if (!ctrl.length) return "";
+
+  const zeilen = ctrl.flatMap(c => (c.wlanGeraete || []).map(g => ({ ...g, ctrl: c.name, ctrlId: c.id, site: c.site })));
+  const aps = zeilen.filter(g => g.art === "ap");
+  const clients = ctrl.reduce((a, c) => a + (c.clients ?? 0), 0);
+  const gelesen = ctrl.some(c => c.wlanGeraete);
+  const ohneZugang = ctrl.filter(c => !c.wlanGeraete);
+  const nurIntegration = ctrl.filter(c => c.wlanQuelle === "integration");
+  const grenze = thr("wlan_kanal_warn") ?? 80;
+
+  const funkZelle = g => (g.funk || []).length
+    ? g.funk.map(f => `<div class="mono" style="font-size:11.5px">${esc(f.band || "?")} · K${esc(String(f.kanal ?? "?"))}${
+        f.last != null ? ` · <span style="color:var(--${f.last >= grenze ? "warn" : "faint"})">${f.last} %</span>` : ""}</div>`).join("")
+    : '<span class="faint">—</span>';
+
+  return `<div class="panel">
+    <div class="panel-head"><h3>WLAN</h3>
+      <span class="hint">${aps.length} Access Point(s)${clients ? " · " + clients + " Clients" : ""}</span>
+      <div class="spacer"></div>
+      <span class="hint">vom Controller gemeldet — ein AP mit Strom antwortet auch dann, wenn er nichts mehr tut</span></div>
+    <div class="panel-body panel-body--flush tablewrap">
+      <table class="t"><thead><tr>
+        <th style="width:34px"></th><th>Gerät</th><th>Art</th><th>Standort</th><th>Zustand</th>
+        <th class="right">Clients</th><th>Funk</th><th>Uplink</th><th>Fassung</th><th class="right">Laufzeit</th>
+      </tr></thead><tbody>
+      ${zeilen.length ? zeilen.map(g => `<tr data-sev="${WLAN_SEV[g.zustand] || "idle"}" data-action="inspect" data-kind="host" data-id="${esc(g.ctrlId)}">
+        <td class="sev">${dot(WLAN_SEV[g.zustand] || "idle")}</td>
+        <td><div class="mono">${esc(g.name)}</div><div class="t-sub">${esc([g.modell, g.ip].filter(Boolean).join(" · ") || g.ctrl)}</div></td>
+        <td class="faint">${esc(WLAN_ART[g.art] || g.art)}</td>
+        <td>${chip("plain", siteShort(g.site))}</td>
+        <td>${g.zustand === "online" ? '<span class="mono faint">verbunden</span>' : chip(WLAN_SEV[g.zustand] || "idle", g.zustandText)}</td>
+        <td class="right mono">${nz(g.clients)}${g.clientsGast ? ` <span class="faint">+${g.clientsGast}</span>` : ""}</td>
+        <td>${funkZelle(g)}</td>
+        <td class="mono faint">${g.uplink ? esc(g.uplink) + (g.uplinkFunk ? " (Funk)" : "") : "—"}</td>
+        <td class="mono faint">${esc(nz(g.fassung))}${g.update ? ' <span class="chip chip--info">neu</span>' : ""}</td>
+        <td class="right mono faint">${esc(laufzeitKurz(g.laufzeit))}</td>
+      </tr>`).join("") : `<tr><td colspan="10"><div class="empty">${gelesen
+        ? "Der Controller führt keine Geräte in dieser Site."
+        : "Noch nichts gelesen — dem Controller fehlen die Zugangsdaten."}</div></td></tr>`}
+      </tbody></table>
+    </div>
+    ${ohneZugang.length ? `<div class="panel-note">Zustand, Funk und Clientzahlen kommen aus dem Controller und
+      brauchen einen Zugang — ${ohneZugang.map(c => `<b>Verwaltung → ${esc(c.name)}</b>`).join(", ")}.
+      Ohne ihn bleibt es bei Erreichbarkeit, Antwortzeit und Zertifikat des Controllers selbst.</div>` : ""}
+    ${nurIntegration.length ? `<div class="panel-note">${nurIntegration.map(c => esc(c.name)).join(", ")} wird über die
+      <b>Integration-API</b> gelesen: Zustand, Modell und Fassung. Kanalbelegung und Clientzahlen kennt sie nicht —
+      dafür braucht es zusätzlich Benutzer und Passwort eines Viewer-Kontos.</div>` : ""}
+  </div>`;
+}
+
+/* Laufzeit, wie man sie im Vorbeigehen liest. Ab einem Tag zählen Tage:
+   dass ein AP seit 37 Tagen läuft, ist die Auskunft — nicht die Stunden. */
+function laufzeitKurz(sek) {
+  if (sek == null || !Number.isFinite(sek)) return "—";
+  const tage = Math.floor(sek / 86400);
+  return tage >= 1 ? `${tage} T` : `${Math.floor(sek / 3600)} h`;
 }
 
 /* Die Gateways aller Firewalls, die welche melden.
@@ -1931,7 +2006,7 @@ function viewDienste() {
   const hs = visibleHosts();
   const ag = hs.filter(h => h.type === "adguard");
   const ha = hs.filter(h => h.type === "hass");
-  const rest = hs.filter(h => !["adguard", "mailcow", "pmg", "hass", "pve", "pbs", "truenas", "portainer", "opnsense", "pfsense"].includes(h.type));
+  const rest = hs.filter(h => !["adguard", "mailcow", "pmg", "hass", "pve", "pbs", "truenas", "portainer", "opnsense", "pfsense", "unifi"].includes(h.type));
 
   /* Für diese Typen gibt es noch keinen Sammler. Angezeigt wird deshalb
      das, was tatsächlich gemessen wurde: Erreichbarkeit, Antwortzeit,
@@ -3557,6 +3632,48 @@ function kennzahlenPanel(h) {
         wird, wer gerade neu startet, wer unhealthy ist und wer mit 137 an der Speichergrenze ausgestiegen ist.</div>
     </div>`;
   }
+  if (h.type === "unifi" && (h.wlanGeraete || h.aps != null)) {
+    const g = h.wlanGeraete || [];
+    const grenze = thr("wlan_kanal_warn") ?? 80;
+    return `<div class="panel">
+      <div class="panel-head"><h3>WLAN</h3><span class="hint">Site ${esc(nz(h.wlanSite))} · ${
+        h.wlanQuelle === "integration" ? "Integration-API" : "klassische API"}</span></div>
+      <div class="panel-body">${kv([
+        ["Access Points", h.aps != null ? `${h.apsOnline} von ${h.aps} verbunden` : "—"],
+        ["Getrennt", h.apsOffline ? `<span style="color:var(--warn)">${h.apsOffline}</span>` : nz(h.apsOffline)],
+        ["Isoliert", h.apsIsoliert ? `<span style="color:var(--warn)">${h.apsIsoliert}</span> — Uplink verloren, funkt weiter` : nz(h.apsIsoliert)],
+        ["Wartet auf Adoption", nz(h.apsWartend)],
+        ["Weitere Geräte", h.wlanGesamt != null ? `${h.switche ?? 0} Switch(es) · ${h.wlanGateways ?? 0} Gateway(s)` : "—"],
+        ["Clients", h.clients != null ? `${h.clients}${h.clientsGast ? ` · davon ${h.clientsGast} im Gastnetz` : ""}` : "— kennt diese API nicht"],
+        ["Kanalbelegung", h.kanalLastBand
+          ? h.kanalLastBand.map(b => `<span class="mono">${esc(b.band)}</span> bis <span style="color:var(--${b.last >= grenze ? "warn" : "text"})">${b.last} %</span> (${esc(b.ap)}, Kanal ${b.kanal ?? "?"})`).join("<br>")
+          : "— nur über die klassische API"],
+        ["Neue Fassung verfügbar", h.wlanUpdates == null ? "—" : `${h.wlanUpdates} Gerät(e)`],
+        ["Controller", [h.version ? "Network " + esc(h.version) : null, h.controllerUpdate ? "Aktualisierung steht an" : null].filter(Boolean).join(" · ") || "—"],
+        ["Teilsystem WLAN", h.wlanStatus ? esc(h.wlanStatus) : "—"]
+      ])}</div>
+      ${g.length ? `<div class="panel-body panel-body--flush tablewrap">
+        <table class="t"><thead><tr><th style="width:34px"></th><th>Gerät</th><th>Art</th><th>Zustand</th>
+          <th class="right">Clients</th><th>Funk</th><th class="right">Zuletzt gesehen</th></tr></thead><tbody>
+        ${g.map(d => `<tr data-sev="${WLAN_SEV[d.zustand] || "idle"}">
+          <td class="sev">${dot(WLAN_SEV[d.zustand] || "idle")}</td>
+          <td><div class="mono">${esc(d.name)}</div><div class="t-sub">${esc([d.modell, d.ip].filter(Boolean).join(" · "))}</div></td>
+          <td class="faint">${esc(WLAN_ART[d.art] || d.art)}</td>
+          <td class="faint">${esc(d.zustandText)}</td>
+          <td class="right mono">${nz(d.clients)}</td>
+          <td class="mono faint" style="font-size:11.5px">${(d.funk || []).map(f =>
+            `${esc(f.band || "?")} K${f.kanal ?? "?"}${f.last != null ? " " + f.last + " %" : ""}`).join("<br>") || "—"}</td>
+          <td class="right faint">${esc(fmtWhen(d.gesehen) || "—")}</td></tr>`).join("")}
+        </tbody></table></div>` : ""}
+      <div class="panel-note">Ein Access Point mit Strom antwortet auf Ping, auch wenn er sich beim Controller
+        abgemeldet hat — deshalb steht hier sein <b>gemeldeter</b> Zustand und nicht seine Erreichbarkeit.
+        „Isoliert" heißt: er funkt weiter, hat aber keinen Uplink mehr; seine Clients sind verbunden und kommen
+        nirgendwohin. Die <b>Kanalbelegung</b> zählt eigenen und fremden Funkverkehr zusammen und ist die Zahl,
+        die ein langsames WLAN erklärt, während jede Ampel grün steht — gelb ab ${grenze} %.
+        <br><b>Die Clientliste wird nicht gelesen</b>, nur gezählt: eine Überwachung ist kein
+        Anwesenheitsprotokoll.</div>
+    </div>`;
+  }
   return "";
 }
 
@@ -5168,7 +5285,8 @@ const HOST_TYPES = [
   ["pmg", "Proxmox Mail Gateway", 8006, true], ["opnsense", "OPNsense", 443, true],
   ["pfsense", "pfSense", 443, true], ["truenas", "TrueNAS SCALE", 443, false],
   ["mailcow", "Mailcow", 443, true], ["adguard", "AdGuard Home", 443, true],
-  ["portainer", "Portainer", 9443, true], ["hass", "Home Assistant", 8123, false],
+  ["portainer", "Portainer", 9443, true], ["unifi", "UniFi Controller", 443, true],
+  ["hass", "Home Assistant", 8123, false],
   ["other", "Sonstiges", 443, false]
 ];
 const typeLabel = t => (HOST_TYPES.find(x => x[0] === t) || [, t])[1];
@@ -5228,6 +5346,32 @@ function zugangsFelder(type, cred, getippt) {
     Gelesen werden Container, Warteschlange (samt Grund, warum eine Mail liegt), Platz der Postfachablage,
     Domänen, Postfächer mit ihrer Quote, rspamd-Zahlen und der Umfang der Quarantäne — <b>nicht deren Inhalt</b>:
     Betreff, Absender und Empfänger bleiben auf dem Mailserver.</p>`;
+
+  /* UniFi kennt zwei Wege hinein, und sie sind nicht gleichwertig: der
+     Schlüssel ist bequemer und übersteht eine Zwei-Faktor-Anmeldung, die
+     klassische API mit Benutzer und Passwort liefert mehr Zahlen. Beide
+     stehen deshalb hier, mit dem Unterschied dabei — sonst füllt man eins
+     aus und wundert sich, dass die Kanalbelegung fehlt. */
+  if (type === "unifi") return `
+    <div class="admin-grid">
+      ${inpc("apiKey", "API-Schlüssel", cred, cred.apiKey ? "hinterlegt — leer lassen, um ihn zu behalten" : "Network 9+: Control Plane → Integrations", getippt)}
+      ${inpc("user", "Benutzer", cred, "Konto mit der Rolle Viewer", getippt)}
+      ${inpc("password", "Passwort", cred, cred.password ? "hinterlegt — leer lassen, um es zu behalten" : "wie an der Oberfläche des Controllers", getippt)}
+      ${inpc("site", "Site", cred, "leer: die erste, die der Zugang sieht", getippt)}
+    </div>
+    <p class="admin-hint" style="margin:8px 0 0"><b>Eines von beidem genügt, beides ist besser.</b>
+    Der <b>Schlüssel</b> ist der ruhigere Weg — er kommt ohne Zwei-Faktor-Anmeldung aus und erbt die Rolle seines
+    Kontos. <b>Benutzer und Passwort</b> öffnen die klassische API, und nur die kennt
+    <b>Kanalbelegung, Sendeleistung und Clientzahlen je Funkmodul</b>; die offizielle Integration-API liefert
+    Zustand, Modell und Fassung, sonst nichts. Liegt beides vor, wird der Schlüssel zuerst versucht und bei
+    Ablehnung auf die Anmeldung zurückgefallen.<br><br>
+    Anzulegen unter <span class="mono">Settings → Admins &amp; Users</span> mit der Rolle
+    <span class="mono">Viewer</span> — <b>nur lesen</b>. Der Port gehört mit in die Adresse: UniFi OS (Dream
+    Machine, Cloud Key Gen2) antwortet auf <span class="mono">443</span>, eine selbst betriebene Network
+    Application auf <span class="mono">8443</span>.<br><br>
+    Gelesen werden Geräte, Zustand, Uplink, Funkmodule und die Teilsysteme des Controllers.
+    <b>Die Clientliste wird nicht gelesen</b> — nur ihre Anzahl: eine Überwachung ist kein
+    Anwesenheitsprotokoll.</p>`;
 
   if (type === "portainer") return `
     <div class="admin-grid">
@@ -5733,6 +5877,7 @@ function adminSettings() {
       ${f("mailcow_takt", "Mailcow: Betriebstakt", "Sekunden — Container, Warteschlange, Platz")}
       ${f("mailcow_takt_lang", "Mailcow: Statistiktakt", "Sekunden — Domänen, Postfächer, Quarantäne")}
       ${f("mailbox_voll_warn", "Postfach voll: Warnung", "Belegung eines einzelnen Postfachs in %")}
+      ${f("wlan_kanal_warn", "WLAN: Kanalbelegung", "% je Funkband bis Gelb")}
     </div></div>
     <div class="panel-note">Die Belegungsgrenzen gelten für Proxmox-Speicher, PBS-Datastores und die Platte einer
       Firewall. Einzelne Systeme dürfen abweichen — beim Bearbeiten eines Systems unter <b>Schwellwerte</b>. Das ist
@@ -5757,7 +5902,10 @@ function adminSettings() {
       <em>in</em> einem Container ausführen. Die Erreichbarkeit misst der Prober weiterhin in jedem Durchlauf.
       <br><b>Postfach voll</b> gilt je Postfach, nicht je Platte: ein volles Postfach weist Mail ab, während der
       Dienst tadellos läuft — und gemeldet wird das von niemandem sonst. Postfächer ohne gesetzte Quote bleiben
-      außen vor; dort gibt es keine Belegung in Prozent.${verlaufNote()}</div>
+      außen vor; dort gibt es keine Belegung in Prozent.
+      <br>Die <b>Kanalbelegung</b> zählt eigenen und fremden Funkverkehr zusammen. Sie steht bewusst hoch: 2,4 GHz
+      liegt in bewohnter Gegend tagsüber bei 40 bis 60 %, und eine Ampel, die das täglich zeigt, ist nach zwei
+      Wochen abtrainiert. Jenseits von 80 % geht spürbar nichts mehr durch.${verlaufNote()}</div>
   </div>`;
 }
 

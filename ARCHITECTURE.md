@@ -31,7 +31,8 @@ Dieses Dokument beschreibt den Aufbau. **Stufe 1 ist gebaut und läuft**
 ## Bausteine
 
 ```
-   Proxmox / OPNsense / pfSense / TrueNAS / AdGuard / Portainer / Mailcow / HA
+   Proxmox / OPNsense / pfSense / TrueNAS / AdGuard / Portainer / Mailcow
+   UniFi / HA
                   │  API, read-only                    │  SMTP
                   ▼                                    ▼
         ┌───────────────────┐                 ┌──────────────────┐
@@ -154,7 +155,7 @@ Punkt — steht in [TODO.md](TODO.md).
 | 2 | Proxmox VE + PBS + PMG anbinden | **gebaut** — VE inklusive Knotendetails (Kernel, Fassung, Ausstattung, ausstehende Pakete) und jedem Gast mit seiner Auslastung, in einer eigenen Ansicht *Virtualisierung*; PMG mit Durchsatz, Warteschlange samt Alter, Quarantäne, Signaturstand und den filternden Diensten in der Ansicht *Mail* — **und mit Ticket statt Token**, weil PMG keine kennt |
 | 3 | OPNsense/pfSense inkl. WireGuard-Handshake | **OPNsense vollständig** — Fassung, Laufzeit, Last, Speicher, Platte, **Schnittstellen einzeln** (Durchsatz, Pakete, Fehler, Verwürfe, Verbindungszustand, Verlauf je Leitung), **Gateways**, **Zustandstabelle**, **CARP**, Peers und Handshake am Tunnel; offen sind nur die HAProxy-Backends. pfSense liefert dasselbe, **aber nur mit dem Fremdpaket `pfSense-pkg-API`** — das nicht im Paketverzeichnis steht und für neuere Fassungen fehlt; ohne es bleibt es bei der Erreichbarkeit |
 | 4 | Alarm-Postfach mit Regelwerk | offen — die Ansicht erklärt den Weg und zeigt ein Beispiel |
-| 5 | TrueNAS, AdGuard, Portainer, Mailcow, Home Assistant | **AdGuard Home, Portainer und Mailcow gebaut** — AdGuard zusätzlich mit einer echten Auflösung über UDP/53 als *wesentlicher* Prüfung; Mailcow mit Containern, Warteschlange samt Grund, Postfächern und rspamd, in derselben Ansicht *Mail* wie der Gateway. TrueNAS und Home Assistant offen — bislang nur Erreichbarkeit |
+| 5 | TrueNAS, AdGuard, Portainer, Mailcow, UniFi, Home Assistant | **AdGuard Home, Portainer, Mailcow und der UniFi Controller gebaut** — AdGuard zusätzlich mit einer echten Auflösung über UDP/53 als *wesentlicher* Prüfung; Mailcow mit Containern, Warteschlange samt Grund, Postfächern und rspamd, in derselben Ansicht *Mail* wie der Gateway; UniFi mit jedem Access Point einzeln, Kanalbelegung je Funkband und dem Zustand, den ein Ping nie sieht — in der Ansicht *Netz* unter den Firewalls. TrueNAS und Home Assistant offen — bislang nur Erreichbarkeit |
 | 6 | Wartungsfenster, Zeitreihen-Detailseiten, **Push-Kanäle und Totmannschalter** | Zeitreihen und Detailseite **gebaut** (eigene Ablage statt VictoriaMetrics, siehe unten); Wartungsfenster, Push und Totmannschalter offen — ohne sie ist der Leitstand ein Bildschirm, kein Wecker |
 
 ### Zeitreihen: eine Datei je Tag statt einer Datenbank

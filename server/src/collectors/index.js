@@ -12,6 +12,7 @@ import { collectOpnsense, testConnection as testOpnsense } from "./opnsense.js";
 import { collectPfsense, testConnection as testPfsense } from "./pfsense.js";
 import { collectAdguard, testConnection as testAdguard } from "./adguard.js";
 import { collectPortainer, testConnection as testPortainer } from "./portainer.js";
+import { collectUnifi, testConnection as testUnifi } from "./unifi.js";
 
 /* Der zweite Parameter sind die Einstellungen des laufenden Bestands. Ein
    Sammler braucht sie für die Schwellwerte: ab wann eine Belegung gelb
@@ -31,7 +32,8 @@ export function makeCollectors(secrets) {
     pfsense: wrap(collectPfsense),
     adguard: wrap(collectAdguard),
     portainer: wrap(collectPortainer),
-    mailcow: wrap(collectMailcow)
+    mailcow: wrap(collectMailcow),
+    unifi: wrap(collectUnifi)
   };
 }
 
@@ -42,5 +44,6 @@ export const TESTERS = {
   opnsense: (h, c) => testOpnsense(h, c),
   pfsense: (h, c) => testPfsense(h, c),
   adguard: (h, c) => testAdguard(h, c),
-  portainer: (h, c) => testPortainer(h, c)
+  portainer: (h, c) => testPortainer(h, c),
+  unifi: (h, c) => testUnifi(h, c)
 };
