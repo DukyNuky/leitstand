@@ -262,7 +262,11 @@ function renderRail() {
 
 function renderAlarmstrip() {
   const überwacht = state.hosts.filter(h => h.monitored !== false);
-  const hostsUp = überwacht.filter(h => h.status !== "crit").length;
+  /* Antwortende Systeme, nicht grüne: ein rotes System kann tadellos
+     antworten und trotzdem einen Befund haben. Die Zahl der Befunde steht
+     links daneben unter „Kritisch" und „Warnungen". */
+  const stumm = überwacht.filter(h => h.reachable === false).length;
+  const hostsUp = überwacht.length - stumm;
   const tunOk = state.tunnels.filter(t => t.status === "ok").length;
   const bkOk = BACKUPS.filter(b => b.status === "ok").length;
   /* Nur die bewerteten zählen. Ein eigensigniertes Zertifikat, das keine
@@ -275,7 +279,8 @@ function renderAlarmstrip() {
     { k:"Kritisch", v:critCount(), tone: critCount() ? "crit" : "ok", go:"lage", pulse: critCount() > 0 },
     { k:"Warnungen", v:warnCount(), tone: warnCount() ? "warn" : "ok", go:"lage" },
     { k:"Systeme", v: überwacht.length ? `${hostsUp}/${überwacht.length}` : "—",
-      tone: !überwacht.length ? "idle" : hostsUp === überwacht.length ? "ok" : "warn", go:"sites" },
+      tone: !überwacht.length ? "idle" : stumm ? "warn" : "ok", go:"sites",
+      titel: "Systeme, die auf die Prüfung antworten — ein rotes System kann darunter sein" },
     { k:"Tunnel", v: state.tunnels.length ? `${tunOk}/${state.tunnels.length}` : "—",
       tone: !state.tunnels.length ? "idle" : tunOk === state.tunnels.length ? "ok" : "warn", go:"vpn" },
     { k:"Backups 24 h", v: BACKUPS.length ? `${bkOk}/${BACKUPS.length}` : "—", tone: !BACKUPS.length ? "idle" : bkOk === BACKUPS.length ? "ok" : "warn", go:"compute" },
@@ -283,7 +288,7 @@ function renderAlarmstrip() {
     { k:"Alarm-Mails", v: "—", tone:"idle", go:"post" }
   ];
   return `<div class="alarmstrip">${cells.map(c => `
-    <button class="alarmcell" data-tone="${c.tone}" data-action="view" data-view="${c.go}">
+    <button class="alarmcell" data-tone="${c.tone}" data-action="view" data-view="${c.go}"${c.titel ? ` title="${esc(c.titel)}"` : ""}>
       ${c.pulse ? '<span class="pulse"></span>' : dot(c.tone)}
       <span>${esc(c.k)}</span><b>${esc(String(c.v))}</b>
     </button>`).join("")}</div>`;
@@ -493,7 +498,11 @@ function kurzBefund() {
    wissen, ob etwas anliegt — dafür ist die Fläche darüber da. */
 function kurzKacheln() {
   const ueberwacht = state.hosts.filter(h => h.monitored !== false && inSite(h));
-  const hostsOk = ueberwacht.filter(h => h.status === "ok").length;
+  /* „antworten" steht als Beschriftung darunter, also muss auch das
+     gezählt werden. Grün ist etwas anderes: ein Knoten mit fehlgeschlagener
+     Sicherung antwortet tadellos und steht trotzdem auf Rot — als
+     „antwortet nicht" gezählt, führte er hier von der Störung weg. */
+  const hostsOk = ueberwacht.filter(h => h.reachable !== false).length;
   const tun = state.tunnels.filter(t => state.site === "all" || t.a === state.site || t.b === state.site);
   const tunOk = tun.filter(t => t.status === "ok").length;
   const bk = BACKUPS.filter(x => x.aktiv);
@@ -642,12 +651,26 @@ function viewLage() {
 
   const inc = openIncidents().sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev] || a.ageMin - b.ageMin);
   const hosts = state.hosts.filter(inSite).filter(h => h.monitored !== false);
-  const still = hosts.filter(h => h.status === "crit").length;
+  /* Erreichbarkeit ist eine Messung, keine Ampel.
+
+     Hier stand einmal `status === "crit"`, und damit galt jedes rote System
+     als stumm. Zwei Proxmox-Knoten, deren nächtlicher Sicherungsauftrag
+     fehlgeschlagen war, standen dann unter „ohne Antwort" — obwohl sie
+     einwandfrei antworteten. Die Kennzahl behauptete einen Netzausfall, wo
+     eine Sicherung schiefgegangen war. Gezählt wird deshalb, was der Prober
+     gemessen hat: `reachable`. */
+  const geprüft = hosts.filter(h => h.reachable != null);
+  const still = geprüft.filter(h => h.reachable === false).length;
+  const befund = hosts.filter(h => h.reachable === true && isProblem(h.status)).length;
   const tunOk = state.tunnels.filter(t => t.status === "ok").length;
   const kpis = [
-    { l:"Erreichbarkeit", v: pct(hosts.length - still, hosts.length),
-      s: hosts.length ? `${still} von ${hosts.length} ohne Antwort` : "kein überwachtes System",
-      t: !hosts.length ? "idle" : still ? "warn" : "ok", go:"sites" },
+    { l:"Erreichbarkeit", v: geprüft.length ? pct(geprüft.length - still, geprüft.length) : "—",
+      s: !hosts.length ? "kein überwachtes System"
+        : !geprüft.length ? "noch nicht geprüft"
+        : still ? `${still} von ${geprüft.length} ohne Antwort`
+        : befund ? `alle ${geprüft.length} antworten · ${befund} mit Befund`
+        : `alle ${geprüft.length} antworten`,
+      t: !geprüft.length ? "idle" : still ? "warn" : "ok", go:"sites" },
     { l:"Offene Störungen", v:critCount() + warnCount(), s:`${critCount()} kritisch · ${warnCount()} Warnung`,
       t: critCount() ? "crit" : warnCount() ? "warn" : "ok", go:"lage" },
     { l:"VPN-Tunnel", v: state.tunnels.length ? `${tunOk}/${state.tunnels.length}` : "—",

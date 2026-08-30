@@ -228,3 +228,98 @@ test("Eine private Adresse wird als solche weitergereicht", () => {
   assert.equal(s.wanIst, "192.168.100.2");
   assert.equal(s.wanPrivat, true);
 });
+
+/* ---------- Erreichbarkeit ist eine Messung, keine Ampel ----------
+   Zwei Proxmox-Knoten mit fehlgeschlagenem Sicherungsauftrag standen auf
+   Rot — und wurden dadurch als „ohne Antwort" gezählt und ihr Standort als
+   ausgefallen gemeldet. Sie antworteten die ganze Zeit tadellos. */
+import net from "node:net";
+
+function offenerPort() {
+  return new Promise(r => {
+    const s = net.createServer(c => c.end());
+    s.listen(0, "127.0.0.1", () => r({ port: s.address().port, close: () => new Promise(x => s.close(x)) }));
+  });
+}
+
+/* Ein Knoten, der antwortet, dessen Sammler aber etwas findet. */
+async function knotenMitBefund() {
+  const p = await offenerPort();
+  const inv = Inv.normalize({
+    settings: { interval: 60, timeout: 2, icmp: false },
+    sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "pve-01", type: "pve", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: p.port }] }],
+    tunnels: [], links: []
+  });
+  const e = new Engine(inv, {
+    collectors: { pve: async () => ({ status: "crit", note: "1 fehlgeschlagene Aufgabe(n) in 24 h" }) }
+  });
+  await e.runOnce();
+  return { e, p };
+}
+
+test("Ein erreichbarer Knoten mit Befund gilt nicht als stumm", async () => {
+  const { e, p } = await knotenMitBefund();
+  try {
+    const h = buildState(e, null).hosts[0];
+    assert.equal(h.status, "crit", "der Befund des Sammlers steht");
+    assert.equal(h.reachable, true, "gemessen wurde trotzdem eine Antwort");
+  } finally { await p.close(); }
+});
+
+test("Ein Standort fällt nicht aus, weil eine Sicherung fehlschlägt", async () => {
+  const { e, p } = await knotenMitBefund();
+  try {
+    const s = buildState(e, null).sites[0];
+    assert.equal(s.down, false, "es antwortet ja jemand");
+    assert.equal(s.silent, 0);
+    assert.equal(s.problems, 1, "als Störung wird der Knoten sehr wohl geführt");
+  } finally { await p.close(); }
+});
+
+test("Ein wirklich stiller Standort wird weiterhin als ausgefallen geführt", async () => {
+  const p = await offenerPort();
+  await p.close();                                  /* der Port ist jetzt zu */
+  const inv = Inv.normalize({
+    settings: { interval: 60, timeout: 1, icmp: false, fail_threshold: 1 },
+    sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [{ id: "weg", type: "other", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: p.port }] }],
+    tunnels: [], links: []
+  });
+  const e = new Engine(inv);
+  await e.runOnce();
+  const s = buildState(e, null).sites[0];
+  assert.equal(s.down, true);
+  assert.equal(s.silent, 1);
+});
+
+/* Während des ersten Durchlaufs sind die meisten Systeme noch ungemessen.
+   Wer die als „antwortet nicht" zählt, meldet einen Standortausfall,
+   sobald zufällig das erste stille System an der Reihe war. */
+test("Ein halb geprüfter Standort gilt noch nicht als ausgefallen", async () => {
+  const p = await offenerPort();
+  await p.close();
+  const inv = Inv.normalize({
+    settings: { interval: 60, timeout: 1, icmp: false, fail_threshold: 1 },
+    sites: [{ id: "hq", name: "HQ", short: "DEKO" }],
+    hosts: [
+      { id: "weg", type: "other", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: p.port }] },
+      { id: "spaeter", type: "other", site: "hq", ip: "127.0.0.1", checks: [{ kind: "tcp", port: p.port }] }
+    ],
+    tunnels: [], links: []
+  });
+  const e = new Engine(inv);
+  await e.runOnce();
+  e.hosts.get("spaeter").reachable = undefined;          /* noch nicht drangewesen */
+
+  const s = buildState(e, null).sites[0];
+  assert.equal(s.down, false, "ein Ergebnis von zweien ist kein Standortausfall");
+  assert.equal(s.silent, 1, "gezählt wird trotzdem, was gemessen wurde");
+});
+
+test("Vor der ersten Messung ist die Erreichbarkeit unbekannt, nicht falsch", () => {
+  const { e } = zustand();
+  const st = buildState(e, null);
+  assert.equal(st.hosts[0].reachable, null, "null heißt: noch nicht gemessen");
+  assert.equal(st.sites[0].down, false, "und ungemessen ist kein Ausfall");
+});

@@ -2448,3 +2448,63 @@ test("Die Systemseite des Controllers zeigt Kanalbelegung und Isolation", async 
   assert.match(seite, /2 von 3 verbunden/);
   assert.match(seite, /Anwesenheitsprotokoll/, "warum die Clientliste fehlt, steht dabei");
 });
+
+/* ---------- Rot heißt nicht stumm ----------
+   Zwei Proxmox-Knoten, deren nächtliche Sicherung fehlgeschlagen war,
+   standen in der Übersicht unter „ohne Antwort" — sie antworteten die
+   ganze Zeit. Die Kennzahl las die Ampel statt der Messung. */
+async function mitBefund() {
+  const zustand = await echterZustand();
+  for (const h of zustand.hosts) {
+    h.reachable = true;
+    h.status = h.id === "web" ? "crit" : "ok";
+    h.note = h.id === "web" ? "1 fehlgeschlagene Aufgabe(n) in 24 h" : null;
+  }
+  for (const s of zustand.sites) { s.down = false; s.silent = 0; }
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  return { sandbox, ziele };
+}
+
+test("Ein erreichbarer Knoten mit Befund zählt nicht als „ohne Antwort“", async () => {
+  const { sandbox, ziele } = await mitBefund();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "lage";
+  ui.render();
+  const html = ziele.get("#wrap").innerHTML;
+
+  assert.ok(!/ohne Antwort/.test(html), "es antwortet ja jeder");
+  assert.match(html, /100 %/, "die Erreichbarkeit ist vollständig");
+  assert.match(html, /mit Befund/, "die Störung wird trotzdem genannt");
+});
+
+test("Die Kopfleiste zählt antwortende Systeme, nicht grüne", async () => {
+  const { sandbox, ziele } = await mitBefund();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "lage";                 /* die Kurzlage zeigt keine Kopfleiste */
+  ui.render();
+  assert.match(ziele.get("#top").innerHTML, /Systeme<\/span><b>2\/2</,
+    "beide überwachten Systeme antworten");
+});
+
+/* Die Kurzlage ist die Ansicht fürs Telefon, und unter ihrer Zahl steht
+   ausdrücklich „antworten". Dann muss auch das gezählt werden. */
+test("Auch die Kurzlage zählt Antworten, nicht Ampeln", async () => {
+  const { sandbox, ziele } = await mitBefund();
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "kurz";
+  ui.render();
+  assert.match(ziele.get("#wrap").innerHTML,
+    /kurz-kachel-k">Systeme<\/span>\s*<b>2\/2<\/b>\s*<span class="kurz-kachel-s">antworten/);
+});
+
+test("Ein wirklich stilles System steht weiterhin ohne Antwort da", async () => {
+  const zustand = await echterZustand();
+  const { sandbox, ziele } = ladeUi();
+  sandbox.window.LeitstandUI.applyLive(zustand);
+  const ui = sandbox.window.LeitstandUI;
+  ui.state.view = "lage";
+  ui.render();
+  /* Der Bestand zeigt auf unerreichbare Adressen — genau darum geht es. */
+  assert.match(ziele.get("#wrap").innerHTML, /ohne Antwort/);
+});

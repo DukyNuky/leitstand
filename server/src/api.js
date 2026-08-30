@@ -161,6 +161,12 @@ function hostView(h, st = {}, settings = {}) {
     ip: h.ip || null,
     url: h.url || null,
     status: uiStatus(st.status || "unknown"),
+    /* Ampel und Erreichbarkeit sind zweierlei, und die Oberfläche muss sie
+       auseinanderhalten können: Rot heißt „hier stimmt etwas nicht", nicht
+       „hier antwortet niemand". Ein Proxmox-Knoten mit fehlgeschlagenem
+       Sicherungsauftrag steht auf Rot und antwortet dabei tadellos.
+       null = noch nicht gemessen. */
+    reachable: st.reachable ?? null,
     note: st.note || x.note || null,
     version: x.version || null,
     ms: st.ms ?? null,
@@ -321,8 +327,20 @@ function siteView(s, hosts, inv, engine) {
     .filter(t => t.a === s.id || t.b === s.id)
     .map(t => engine.tunnels.get(t.id))
     .filter(Boolean);
-  const reachable = mine.filter(h => h.status !== "crit" && h.monitored);
-  const down = mine.length > 0 && mine.filter(h => h.monitored).length > 0 && reachable.length === 0;
+  /* „Standort weg" heißt: es antwortet niemand mehr. Nicht: es steht etwas
+     auf Rot. Ein Knoten, dessen Sicherungsauftrag heute Nacht gescheitert
+     ist, antwortet einwandfrei — er allein hätte hier den ganzen Standort
+     für ausgefallen erklärt. Gezählt wird deshalb dieselbe Bedingung wie in
+     `Engine#rollup`: die Messung, nicht die Ampel.
+
+     Und erst, wenn jedes überwachte System dort geprüft wurde: während des
+     ersten Durchlaufs stehen die meisten noch auf „ungemessen“, und wer die
+     mitzählt, meldet einen Ausfall, sobald zufällig ein stilles System als
+     erstes an der Reihe war. */
+  const überwacht = mine.filter(h => h.monitored);
+  const geprüft = überwacht.filter(h => h.reachable != null);
+  const still = geprüft.filter(h => h.reachable === false);
+  const down = überwacht.length > 0 && geprüft.length === überwacht.length && still.length === überwacht.length;
   return {
     id: s.id, name: s.name, short: s.short || shortOf(s), place: s.place || "",
     isp: s.isp || "—", wan: s.wan || "—", wan6: s.wan6 || "—",
@@ -331,6 +349,7 @@ function siteView(s, hosts, inv, engine) {
     uptimeDays: s.uptimeDays ?? null,
     down,
     hosts: mine.length,
+    silent: still.length,
     problems: mine.filter(h => h.status === "warn" || h.status === "crit").length,
     tunnelsOk: tuns.filter(t => t.status === "ok").length,
     tunnels: tuns.length
