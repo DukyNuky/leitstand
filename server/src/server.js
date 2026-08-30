@@ -174,10 +174,23 @@ export function createServer(opts = {}) {
       return json(res, 200, { ...buildInfo(), started: startedAt, uptimeSeconds: Math.round(process.uptime()) });
 
     if (p === "/api/stream" && m === "GET") {
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      res.writeHead(200, {
+        "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive",
+        /* Für Reverse Proxies, die Antworten sonst puffern und den Strom
+           damit erst beim Verbindungsende ausliefern. */
+        "x-accel-buffering": "no"
+      });
       res.write(`data: ${JSON.stringify(buildState(engine, secrets, bestandInfo()))}\n\n`);
       clients.add(res);
-      req.on("close", () => clients.delete(res));
+      /* Ein Kommentarzeichen alle 25 Sekunden. Der Browser wirft es weg,
+         aber die Strecke bleibt in Bewegung: Mobilfunk-NAT und Proxies
+         schließen eine stille Verbindung nach einer halben Minute, und
+         zwar wortlos — die Seite hielte die Werte von vorhin dann für
+         aktuell. Nötig ist das nur bei langem Prüfintervall; bei kurzem
+         trägt ohnehin jeder Durchlauf. */
+      const puls = setInterval(() => { try { res.write(": puls\n\n"); } catch {} }, 25000);
+      if (puls.unref) puls.unref();
+      req.on("close", () => { clearInterval(puls); clients.delete(res); });
       return;
     }
 

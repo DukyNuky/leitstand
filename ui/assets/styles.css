@@ -465,11 +465,92 @@ pre.raw {
   color: var(--info); background: var(--info-bg);
   border-bottom: 1px solid var(--line);
 }
+/* ============================================================
+   Am Telefon
+
+   Der Leitstand ist für den Schreibtisch entworfen: eine Leiste links, eine
+   Kopfzeile, breite Tabellen. Am Telefon war davon eine 236 Pixel breite
+   Leiste übrig, die zwei Drittel des Schirms fraß, und darunter eine Spalte,
+   in der nichts mehr lesbar war. Die Kurzlage beantwortet unterwegs die
+   eine große Frage — hier geht es um alles danach: die Ansicht, die man
+   aufmacht, wenn die Antwort „nein" war.
+
+   · die Leiste wird zu einem waagerechten Reiterband über dem Inhalt und
+     scrollt mit weg, statt Platz zu belegen,
+   · Tabellen behalten ihre Spalten und werden seitlich geschoben; sie zu
+     stapeln nähme ihnen den Vergleich, für den sie da sind,
+   · der Inspector kommt von unten statt von rechts — dort ist der Daumen,
+   · Eingabefelder werden 16 px groß, weil iOS sonst beim Antippen
+     hineinzoomt und die Seite verrückt stehen lässt.
+   ============================================================ */
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
-  .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }
-  .nav { flex-direction: row; flex-wrap: wrap; }
+  .app { grid-template-columns: 1fr; min-height: 100dvh; }
+
+  .rail {
+    position: static; height: auto; overflow: visible;
+    border-right: 0; border-bottom: 1px solid var(--line);
+  }
+  .brand { padding: 12px 14px 10px; border-bottom: 0; }
+  .nav {
+    flex-direction: row; flex-wrap: nowrap; gap: 4px;
+    padding: 0 10px 8px; overflow-x: auto; scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-item { width: auto; flex: none; padding: 9px 12px; white-space: nowrap; }
+  .nav-item[aria-current="true"] { box-shadow: inset 0 -2px 0 var(--accent); }
   .nav-label, .rail-foot { display: none; }
+
+  .topbar { position: static; backdrop-filter: none; }
+  .topbar-row { flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
+  .topbar-row > .spacer { display: none; }
+  .view-title { font-size: 17px; }
+  .search { flex: 1 1 150px; min-width: 0; }
+  .alarmcell { padding: 10px 14px; }
+
+  .wrap { padding: 14px 14px 44px; gap: 14px; }
+  .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .kpi { padding: 11px 12px; }
+  .kpi-value { font-size: 23px; }
+
+  /* Fingerbreite statt Mauszeigerbreite. */
+  .btn { padding: 8px 12px; }
+  .btn--sm { padding: 5px 9px; }
+  .seg button { padding: 8px 12px; }
+
+  /* Tabellen bleiben Tabellen und werden geschoben. */
+  .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+
+  /* Der Inspector als Blatt von unten. */
+  .inspector {
+    top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 88dvh;
+    border-left: 0; border-top: 1px solid var(--line-2);
+    border-radius: var(--r) var(--r) 0 0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes slide { from { transform: translateY(24px); opacity: .4; } }
+  }
+  .inspector-head, .inspector-body, .inspector-foot { padding-left: 14px; padding-right: 14px; }
+
+  .palette-scrim { padding-top: 6vh; }
+  .palette-list { max-height: 56vh; }
+  .toasts { left: 12px; right: 12px; bottom: 12px; }
+  .toast { max-width: none; }
+  .kv { grid-template-columns: 104px 1fr; }
+  .mail-list { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .mail-layout { min-height: 0; }
+
+  /* iOS zoomt in jedes Feld unter 16 px hinein — und kommt nicht von
+     selbst wieder heraus. Danach steht die halbe Seite außerhalb des
+     Schirms, und das sieht aus wie ein kaputtes Layout. */
+  .admin-input, .search input, .palette input { font-size: 16px; }
+}
+
+@media (max-width: 480px) {
+  .g4 { grid-template-columns: 1fr; }
+  .brand-sub { font-size: 9px; }
+  .wrap { padding: 12px 10px 40px; }
+  .panel-body { padding: 12px; }
+  table.t th, table.t td { padding-left: 10px; padding-right: 10px; }
 }
 
 /* ---------- Kurzlage ----------

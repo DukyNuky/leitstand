@@ -16,14 +16,28 @@
     interval: null,
     error: null,
     stale: false,
+    zustand: null,                    /* der zuletzt empfangene, vollständige Zustand */
     handlers: { state: [], fail: [], stale: [] }
   };
   window.LEITSTAND = L;
-  L.onState = fn => L.handlers.state.push(fn);
-  L.onFail = fn => L.handlers.fail.push(fn);
-  L.onStale = fn => L.handlers.stale.push(fn);
 
-  const fire = (kind, arg) => { for (const fn of L.handlers[kind]) { try { fn(arg); } catch (e) { console.error(e); } } };
+  const ruf = (fn, arg) => { try { fn(arg); } catch (e) { console.error(e); } };
+  const fire = (kind, arg) => { for (const fn of L.handlers[kind]) ruf(fn, arg); };
+
+  /* Wer sich später anmeldet, bekommt nachgereicht, was er verpasst hat.
+
+     Ohne das gab es ein Rennen, das ausgerechnet auf dem Telefon regelmäßig
+     verlorenging: diese Datei wird zuerst geladen und fragt sofort
+     `/api/state` ab. `app.js` wird danach geholt — über dieselbe, langsame
+     Mobilfunkstrecke. War die Antwort schneller da als das Skript, das sie
+     verarbeiten soll, meldete sich `app.js` bei einem Strom an, der längst
+     gefeuert hatte. Es sah dann einen Dienst, der angeblich nicht
+     antwortete, und blieb dabei — bis jemand von Hand neu lud. Am
+     Schreibtisch fiel das nie auf: dort liegt `app.js` im Zwischenspeicher
+     und ist vor der Antwort da. */
+  L.onState = fn => { L.handlers.state.push(fn); if (L.zustand) ruf(fn, L.zustand); };
+  L.onFail = fn => { L.handlers.fail.push(fn); if (!L.pending && !L.live && L.error) ruf(fn, L.error); };
+  L.onStale = fn => { L.handlers.stale.push(fn); if (L.stale) ruf(fn, true); };
 
   /* Erstabruf.
 
@@ -46,7 +60,7 @@
      Nachricht ist der vollständige Zustand; er kann die Seite also allein
      wieder füllen. */
   const ERSTABRUF_MS = 10000;
-  let anlauf = 0, geplant = null;
+  let anlauf = 0, geplant = null, wache = null;
 
   function connect() {
     clearTimeout(geplant); geplant = null;
@@ -77,19 +91,53 @@
   connect();
 
   /* Wer zurück auf den Reiter wechselt, will nicht auf den nächsten
-     Versuch warten — und ein Rechner, der aus dem Schlaf kommt, hat
-     ohnehin gerade alle Verbindungen verloren. */
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && !L.live) L.retry(); });
-  window.addEventListener("online", () => { if (!L.live) L.retry(); });
+     Versuch warten — und ein Telefon, das aus dem Schlaf kommt, hat
+     ohnehin gerade alle Verbindungen verloren.
+
+     Geprüft wird auch der veraltete Fall: der Strom gilt noch als lebendig,
+     hat aber seit einer Weile nichts mehr geschickt. Genau so sieht ein
+     Telefon aus, das zehn Minuten in der Tasche lag. */
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && (!L.live || L.stale)) L.retry();
+  });
+  window.addEventListener("online", () => { if (!L.live || L.stale) L.retry(); });
+  /* Aus dem Seitenspeicher zurück (Zurück-Taste auf iOS) laufen die Skripte
+     nicht erneut — die Verbindung von vorhin ist aber weg. */
+  window.addEventListener("pageshow", ev => { if (ev.persisted) L.retry(); });
 
   /* Von Hand ausgelöster neuer Versuch (Schaltfläche „Erneut verbinden"). */
-  L.retry = () => { if (es) { es.close(); es = null; } retry = 0; anlauf = 0; return connect(); };
+  L.retry = () => { clearTimeout(wache); if (es) { es.close(); es = null; } retry = 0; anlauf = 0; return connect(); };
 
   function accept(st) {
     L.lastRun = st.meta?.lastRun || null;
     L.interval = st.meta?.interval || null;
     L.counts = st.meta?.counts || null;
+    L.zustand = st;
+    stelleWache();
     fire("state", st);
+  }
+
+  /* Totmannschalter für den Ereignisstrom.
+
+     Ein abgerissener Strom meldet sich nicht immer. Wechselt das Telefon von
+     WLAN auf Mobilfunk oder kommt es aus dem Schlaf, bleibt die Verbindung
+     gelegentlich offen und stumm — `onerror` kommt nie. Die Seite zeigte
+     dann die Werte von vorhin, ohne Hinweis, dass sie stehengeblieben sind.
+     Das ist der gefährlichste Zustand einer Überwachung.
+
+     Der Dienst schickt bei jedem Durchlauf einen vollständigen Zustand.
+     Bleibt der über drei Durchläufe aus, gilt der Strom als tot und wird
+     neu aufgebaut. */
+  function stelleWache() {
+    clearTimeout(wache);
+    const frist = Math.max(90000, (L.interval || 15) * 3000);
+    wache = setTimeout(() => {
+      L.stale = true;
+      L.error = "Keine Nachricht mehr vom Ereignisstrom";
+      fire("stale", true);
+      if (es) { es.close(); es = null; }
+      subscribe();
+    }, frist);
   }
 
   /* Laufende Aktualisierung */

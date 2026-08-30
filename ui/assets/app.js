@@ -4892,18 +4892,26 @@ function markSource() {
   if (view === "system" && arg) state.detail = { id: arg, tage: 1, daten: null, busy: true, error: null, geladen: 0 };
 
   const L = window.LEITSTAND;
-  if (L && L.pending) {
-    state.connecting = true;
-    render();
-    markSource();
-    L.onState(st => { applyLive(st); if (!state.adminLoaded) loadAdmin(); });
-    L.onFail(msg => { state.connecting = false; state.offline = msg; renderLive(); markSource(); });
-    L.onStale(() => { renderLive(); markSource(); });
-  } else {
-    state.offline = (L && L.error) || "Kein Dienst erreichbar";
-    render();
-    markSource();
-  }
+  if (!L) { state.offline = "Kein Dienst erreichbar"; render(); markSource(); return; }
+
+  /* Angemeldet wird immer — auch dann, wenn der erste Zustand längst da ist.
+
+     Hier stand einmal `if (L.pending)`: nur wer früh genug dran war, bekam
+     die Anmeldung. Auf dem Telefon lädt diese Datei über dieselbe langsame
+     Strecke wie die Antwort des Dienstes, und war die Antwort zuerst da,
+     meldete sich niemand mehr an. Die Seite behauptete dann, es gäbe keinen
+     Dienst — und blieb dabei, weil auch „Erneut verbinden" nur einen
+     Zustand holte, den keiner mehr entgegennahm. Am Schreibtisch fiel das
+     nie auf: dort liegt app.js im Zwischenspeicher und ist vorher da.
+
+     Der Zustandsstrom reicht einer späten Anmeldung jetzt nach, was sie
+     verpasst hat; hier wird nur noch die Anzeige darauf eingestellt. */
+  state.connecting = !!L.pending;
+  L.onState(st => { applyLive(st); if (!state.adminLoaded) loadAdmin(); });
+  L.onFail(msg => { state.connecting = false; state.offline = msg; renderLive(); markSource(); });
+  L.onStale(() => { renderLive(); markSource(); });
+  render();
+  markSource();
 })();
 
 /* ---------- Verwaltung: Daten und Aktionen ---------- */

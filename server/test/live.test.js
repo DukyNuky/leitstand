@@ -158,3 +158,82 @@ test("Zurück auf dem Reiter wird sofort erneut verbunden", async () => {
   await warte();
   assert.equal(t.L.live, true, "wer zurückwechselt, soll nicht auf den nächsten Wecker warten");
 });
+
+/* ---------- Das Rennen zwischen Antwort und Skript ----------
+   live.js wird zuerst geladen und fragt sofort ab; app.js kommt danach über
+   dieselbe Strecke. Auf dem Telefon war die Antwort regelmäßig zuerst da —
+   und app.js meldete sich bei einem Strom an, der längst gefeuert hatte.
+   Die Seite behauptete dann, es gäbe keinen Dienst, und blieb dabei. */
+test("Wer sich erst nach der Antwort anmeldet, bekommt sie nachgereicht", async () => {
+  const t = ladeLive([gelingt]);
+  await warte();
+  assert.equal(t.L.live, true, "der Zustand ist längst da");
+
+  const spaet = [];
+  t.L.onState(st => spaet.push(st));
+  assert.deepEqual(spaet, [ZUSTAND], "sonst wartet die Oberfläche auf etwas, das schon vorbei ist");
+});
+
+test("Auch ein verpasster Fehlschlag wird nachgereicht", async () => {
+  const t = ladeLive([faellt]);
+  await warte();
+
+  const spaet = [];
+  t.L.onFail(e => spaet.push(e));
+  assert.equal(spaet.length, 1, "wer zu spät kommt, muss trotzdem erfahren, dass nichts antwortet");
+});
+
+test("Solange noch niemand geantwortet hat, wird nichts nachgereicht", () => {
+  const t = ladeLive([gelingt]);
+  const spaet = [];
+  t.L.onState(st => spaet.push(st));
+  t.L.onFail(e => spaet.push(e));
+  assert.deepEqual(spaet, [], "ein leerer Zustand ist keine Nachricht");
+});
+
+/* ---------- Ein Strom, der stumm offen bleibt ----------
+   Wechselt das Telefon von WLAN auf Mobilfunk, bleibt die Verbindung
+   gelegentlich offen und liefert nichts mehr — `onerror` kommt nie. Die
+   Seite zeigte dann die Werte von vorhin, als wären sie von jetzt. */
+test("Bleibt der Strom stumm, gilt er als tot und wird neu aufgebaut", async () => {
+  const t = ladeLive([gelingt]);
+  await warte();
+  const veraltet = [];
+  t.L.onStale(v => veraltet.push(v));
+
+  const wache = t.uhren.find(u => u.ms >= 90000);
+  assert.ok(wache, "ohne Totmannschalter bleibt ein stummer Strom für immer „live“");
+
+  const alterStrom = t.stroeme[0];
+  wache.fn();
+  assert.equal(t.L.stale, true, "die Werte sind sichtbar von vorhin");
+  assert.deepEqual(veraltet, [true]);
+  assert.equal(alterStrom.closed, true);
+  assert.equal(t.stroeme.length, 2, "und es wird ein neuer aufgebaut");
+});
+
+test("Jede Nachricht stellt den Totmannschalter neu", async () => {
+  const t = ladeLive([gelingt]);
+  await warte();
+  const vorher = t.uhren.filter(u => u.ms >= 90000).length;
+
+  t.stroeme[0].onmessage({ data: JSON.stringify(ZUSTAND) });
+  assert.ok(t.uhren.filter(u => u.ms >= 90000 && u.fn).length > vorher - 1,
+    "sonst schlägt er mitten im Betrieb zu");
+});
+
+/* iOS holt die Seite beim Zurückblättern aus dem Seitenspeicher: die
+   Skripte laufen nicht erneut, die Verbindung von vorhin ist trotzdem weg. */
+test("Aus dem Seitenspeicher zurück wird neu verbunden", async () => {
+  const t = ladeLive([gelingt]);
+  await warte();
+  const vorher = t.abrufe.length;
+
+  t.sandbox.window.horcher.pageshow({ persisted: true });
+  await warte();
+  assert.equal(t.abrufe.length, vorher + 1);
+
+  t.sandbox.window.horcher.pageshow({ persisted: false });
+  await warte();
+  assert.equal(t.abrufe.length, vorher + 1, "ein gewöhnlicher Seitenaufbau braucht das nicht");
+});
