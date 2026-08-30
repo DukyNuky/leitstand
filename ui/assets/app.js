@@ -1227,8 +1227,10 @@ function backupPanel() {
         <th>Ziel</th><th>Letzter Lauf</th><th>Zuletzt erfolgreich</th><th>Zuletzt fehlgeschlagen</th></tr></thead><tbody>
       ${zeilen.length ? zeilen.map(b => `<tr data-sev="${b.status}">
         <td class="sev">${dot(b.status)}</td>
-        <td><div>${esc(b.name)}${b.aktiv ? "" : ' <span class="chip chip--plain">abgeschaltet</span>'}</div>
-          <div class="t-sub">${esc(b.umfang || "Umfang unbekannt")}${b.modus ? " · " + esc(b.modus) : ""}</div></td>
+        <td><div>${b.name ? esc(b.name) : `<span class="faint">ohne Bezeichnung</span>`}${
+          b.aktiv ? "" : ' <span class="chip chip--plain">abgeschaltet</span>'}</div>
+          <div class="t-sub">${esc(b.umfang || "Umfang unbekannt")}${b.modus ? " · " + esc(b.modus) : ""}${
+          b.name ? "" : ` · <span class="mono">${esc(b.id || "—")}</span>`}</div></td>
         <td class="faint">${esc(b.node || b.hostName)}</td>
         <td><div class="mono">${esc(b.zeitplan || "—")}</div>${
           b.naechster ? `<div class="t-sub">nächster: ${esc(fmtWhen(b.naechster) || "—")}</div>` : ""}</td>
@@ -1252,7 +1254,10 @@ function backupPanel() {
         schreibt die Auftragskennung erst ab neueren Fassungen in die Aufgabe. Dann gelten die Zeitpunkte aller
         <span class="mono">vzdump</span>-Läufe dieses Knotens — bei einem einzigen Auftrag ist das dasselbe, bei
         mehreren eine Näherung, und sie gibt sich als solche zu erkennen.` : ""}
-      <br>Ein Auftrag ohne Knotenbindung läuft auf jedem Knoten für dessen eigene Gäste — er steht deshalb bei jedem.</div>
+      <br>Ein Auftrag ohne Knotenbindung läuft auf jedem Knoten für dessen eigene Gäste — er steht deshalb bei jedem.
+      ${zeilen.some(b => !b.name) ? `<br>Wo <b>„ohne Bezeichnung"</b> steht, hat der Auftrag in Proxmox keinen Kommentar.
+        Die Kennung darunter ist keine Bezeichnung — wer den Auftrag wiedererkennen will, trägt in Proxmox unter
+        <span class="mono">Datacenter → Backup</span> einen Kommentar ein; der steht dann hier.` : ""}</div>
   </div>`;
 }
 

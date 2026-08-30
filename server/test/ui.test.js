@@ -2508,3 +2508,21 @@ test("Ein wirklich stilles System steht weiterhin ohne Antwort da", async () => 
   /* Der Bestand zeigt auf unerreichbare Adressen — genau darum geht es. */
   assert.match(ziele.get("#wrap").innerHTML, /ohne Antwort/);
 });
+
+/* Die Kennung `backup-0011aabb-ccdd` stand als Auftragsname in der
+   Tabelle. Daran erkennt niemand, welche Sicherung gemeint ist — und wer
+   den Namen sucht, sucht danach immer noch. */
+test("Ein Auftrag ohne Kommentar gibt sich als solcher zu erkennen", async () => {
+  const html = await mitSicherungen([
+    { host: "web", hostName: "web", node: "pve-hq-01", id: "backup-0011aabb-ccdd", name: null,
+      aktiv: true, zeitplan: "mon 04:00", ziel: "nas", modus: "snapshot",
+      umfang: "vm-alt und ct-dns", naechster: null, zuletzt: "2026-08-23T04:09:00.000Z",
+      letzterStatus: "fehler", zuletztOk: null, zuletztFehler: "2026-08-23T04:09:00.000Z",
+      laeufe: 3, quelle: "auftrag", status: "crit" }
+  ]);
+  assert.match(html, /ohne Bezeichnung/, "eine Kennung ist kein Name");
+  assert.match(html, /vm-alt und ct-dns/, "dafür sagt der Umfang, worum es geht");
+  assert.match(html, /backup-0011aabb-ccdd/, "nachschlagen lässt sie sich trotzdem");
+  assert.match(html, /Datacenter → Backup/, "und daneben steht, wie man zu einem Namen kommt");
+  assert.ok(!/>null</.test(html));
+});

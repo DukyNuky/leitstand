@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { fakeProxmox, listen, GOOD, WEAK } from "./fake-proxmox.js";
 import { collectPve, collectPbs, testConnection, authHeader, baseUrl,
-  laufStatus, umfang, zeitplan } from "../src/collectors/proxmox.js";
+  laufStatus, umfang, zeitplan, auftragWort, aufgabeInWorten } from "../src/collectors/proxmox.js";
 
 let srv, url;
 before(async () => { srv = fakeProxmox(); url = await listen(srv); });
@@ -108,7 +108,9 @@ test("PBS-Sammler erkennt fehlgeschlagenen Verify-Job", async () => {
   assert.equal(r.used, 90, "der vollste Datastore zählt");
   assert.equal(r.failed, 1);
   assert.equal(r.status, "crit");
-  assert.match(r.note, /verify nas-archive/);
+  assert.match(r.note, /Prüfung VM 141 → nas-archive/,
+    "„verify nas-archive“ sagte nicht, welche Sicherung wovon schiefging");
+  assert.match(r.note, /verification failed/, "samt Wortlaut des Fehlschlags");
 });
 
 /* Ein Datastore ist nicht nur ein Prozentsatz. Was ihn beurteilbar macht,
@@ -387,7 +389,7 @@ test("Auch der Datastore des Backup Servers folgt den eigenen Grenzen", async ()
 
 test("Eingerichtete Aufträge werden mit Zeitplan, Ziel und Umfang gelesen", async () => {
   const r = await collectPve(host("pve-hq-01"), cred);
-  assert.equal(r.backupJobs.length, 2);
+  assert.equal(r.backupJobs.length, 3);
 
   const nacht = r.backupJobs.find(j => j.id === "backup-1a2b3c4d-5678");
   assert.equal(nacht.name, "Nacht — alles");
@@ -401,8 +403,22 @@ test("Eingerichtete Aufträge werden mit Zeitplan, Ziel und Umfang gelesen", asy
      was dasteht, nicht ein daraus gebastelter Kalenderausdruck. */
   const we = r.backupJobs.find(j => j.id === "backup-9f8e7d6c-4321");
   assert.equal(we.zeitplan, "sat 05:00");
-  assert.equal(we.umfang, "3 Gäste");
   assert.equal(we.aktiv, false, "abgeschaltet ist keine Störung, aber eine Auskunft");
+  /* 102 und 103 stehen nicht auf diesem Knoten — was bekannt ist, wird
+     benannt, der Rest gezählt. */
+  assert.equal(we.umfang, "vm-web und 2 weitere");
+});
+
+/* Die Kennung ist kein Name: `backup-0011aabb-ccdd` stand als
+   Auftragsname in der Tabelle und in der Störmeldung. Daran erkennt
+   niemand, welche Sicherung gemeint ist. */
+test("Ein Auftrag ohne Kommentar bekommt keine Kennung als Namen angedichtet", async () => {
+  const r = await collectPve(host("pve-hq-01"), cred);
+  const ohne = r.backupJobs.find(j => j.id === "backup-0011aabb-ccdd");
+  assert.equal(ohne.name, null, "ohne Kommentar in Proxmox gibt es keinen Namen");
+  assert.equal(ohne.umfang, "vm-alt und ct-dns", "dafür sagt der Umfang, worum es geht");
+  assert.equal(auftragWort(ohne), "von vm-alt und ct-dns", "und so zeigt eine Meldung darauf");
+  assert.equal(auftragWort({ name: "Nacht — alles" }), "„Nacht — alles“");
 });
 
 /* Die drei Zeitpunkte beantworten drei verschiedene Fragen — und ein
@@ -458,4 +474,63 @@ test("„alle“ ist eine eigene Angabe und keine Liste", () => {
   assert.equal(umfang({}), null, "steht nichts da, wird nichts behauptet");
   assert.equal(zeitplan("mon,tue", "02:00"), "mon,tue 02:00");
   assert.equal(zeitplan(null, null), null);
+});
+
+/* ---------- Aus Nummern werden Namen ----------
+   Der Auftrag nennt seine Gäste als Nummern, der Knoten kennt die Namen.
+   Ohne Bestandsliste bleibt es bei der Anzahl: eine Zahl sagt wenig, aber
+   sie lügt nicht. */
+const GAESTE = [
+  { vmid: 101, name: "vm-web" }, { vmid: 141, name: "vm-alt" },
+  { vmid: 201, name: "ct-dns" }, { vmid: 301, name: "vm-fremd" }
+];
+
+test("Der Umfang benennt die Gäste, sobald der Knoten sie kennt", () => {
+  assert.equal(umfang({ vmid: "101" }, GAESTE), "vm-web");
+  assert.equal(umfang({ vmid: "101,201" }, GAESTE), "vm-web und ct-dns");
+  assert.equal(umfang({ vmid: "101,141,201" }, GAESTE), "vm-web, vm-alt und ct-dns");
+  assert.equal(umfang({ all: 1, exclude: "141" }, GAESTE), "alle Gäste außer vm-alt");
+});
+
+test("Ab vier Gästen wird gekürzt, und Unbekanntes wird gezählt statt geraten", () => {
+  assert.equal(umfang({ vmid: "101,141,201,301" }, GAESTE), "vm-web, vm-alt und 2 weitere");
+  assert.equal(umfang({ vmid: "101,999,998" }, GAESTE), "vm-web und 2 weitere");
+  assert.equal(umfang({ vmid: "997,998,999" }, GAESTE), "3 Gäste", "kennt er keinen, zählt er");
+});
+
+test("Ohne Bestandsliste bleibt alles, wie es war", () => {
+  assert.equal(umfang({ all: 1 }), "alle Gäste");
+  assert.equal(umfang({ all: 1, exclude: "105,106" }), "alle Gäste außer 2");
+  assert.equal(umfang({ vmid: "101" }), "1 Gast");
+  assert.equal(umfang({ vmid: "101,102" }), "2 Gäste");
+  assert.equal(umfang({ pool: "prod" }, GAESTE), "Pool prod");
+  assert.equal(umfang({}, GAESTE), null, "steht nichts da, wird nichts behauptet");
+});
+
+/* ---------- PBS-Aufgaben in Worten ---------- */
+test("Eine PBS-Aufgabe wird zu einem Satz, den man lesen kann", () => {
+  assert.equal(aufgabeInWorten({ worker_type: "verify", worker_id: "nas-archive:vm/141/2026-08-30T22:00:00Z" }),
+    "Prüfung VM 141 → nas-archive");
+  assert.equal(aufgabeInWorten({ worker_type: "backup", worker_id: "main:ct/201/2026-08-31T01:00:00Z" }),
+    "Sicherung CT 201 → main");
+  assert.equal(aufgabeInWorten({ worker_type: "backup", worker_id: "main:host/web-01/2026-08-23T01:00:00Z" }),
+    "Sicherung Host web-01 → main", "ein gesicherter Rechner ist keine VM");
+  assert.equal(aufgabeInWorten({ worker_type: "garbage_collection", worker_id: "main" }),
+    "Speicher freigeben main");
+});
+
+/* Der Zeitstempel bringt eigene Doppelpunkte mit. Wurde an allen getrennt,
+   stand in der Meldung „Prüfung 00Z" — der Rest der Uhrzeit. */
+test("Der Zeitstempel überlebt das Zerlegen der Kennung", () => {
+  const w = aufgabeInWorten({ worker_type: "verify", worker_id: "main:vm/101/2026-08-31T03:15:42Z" });
+  assert.equal(w, "Prüfung VM 101 → main");
+  assert.ok(!/00Z|42Z/.test(w), "der zerschnittene Zeitstempel darf nicht durchschlagen");
+});
+
+test("Eine ältere Kennung ohne Datastore erfindet keinen", () => {
+  assert.equal(aufgabeInWorten({ worker_type: "backup", worker_id: "vm/101" }), "Sicherung VM 101");
+});
+
+test("Eine unbekannte Bauart bleibt wörtlich stehen statt geraten zu werden", () => {
+  assert.equal(aufgabeInWorten({ worker_type: "irgendwas-neues", worker_id: "main" }), "irgendwas-neues main");
 });

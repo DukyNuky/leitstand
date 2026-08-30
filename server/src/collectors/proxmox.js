@@ -145,7 +145,6 @@ export async function collectPve(host, cred, settings) {
   ]);
   knotenstatus(out, statusRes.ok ? statusRes.data?.data : null);
   pakete(out, aptRes);
-  sicherungen(out, jobsRes, dumpRes, me.node);
 
   /* Gäste und Speicher stehen in der Bestandsliste. Sie kann fehlschlagen
      oder — was häufiger vorkommt — mit 200 und leerem Inhalt antworten:
@@ -196,6 +195,12 @@ export async function collectPve(host, cred, settings) {
     }
   }
 
+  /* Erst jetzt, nach der Bestandsliste: die Aufträge nennen ihre Gäste als
+     Nummern, und wer 141 ist, steht in `out.guests`. Ohne die Liste bleibt
+     es bei der Anzahl — eine Zahl ist immer noch besser als ein Name, der
+     zum falschen Gast gehört. */
+  sicherungen(out, jobsRes, dumpRes, me.node, out.guests);
+
   if (clusterRes.ok) {
     const cl = (clusterRes.data?.data || []).find(x => x.type === "cluster");
     if (cl) { out.cluster = cl.name; out.quorum = cl.quorate === 1; }
@@ -218,10 +223,10 @@ export async function collectPve(host, cred, settings) {
   if (out.cluster && out.quorum === false) { out.status = "crit"; out.note = "Knoten hat kein Quorum"; }
   else if (fullest && fullest.used >= grenze.disk_crit) { out.status = "crit"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt (kritisch ab ${grenze.disk_crit} %)`; }
   else if (out.ram != null && out.ram >= grenze.ram_crit) { out.status = "crit"; out.note = `RAM-Auslastung ${out.ram} % (kritisch ab ${grenze.ram_crit} %)`; }
-  else if (kaputt) { out.status = "crit"; out.note = `Sicherung „${kaputt.name}“ ist zuletzt fehlgeschlagen`; }
+  else if (kaputt) { out.status = "crit"; out.note = `Sicherung ${auftragWort(kaputt)} ist zuletzt fehlgeschlagen`; }
   else if (out.ram != null && out.ram >= grenze.ram_warn) { out.status = "warn"; out.note = `RAM-Auslastung ${out.ram} %`; }
   else if (fullest && fullest.used >= grenze.disk_warn) { out.status = "warn"; out.note = `Speicher ${fullest.name} zu ${fullest.used} % belegt`; }
-  else if (schief) { out.status = "warn"; out.note = `Sicherung „${schief.name}“ lief mit Warnungen — ein Gast blieb liegen`; }
+  else if (schief) { out.status = "warn"; out.note = `Sicherung ${auftragWort(schief)} lief mit Warnungen — ein Gast blieb liegen`; }
   else if (!out.note && out.backupNote) out.note = out.backupNote;
   else if (!out.note && (out.backupJobs || []).some(j => j.aktiv && !j.zuletzt))
     out.note = "Ein eingerichteter Sicherungsauftrag ist noch nie gelaufen";
@@ -248,7 +253,7 @@ export async function collectPve(host, cred, settings) {
    Welches von beidem eine Zeile zeigt, steht als `quelle` dabei: eine
    Zuordnung zu behaupten, die Proxmox nicht hergibt, wäre schlimmer als
    eine ungenaue, die sich zu erkennen gibt. */
-function sicherungen(out, jobsRes, dumpRes, node) {
+function sicherungen(out, jobsRes, dumpRes, node, guests) {
   if (!dumpRes.ok && !jobsRes.ok) {
     out.backupJobs = null;
     out.backupLaeufe = null;
@@ -279,12 +284,17 @@ function sicherungen(out, jobsRes, dumpRes, node) {
       const eigene = j.id ? laeufe.filter(l => l.auftrag === j.id) : [];
       return {
         id: j.id || null,
-        name: j.comment || j.id || "Sicherungsauftrag",
+        /* Die Kennung ist kein Name. `backup-9f8e7d6c-4321` stand als
+           Auftragsname in der Tabelle und in jeder Störmeldung — daran
+           erkennt niemand, welche Sicherung gemeint ist. Ohne Kommentar
+           in Proxmox bleibt der Name deshalb leer, und angezeigt wird,
+           was den Auftrag wirklich beschreibt: sein Umfang. */
+        name: j.comment || null,
         aktiv: j.enabled === undefined || j.enabled === 1 || j.enabled === true || j.enabled === "1",
         zeitplan: j.schedule || zeitplan(j.dow, j.starttime),
         ziel: j.storage || null,
         modus: j.mode || null,
-        umfang: umfang(j),
+        umfang: umfang(j, guests),
         naechster: zeitpunkt(j["next-run"] ?? j.next_run),
         node: j.node || null,
         /* Woher die Zeitpunkte stammen — siehe oben. */
@@ -333,15 +343,50 @@ export function zeitplan(dow, starttime) {
 }
 
 /* Was der Auftrag mitnimmt. „alle" ist bei Proxmox eine eigene Angabe und
-   nicht die Liste aller Gäste — wer sie als Liste läse, bekäme null. */
-export function umfang(j) {
+   nicht die Liste aller Gäste — wer sie als Liste läse, bekäme null.
+
+   Der Auftrag nennt seine Gäste als Nummern. „3 Gäste" beantwortet die
+   Frage nicht, die man an einen fehlgeschlagenen Auftrag hat — welche
+   denn? Steht die Bestandsliste des Knotens zur Verfügung, werden sie
+   benannt; sonst bleibt es bei der Anzahl. Eine Zahl sagt wenig, aber sie
+   lügt nicht. */
+export function umfang(j, guests) {
+  const namen = new Map((guests || [])
+    .filter(g => g?.vmid != null && g.name)
+    .map(g => [String(g.vmid), g.name]));
+
   if (j.all === 1 || j.all === "1" || j.all === true) {
-    const aus = alsListe(j.exclude).length;
-    return aus ? `alle Gäste außer ${aus}` : "alle Gäste";
+    const aus = alsListe(j.exclude);
+    if (!aus.length) return "alle Gäste";
+    return `alle Gäste außer ${benenne(namen, aus) || aus.length}`;
   }
   if (j.pool) return `Pool ${j.pool}`;
   const ids = alsListe(j.vmid);
-  return ids.length ? `${ids.length} ${ids.length === 1 ? "Gast" : "Gäste"}` : null;
+  if (!ids.length) return null;
+  return benenne(namen, ids) || `${ids.length} ${ids.length === 1 ? "Gast" : "Gäste"}`;
+}
+
+/* Aus Nummern werden Namen, soweit welche bekannt sind. Ab vier Gästen
+   wird gekürzt — eine Zeile mit vierzehn Namen liest niemand, und die
+   vollständige Liste steht im Auftrag selbst. Ist keiner der Namen
+   bekannt, kommt null zurück: dann zählt der Aufrufer wieder. */
+function benenne(namen, ids) {
+  const worte = ids.map(id => namen.get(String(id))).filter(Boolean);
+  if (!worte.length) return null;
+  if (worte.length === ids.length && worte.length <= 3) return aufzaehlung(worte);
+  const gezeigt = worte.slice(0, 2);
+  const rest = ids.length - gezeigt.length;
+  return `${gezeigt.join(", ")} und ${rest === 1 ? "1 weiterer" : rest + " weitere"}`;
+}
+const aufzaehlung = a => (a.length === 1 ? a[0] : `${a.slice(0, -1).join(", ")} und ${a[a.length - 1]}`);
+
+/* Wie man in einem Satz auf einen Auftrag zeigt. Ohne Kommentar in
+   Proxmox hat er keinen Namen — dann beschreibt ihn sein Umfang besser
+   als seine Kennung. */
+export function auftragWort(j) {
+  if (j.name) return `„${j.name}“`;
+  if (j.umfang) return `von ${j.umfang}`;
+  return j.id ? `„${j.id}“` : "ohne Bezeichnung";
 }
 
 const alsListe = v => String(v ?? "").split(",").map(s => s.trim()).filter(Boolean);
@@ -530,7 +575,8 @@ export async function collectPbs(host, cred, settings) {
   if (failed.length) {
     const f = failed[0];
     out.status = "crit";
-    out.note = `${failed.length} fehlgeschlagene Aufgabe(n) in 24 h — zuletzt ${f.worker_type || "Job"} ${f.worker_id || ""}`.trim();
+    out.note = `${failed.length} fehlgeschlagene Aufgabe(n) in 24 h — zuletzt ${aufgabeInWorten(f)}`
+      + (f.status ? `: ${f.status}` : "");
   } else if (fullest && fullest.used >= grenze.disk_crit) { out.status = "crit"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt (kritisch ab ${grenze.disk_crit} %)`; }
   else if (fullest && fullest.used >= grenze.disk_warn) { out.status = "warn"; out.note = `Datastore ${fullest.name} zu ${fullest.used} % belegt`; }
   else if (knapp) {
@@ -549,6 +595,58 @@ export async function collectPbs(host, cred, settings) {
     out.lastGood = jung ? new Date(jung.endtime * 1000).toISOString() : null;
   }
   return out;
+}
+
+/* ---------- Eine PBS-Aufgabe in Worten ----------
+
+   Ein Task heißt intern `verify` auf
+   `nas-archive:vm/141/2026-08-30T22:00:00Z`. In der Störmeldung stand
+   davon „verify nas-archive" — und damit war die einzige Frage
+   unbeantwortet, die man um drei Uhr nachts an so eine Zeile hat: welche
+   Sicherung, wovon?
+
+   Die Falle beim Zerlegen ist der Zeitstempel: er bringt eigene
+   Doppelpunkte mit, und wer stur an allen trennt, macht aus `…T22:00:00Z`
+   ein „Prüfung 00Z". Getrennt wird deshalb nur vor dem ersten
+   Schrägstrich — dahinter beginnt der Gegenstand, und dort gehören die
+   Doppelpunkte zur Uhrzeit.
+
+   Was sich nicht zerlegen lässt, bleibt wörtlich stehen: eine unbekannte
+   Bauart ist immer noch besser lesbar als eine falsch geratene. */
+const AUFGABENART = {
+  backup: "Sicherung",
+  verify: "Prüfung",
+  verificationjob: "Prüfauftrag",
+  prune: "Aufräumen",
+  prunejob: "Aufräumauftrag",
+  garbage_collection: "Speicher freigeben",
+  sync: "Abgleich",
+  syncjob: "Abgleichauftrag",
+  reader: "Wiederherstellung",
+  "tape-backup": "Bandsicherung",
+  "tape-backup-job": "Bandsicherungsauftrag",
+  "tape-restore": "Bandwiederherstellung"
+};
+const GATTUNG = { vm: "VM", ct: "CT", host: "Host" };
+
+export function aufgabeInWorten(t) {
+  const art = String(t?.worker_type ?? t?.type ?? "");
+  const roh = String(t?.worker_id ?? t?.id ?? "");
+  const artName = AUFGABENART[art] || art || "Aufgabe";
+
+  const i = roh.indexOf("/");
+  if (i < 0) {
+    const [store] = roh.split(":").filter(x => x !== "");
+    return [artName, store].filter(Boolean).join(" ");
+  }
+  const kopf = roh.slice(0, i).split(":").filter(x => x !== "");
+  const bauart = kopf[kopf.length - 1];
+  /* Ohne Datastore davor steht die Bauart ganz vorn — dann ist sie kein
+     Datastore-Name, auch wenn sie an dessen Stelle steht. */
+  const store = kopf.length === 1 && /^(vm|ct|host)$/.test(bauart) ? null : kopf[0];
+  const [kennung] = roh.slice(i + 1).split("/");
+  const gegenstand = GATTUNG[bauart] ? `${GATTUNG[bauart]} ${kennung}` : `${bauart}/${kennung}`;
+  return [artName, gegenstand, store ? `→ ${store}` : null].filter(Boolean).join(" ");
 }
 
 /* PBS hängt den Datastore vor die Kennung der Aufgabe:

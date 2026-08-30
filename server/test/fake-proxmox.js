@@ -97,7 +97,11 @@ export function fakeProxmox() {
             mode: "snapshot", all: 1, comment: "Nacht — alles",
             "next-run": Math.floor(Date.now() / 1000) + 3600 },
           { id: "backup-9f8e7d6c-4321", enabled: 0, dow: "sat", starttime: "05:00", storage: "nas",
-            mode: "stop", vmid: "101,102,103", comment: "Wochenende" }
+            mode: "stop", vmid: "101,102,103", comment: "Wochenende" },
+          /* Ohne Kommentar — so wird ein Auftrag angelegt, wenn niemand
+             das Feld ausfüllt, und genau dann stand die Kennung als Name da. */
+          { id: "backup-0011aabb-ccdd", enabled: 1, schedule: "mon 04:00", storage: "nas",
+            mode: "snapshot", vmid: "141,201" }
         ]);
       /* Die Aufgabenliste eines Knotens. Der erste Lauf trägt die Kennung
          des Auftrags — neuere Proxmox-Fassungen schreiben sie hinein —,
@@ -141,7 +145,8 @@ export function fakeProxmox() {
            älteren Sicherungsläufen, die nur den Gast nennen. Genau daran
            darf sich der Sammler keinen Datastore ausdenken. */
         return send(200, [
-          { worker_type: "verify", worker_id: "nas-archive", status: "verification failed", endtime: Math.floor(Date.now() / 1000) - 3600 },
+          { worker_type: "verify", worker_id: "nas-archive:vm/141/2026-08-30T22:00:00Z",
+            status: "verification failed", endtime: Math.floor(Date.now() / 1000) - 3600 },
           { worker_type: "backup", worker_id: "main:host/web-01/2026-08-23T01:00:00Z", status: "OK", endtime: Math.floor(Date.now() / 1000) - 5400 },
           { worker_type: "garbage_collection", worker_id: "main", status: "OK", endtime: Math.floor(Date.now() / 1000) - 86_400 },
           { worker_type: "backup", worker_id: "vm/101", status: "OK", endtime: Math.floor(Date.now() / 1000) - 7200 }
