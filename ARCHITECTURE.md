@@ -284,6 +284,23 @@ Suche als „der Dienst ist weg". Ebenso wenig gilt als aufgelöst, wer mit NOER
 und null Antworten zurückkommt — das liefert ein Filter, der den Prüfnamen
 blockt, und „er antwortet" ist nicht „er löst auf".
 
+**UDP: gefragt wird in der Sprache des Dienstes.** Bei TCP beweist der
+Verbindungsaufbau, dass jemand zuhört — bei UDP beweist ein ausbleibendes Paket
+gar nichts: kein Dienst, ein Dienst der auf Müll schweigt, eine Firewall
+dazwischen sehen von außen gleich aus. Ein „UDP-Port offen?" wäre deshalb keine
+Prüfung, sondern eine Vermutung mit Ampel. Für **TeamSpeak** (`kind: ts3`, ab
+Werk UDP/9987) wird darum der `Init1`-Handschlag geschickt, mit dem jeder Client
+anfängt, und die Antwort des Servers gelesen — samt des Zufallswerts, den er
+zurückspiegelt. Das schließt zugleich den Fall aus, in dem ein Reflektor unser
+eigenes Paket zurückwirft: die Kennung „TS3INIT1" stünde dann darin, weil wir sie
+selbst geschickt haben, der Schritt in der Antwort aber nicht.
+
+Der Socket wird dabei ausdrücklich verbunden. Am gesendeten Paket ändert das
+nichts, es öffnet dem Prozess aber die ICMP-Antwort des Zielrechners: „Port
+unreachable" kommt als `ECONNREFUSED` an und wird als solcher gemeldet. „Der
+Rechner läuft, der Dienst nicht" ist eine andere Auskunft als Schweigen — und
+eine andere Suche.
+
 **Schnittstellen: Zähler sind keine Bandbreite.** OPNsense liefert Bytes und
 Pakete seit dem letzten Neustart. Ein Durchsatz entsteht erst aus der Differenz
 zweier Abfragen — vor der zweiten steht deshalb ein Strich und keine Null, und

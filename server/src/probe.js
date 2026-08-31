@@ -6,6 +6,7 @@
 import net from "node:net";
 import tls from "node:tls";
 import dgram from "node:dgram";
+import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -245,6 +246,102 @@ export async function dnsCheck(opt) {
     : { ...udp, detail: `${udp.detail} (auch über TCP/${port} nicht)` };
 }
 
+/* ---- TeamSpeak: der Handschlag, nicht das Klopfen ----
+
+   Ein TeamSpeak-Server nimmt die Sprachverbindung über **UDP** an (ab
+   Werk 9987). Damit fällt die übliche Portprüfung aus: bei TCP beweist
+   der Verbindungsaufbau, dass dort jemand zuhört — bei UDP beweist ein
+   ausbleibendes Paket gar nichts. Kein Server, ein Server der auf Müll
+   schweigt, eine Firewall dazwischen: von außen dasselbe Bild.
+
+   Gefragt wird deshalb so, wie ein Client fragt. Sein erstes Paket ist
+   `Init1`, Schritt 0 — unverschlüsselt, mit der Kennung „TS3INIT1"
+   statt einer Prüfsumme. Der Server antwortet darauf mit Schritt 1 und
+   spiegelt den mitgeschickten Zufallswert zurück. Kommt das, steht dort
+   ein TeamSpeak-Server; alles andere ist keine Auskunft über ihn.
+
+   Der Socket wird ausdrücklich *verbunden*. Das ändert am gesendeten
+   Paket nichts, öffnet dem Prozess aber die ICMP-Antwort des Zielrechners:
+   „Port unreachable" kommt als ECONNREFUSED an. Damit trennen sich zwei
+   Fälle, die bei UDP sonst gleich aussehen und ganz verschiedene Suchen
+   nach sich ziehen — „der Rechner läuft, der Dienst nicht" und „von dort
+   kommt überhaupt nichts zurück". */
+
+const TS3_KENNUNG = "TS3INIT1";
+
+/* Das Paket, mit dem jede TeamSpeak-Sitzung beginnt. 34 Byte, davon 13
+   Kopf: Kennung, Paket-Id, Client-Id (hier 0), Typ 8 mit dem Bit für
+   „unverschlüsselt". Dahinter Client-Version, Schritt, Zeitstempel, vier
+   Byte Zufall und acht Byte Reserve. */
+export function ts3Init1(a0 = randomBytes(4)) {
+  const p = Buffer.alloc(34);
+  p.write(TS3_KENNUNG, 0, "ascii");
+  p.writeUInt16BE(0x65, 8);                            /* Paket-Id 101 */
+  p.writeUInt16BE(0, 10);                              /* Client-Id */
+  p.writeUInt8(0x88, 12);                              /* Typ 8 (Init1) + unverschlüsselt */
+  Buffer.from([0x06, 0x3b, 0xec, 0xe9]).copy(p, 13);   /* Client-Version */
+  p.writeUInt8(0x00, 17);                              /* Schritt 0 */
+  p.writeUInt32BE(Math.floor(Date.now() / 1000), 18);
+  a0.copy(p, 22);                                      /* Zufall A0 */
+  return { paket: p, a0 };
+}
+
+/* Die Antwort des Servers hat einen kürzeren Kopf als die Frage — ihr
+   fehlt die Client-Id. Der Schritt steht deshalb an Stelle 11, und genau
+   dort trennt sich die echte Antwort von einem Echo: käme unser eigenes
+   Paket zurückgespiegelt (ein Reflektor, ein Lastverteiler, ein
+   Testdienst), stünde dort die Client-Id und nicht Schritt 1. Ohne diese
+   Stelle wäre die Kennung „TS3INIT1" ein Beweis, den wir uns selbst
+   geschickt haben. */
+export function ts3Antwort(msg, a0) {
+  if (!msg || msg.length < 12) return { fehler: "Antwort zu kurz" };
+  if (msg.subarray(0, 8).toString("ascii") !== TS3_KENNUNG)
+    return { fehler: "kein TeamSpeak-Handschlag" };
+  if (msg[11] !== 0x01)
+    return { fehler: `TeamSpeak-Kennung, aber Schritt ${msg[11]} statt 1 — vermutlich unser eigenes Paket zurückgespiegelt` };
+  /* Der Zufallswert kommt in umgekehrter Reihenfolge zurück. Stimmt er
+     nicht, ist es trotzdem ein TeamSpeak-Server — nur eben nicht
+     nachweislich unsere Sitzung. Das wird gesagt, nicht gewertet. */
+  const echo = msg.length >= 32 && a0
+    ? msg.subarray(28, 32).equals(Buffer.from([...a0].reverse())) : null;
+  return { echo };
+}
+
+export function ts3Check({ host, port = 9987, timeout = 4000 }) {
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    const { paket, a0 } = ts3Init1();
+    const sock = dgram.createSocket(net.isIPv6(host) ? "udp6" : "udp4");
+    let settled = false;
+    const done = r => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(uhr);
+      try { sock.close(); } catch {}
+      resolve(r);
+    };
+    const uhr = setTimeout(() => done(fail(
+      `keine Antwort über UDP/${port} nach ${timeout} ms — dort läuft kein TeamSpeak-Server, `
+      + `oder das Paket wird unterwegs verworfen`, timeout)), timeout);
+
+    sock.on("error", e => done(e.code === "ECONNREFUSED"
+      /* Der Rechner selbst hat geantwortet: er lebt, der Dienst nicht. */
+      ? fail(`auf UDP/${port} hört nichts zu (der Rechner antwortet mit „Port unreachable“)`, Date.now() - t0)
+      : fail(errText(e), Date.now() - t0)));
+
+    sock.on("message", msg => {
+      const ms = Date.now() - t0;
+      const a = ts3Antwort(msg, a0);
+      if (a.fehler) return done(fail(`Antwort über UDP/${port}, aber ${a.fehler} (${msg.length} Byte)`, ms));
+      done(pass(ms, `TeamSpeak antwortet auf UDP/${port}`, { proto: "UDP", echo: a.echo }));
+    });
+
+    sock.connect(port, host, () => sock.send(paket, e => {
+      if (e) done(fail(errText(e), Date.now() - t0));
+    }));
+  });
+}
+
 /* ---- ICMP: nutzt das System-ping, weil roher ICMP root bräuchte ---- */
 let pingAvailable = null;
 /* Ob `ping` benutzbar ist — und zwar von diesem Prozess.
@@ -399,6 +496,9 @@ export async function runCheck(check, target, settings = {}) {
        ein Resolver antwortet auf seiner IP, nicht auf dem Namen, unter dem
        ein Proxy seine Weboberfläche ausliefert. */
     case "dns":  return dnsCheck({ host, port: check.port || 53, query: check.query, proto: check.proto, timeout });
+    /* TeamSpeak antwortet auf seiner eigenen Adresse — ein Reverse Proxy
+       für eine Weboberfläche hat damit nichts zu tun. */
+    case "ts3":  return ts3Check({ host, port: check.port || 9987, timeout });
     case "icmp": return settings.icmp === false
       ? { ok: null, ms: null, detail: "ICMP abgeschaltet", skipped: true }
       : icmpCheck({ host, timeout });

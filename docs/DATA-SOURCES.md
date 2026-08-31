@@ -266,9 +266,21 @@ Nicht jedes System liefert alles. Der Leitstand bringt eigene Prober mit:
 3. **Tunnelgüte** — TCP/ICMP auf die Gegenstelle im Transfernetz, also durch den Tunnel hindurch
 4. **DNS** — echte Auflösung über UDP/53 gegen die AdGuard-Instanzen; jedem
    AdGuard-Eintrag von Haus aus mitgegeben, ohne Zugangsdaten
+5. **TeamSpeak** — Init1-Handschlag über UDP (ab Werk 9987) gegen den
+   Sprachserver. Nicht abgeleitet, sondern anzuhaken: `checks: [{ kind: ts3,
+   port: 19987 }]` oder in der Oberfläche unter *Weitere Prüfungen*
 
 Fehlt `ping` auf dem Host oder ist ICMP im Netz gesperrt, wird die Prüfung
 übersprungen statt als Ausfall gewertet; die TCP-Prüfung trägt dann allein.
+
+**Warum UDP-Dienste einen eigenen Prober brauchen.** Bei TCP beweist der
+Verbindungsaufbau, dass jemand zuhört. Bei UDP beweist ein ausbleibendes
+Paket gar nichts: kein Dienst, ein Dienst der auf Müll schweigt, eine
+Firewall dazwischen — von außen dasselbe Bild. DNS und TeamSpeak werden
+deshalb in ihrer eigenen Sprache gefragt und an ihrer Antwort gemessen. Der
+Socket ist dabei *verbunden*, damit das ICMP „Port unreachable" des
+Zielrechners als Befund ankommt: „der Rechner läuft, der Dienst nicht" ist
+eine andere Auskunft als Schweigen, und eine andere Suche.
 
 ## Zugänge anlegen — Kurzfassung
 

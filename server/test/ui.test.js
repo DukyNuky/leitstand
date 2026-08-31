@@ -2233,6 +2233,52 @@ test("Freie Ports kommen als TCP-Prüfung dazu, doppelte nur einmal", async () =
   ], "22 steht schon in der Liste, „Unfug“ ist kein Port");
 });
 
+/* Ein Dienst, der über UDP gefragt werden muss, hat keine Häkchenzeile,
+   sobald er nicht auf seinem Werksport läuft — ein TeamSpeak auf 19987.
+   Er darf beim Speichern aus der Oberfläche trotzdem nicht verschwinden,
+   und er soll mit seinem Namen dastehen, nicht mit seiner Kennung. */
+test("Ein TeamSpeak auf eigenem Port übersteht das Formular", async () => {
+  const zustand = await echterZustand(`
+settings: { icmp: false, timeout: 1 }
+sites: [ { id: hq, name: Hauptstandort, short: DEKO, primary: true } ]
+hosts:
+  - { id: pc-01, type: other, site: hq, ip: 10.255.255.7,
+      checks: [ { kind: icmp }, { kind: ts3, port: 19987 } ] }
+tunnels: []
+links: []
+`);
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+  vm.runInContext(`openForm("hosts","edit","pc-01")`, sandbox);
+
+  assert.deepEqual(nutzlast(sandbox).checks, [{ kind: "icmp" }, { kind: "ts3", port: 19987 }],
+    "was hereinkam, geht auch wieder hinaus");
+  assert.equal(vm.runInContext(`pruefLabel("ts3:19987")`, sandbox), "TeamSpeak · 19987");
+});
+
+/* Das Feld unter den Häkchen trug lange nur TCP-Ports. Ein Dienst auf
+   einem eigenen Port, der über UDP gefragt werden muss, war damit allein
+   in der Bestandsdatei einzutragen — obwohl die Prüfung dafür existiert.
+   Jetzt darf ein Verfahren davorstehen; eine nackte Zahl bleibt ein
+   TCP-Port, damit sich an bestehenden Einträgen nichts ändert. */
+test("Im Feld für weitere Prüfungen darf ein Verfahren vor dem Port stehen", async () => {
+  const zustand = await zustandMitGeraeten();
+  const { sandbox } = ladeUi();
+  const ui = sandbox.window.LeitstandUI;
+  ui.applyLive(zustand);
+  await mitRohbestand(ui, zustand);
+  vm.runInContext(`openForm("hosts","edit","switch-01")`, sandbox);
+  ui.state.form.data.pruefPorts = "8123, ts3:19987, unfug:1, 70000";
+
+  assert.deepEqual(nutzlast(sandbox).checks, [
+    { kind: "icmp" }, { kind: "tcp", port: 22 },
+    { kind: "tcp", port: 8123 }, { kind: "ts3", port: 19987 }
+  ], "eine nackte Zahl ist ein TCP-Port, „ts3:19987“ ist TeamSpeak — ein unbekanntes Verfahren "
+   + "und ein unmöglicher Port fallen weg");
+});
+
 /* Ohne eigene Liste darf das Formular nichts festschreiben: sonst fröre
    das erste Speichern die abgeleiteten Prüfungen ein, und eine spätere
    Änderung am Typ erreichte dieses System nie mehr. */

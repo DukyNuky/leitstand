@@ -5495,6 +5495,7 @@ const PRUEFDIENSTE = [
   { id: "tls:443",   label: "Zertifikat · 443",   hint: "Restlaufzeit aus dem Handshake" },
   { id: "tcp:22",    label: "SSH · 22" },
   { id: "dns:53",    label: "DNS · 53",           hint: "echte Auflösung über UDP, kein Portklopfen" },
+  { id: "ts3:9987",  label: "TeamSpeak · 9987",   hint: "UDP-Handschlag mit dem Server, kein Portklopfen" },
   { id: "tcp:25",    label: "SMTP · 25" },
   { id: "tcp:587",   label: "Submission · 587" },
   { id: "tcp:465",   label: "SMTPS · 465" },
@@ -5526,7 +5527,7 @@ function schlicht(c) {
 }
 function checkId(c) { return `${c.kind}:${c.port ?? ""}`; }
 
-const ART_LABEL = { tcp: "TCP", tls: "Zertifikat", dns: "DNS", icmp: "ICMP", http: "HTTP" };
+const ART_LABEL = { tcp: "TCP", tls: "Zertifikat", dns: "DNS", icmp: "ICMP", http: "HTTP", ts3: "TeamSpeak" };
 function pruefLabel(id) {
   const d = PRUEFDIENSTE.find(x => x.id === id);
   if (d) return d.label;
@@ -5563,16 +5564,33 @@ function pruefZuChecks(d, ports) {
     const [kind, port] = z.id.split(":");
     out.push(port ? { kind, port: Number(port) } : { kind });
   }
-  const schon = new Set(out.filter(c => c.kind === "tcp").map(c => c.port));
-  for (const p of ports || []) if (!schon.has(p)) { out.push({ kind: "tcp", port: p }); schon.add(p); }
+  const schon = new Set(out.map(checkId));
+  for (const c of ports || []) if (!schon.has(checkId(c))) { out.push(c); schon.add(checkId(c)); }
   return [...out, ...(d.pruefRest || [])];
 }
 
-/* „8006, 9090" → [8006, 9090]. Was keine Portnummer ist, fällt weg —
-   gemeldet wird das beim Speichern, nicht hier beim Tippen. */
+/* „8006, 9090, ts3:19987" → drei Prüfungen. Eine nackte Zahl ist ein
+   TCP-Port — das ist der Normalfall und bleibt es. Steht ein Verfahren
+   davor, gilt dieses: nötig für alles, was nicht auf seinem Werksport
+   läuft und wo ein offener Port die falsche Frage wäre. Ein TeamSpeak
+   auf 19987 lässt sich sonst nur in der Bestandsdatei eintragen, obwohl
+   die Prüfung dafür da ist.
+
+   Was keine Portnummer ist oder ein unbekanntes Verfahren nennt, fällt
+   weg — gemeldet wird das beim Speichern, nicht hier beim Tippen. */
+const WEITERE_ARTEN = new Set(["tcp", "ts3", "dns", "tls"]);
 function portListe(text) {
-  return String(text ?? "").split(/[,;\s]+/).map(x => Number(x.trim()))
-    .filter(n => Number.isInteger(n) && n > 0 && n < 65536);
+  const out = [];
+  for (const roh of String(text ?? "").split(/[,;\s]+/)) {
+    const stueck = roh.trim();
+    if (!stueck) continue;
+    const [a, b] = stueck.includes(":") ? stueck.split(":") : ["tcp", stueck];
+    const kind = a.trim().toLowerCase(), port = Number(String(b).trim());
+    if (!WEITERE_ARTEN.has(kind)) continue;
+    if (!(Number.isInteger(port) && port > 0 && port < 65536)) continue;
+    out.push({ kind, port });
+  }
+  return out;
 }
 
 function pruefFelder(d) {
@@ -5592,9 +5610,11 @@ function pruefFelder(d) {
     </div>
     <div class="admin-grid" style="margin-top:10px">
       <label class="admin-field">
-        <span class="admin-label">Weitere Ports</span>
-        <input class="admin-input" data-field="pruefPorts" value="${esc(d.pruefPorts ?? "")}" placeholder="8123, 32400">
-        <span class="admin-hint">TCP, durch Komma getrennt — für alles, was oben nicht steht</span>
+        <span class="admin-label">Weitere Prüfungen</span>
+        <input class="admin-input" data-field="pruefPorts" value="${esc(d.pruefPorts ?? "")}" placeholder="8123, 32400, ts3:19987">
+        <span class="admin-hint">durch Komma getrennt — für alles, was oben nicht steht. Eine nackte Zahl ist ein
+          TCP-Port; ein Verfahren davor gilt stattdessen: <span class="mono">ts3:19987</span> für einen TeamSpeak
+          auf einem eigenen Port</span>
       </label>
     </div>
     ${rest.length ? `<p class="admin-hint" style="margin:8px 0 0">Unverändert übernommen aus der Bestandsdatei:

@@ -361,12 +361,15 @@ export function validate(inv) {
         errs.push(`System ${h.id}: ${paar[0]} (${w}) liegt über ${paar[1]} (${c}) — die Warnung käme nie.`);
     }
     for (const c of h.checks || []) {
-      if (!["tcp", "tls", "http", "dns", "icmp"].includes(c.kind)) errs.push(`System ${h.id}: unbekannte Prüfung „${c.kind}“.`);
+      if (!["tcp", "tls", "http", "dns", "icmp", "ts3"].includes(c.kind)) errs.push(`System ${h.id}: unbekannte Prüfung „${c.kind}“.`);
       if (["tcp", "tls"].includes(c.kind) && !(c.port > 0 && c.port < 65536)) errs.push(`System ${h.id}: Prüfung ${c.kind} braucht einen gültigen Port.`);
       /* Bei DNS ist der Port freiwillig — ohne Angabe wird 53 gefragt. Steht
          aber einer da, muss er taugen. */
       if (c.kind === "dns" && c.port != null && !(c.port > 0 && c.port < 65536)) errs.push(`System ${h.id}: Prüfung dns hat keinen gültigen Port.`);
       if (c.kind === "dns" && c.proto && !["udp", "tcp"].includes(c.proto)) errs.push(`System ${h.id}: Prüfung dns kennt nur „udp“ und „tcp“, nicht „${c.proto}“.`);
+      /* Wie bei DNS: der Port darf fehlen — ohne Angabe wird 9987
+         gefragt, der Werksport. Steht einer da, muss er taugen. */
+      if (c.kind === "ts3" && c.port != null && !(c.port > 0 && c.port < 65536)) errs.push(`System ${h.id}: Prüfung ts3 hat keinen gültigen Port.`);
     }
   }
   for (const t of inv.tunnels) {
